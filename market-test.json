@@ -1,0 +1,29 @@
+{
+  "balances": {
+    "1": 5000,
+    "2": 5000
+  },
+  "restingOrders": [
+    {
+      "price": 10,
+      "itemId": 1,
+      "volume": 50,
+      "isBid": false,
+      "userId": 1
+    },
+    {
+      "price": 12,
+      "itemId": 1,
+      "volume": 30,
+      "isBid": false,
+      "userId": 2
+    },
+    {
+      "price": 9,
+      "itemId": 1,
+      "volume": 100,
+      "isBid": true,
+      "userId": 3
+    }
+  ]
+}

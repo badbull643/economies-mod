@@ -1,0 +1,36 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+
+# VS Code
+.vscode/
+
+# Java
+*.class
+*.jar
+hs_err_pid*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Minecraft / Fabric dev
+run/
+logs/
+
+# Test outputs
+market-test.json
+*.log

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "economiesmod",
+  "version": "${version}",
+  "name": "EconomiesMod",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/economiesmod/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "client": [
+      "io.github.badbull643.economiesmod.client.EconomiesmodClient"
+    ],
+    "main": [
+      "io.github.badbull643.economiesmod.Economiesmod"
+    ]
+  },
+  "mixins": [
+    "economiesmod.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
