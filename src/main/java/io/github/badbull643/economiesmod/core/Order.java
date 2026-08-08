@@ -1,49 +1,31 @@
 package io.github.badbull643.economiesmod.core;
+import java.util.UUID;
 
 //will define a transfer function later
 
 public class Order {
-    //so just use isbid? oppo is false anyway,
+    private final long orderId_;
     private boolean isbid_;
     private long volume_;
-    //minecraft item ids,
-    private int itemID_;
+    private String itemID_;      // was int
     private long value_;
-    private long UserID_;
+    private UUID userID_;        // was long
 
-    //add logic for expceptions when things like price/ volume not > 0
-    //also add the item safeguard
-    public Order(long iprice, int iitemID, long ivolume, boolean iisBid, long UID) {
+    public Order(long orderId, long iprice, String iitemID, long ivolume,
+                 boolean iisBid, UUID UID) {
+        this.orderId_ = orderId;
         this.isbid_ = iisBid;
         this.volume_ = ivolume;
         this.itemID_ = iitemID;
         this.value_ = iprice;
-        this.UserID_ = UID;
+        this.userID_ = UID;
     }
 
-    //helper functions
-    public boolean isBid() {
-        return isbid_;
-    }
-
-    public long volume() {
-        return volume_;
-    }
-
-    public int itemID() {
-        return itemID_;
-    }
-
-    public long userID() {
-        return UserID_;
-    }
-
-    public long value() {
-        return value_;
-    }
-
-    public void reduceVolume(long qty) {
-        volume_ -= qty;
-    }
-    //add a helpfunction for total cost of an order
+    public long orderId() { return orderId_; }
+    public boolean isBid() { return isbid_; }
+    public long volume() { return volume_; }
+    public String itemID() { return itemID_; }
+    public UUID userID() { return userID_; }
+    public long value() { return value_; }
+    public void reduceVolume(long qty) { volume_ -= qty; }
 }

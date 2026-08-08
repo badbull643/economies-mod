@@ -1,24 +1,24 @@
 package io.github.badbull643.economiesmod.core;
-
+import java.util.UUID;
 
 import java.util.*;
 
 //this stores the  use balance baskically,
 public class WalletRegistry {
-    private final Map<Long, Long> balances = new HashMap<>();
+    private final Map<UUID, Long> balances = new HashMap<>();
 
-    public long getBalance(long userId) {
+    public long getBalance(UUID userId) {
         return balances.getOrDefault(userId, 0L);
     }
 
-    public void setBalance(long userId, long amount) {
+    public void setBalance(UUID userId, long amount) {
         balances.put(userId, amount);
     }
 
-    public void adjust(long userId, long delta) {
+    public void adjust(UUID userId, long delta) {
         balances.put(userId, getBalance(userId) + delta);
     }
 
     // package-private — used by MarketState for serialization
-    Map<Long, Long> balances() { return balances; }
+    Map<UUID, Long> balances() { return balances; }
 }

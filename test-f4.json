@@ -1,0 +1,20 @@
+{
+  "balances": [],
+  "itemBalances": [
+    {
+      "userId": "00000000-0000-0000-0000-000000000001",
+      "itemId": "minecraft:iron_ingot",
+      "quantity": 40
+    }
+  ],
+  "restingOrders": [
+    {
+      "orderId": 1,
+      "price": 10,
+      "itemId": "minecraft:iron_ingot",
+      "volume": 60,
+      "isBid": false,
+      "userId": "00000000-0000-0000-0000-000000000001"
+    }
+  ]
+}

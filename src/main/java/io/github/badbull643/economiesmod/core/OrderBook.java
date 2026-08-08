@@ -1,6 +1,9 @@
 package io.github.badbull643.economiesmod.core;
 
+import sun.reflect.generics.tree.Tree;
+
 import java.util.*;
+import java.util.UUID;
 
 //this is the single item book version so change from the multi item book take this into account
 public class OrderBook {
@@ -90,9 +93,46 @@ public class OrderBook {
         return fills;
     }
 
+
+    public Order cancel(long orderId, boolean isBid, UUID expectedUserId) {
+        TreeMap<Long, Deque<Order>> side = isBid ? bids : asks;
+        for (Map.Entry<Long, Deque<Order>> entry : side.entrySet()) {
+            Deque<Order> queue = entry.getValue();
+            for (Iterator<Order> it = queue.iterator(); it.hasNext(); ) {
+                Order o = it.next();
+                if (o.orderId() == orderId) {
+                    if (!o.userID().equals(expectedUserId)) return null;
+                    it.remove();
+                    if (queue.isEmpty()) side.remove(entry.getKey());
+                    return o;
+                }
+            }
+        }
+        return null;
+    }
+
+    public List<Order> restingAsks() {
+        List<Order> out = new ArrayList<>();
+        for (Deque<Order> q : asks.values()) {
+            out.addAll(q);
+        }
+        return out;
+    }
+
+    /** Snapshot of resting buy orders, highest price first. */
+    public List<Order> restingBids() {
+        List<Order> out = new ArrayList<>();
+        for (Deque<Order> q : bids.descendingMap().values()) {
+            out.addAll(q);
+        }
+        return out;
+    }
+
     // package-private — used by MarketState to snapshot the resting orders
     TreeMap<Long, Deque<Order>> asks() { return asks; }
     TreeMap<Long, Deque<Order>> bids() { return bids; }
+
+
 
 
 

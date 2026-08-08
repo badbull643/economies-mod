@@ -1,0 +1,21 @@
+{
+  "balances": {
+    "2": 10000
+  },
+  "itemBalances": {
+    "1": {
+      "1": 40
+    }
+  },
+  "restingOrders": [
+    {
+      "orderId": 1,
+      "price": 10,
+      "itemId": 1,
+      "volume": 60,
+      "isBid": false,
+      "userId": 1
+    }
+  ],
+  "nextOrderId": 3
+}

@@ -84,3 +84,13 @@ publishing {
         // retrieving dependencies.
     }
 }
+
+// dev only delete on launch
+
+loom {
+    runs {
+        client {
+            programArgs "--username", "Dev"
+        }
+    }
+}
