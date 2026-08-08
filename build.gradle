@@ -87,10 +87,25 @@ publishing {
 
 // dev only delete on launch
 
-loom {
+/*loom {
     runs {
         client {
             programArgs "--username", "Dev"
+        }
+    }
+}*/
+
+loom {
+    runs {
+        clientAlice {
+            client()
+            configName = "Minecraft Alice"
+            programArgs "--username", "Alice"
+        }
+        clientBob {
+            client()
+            configName = "Minecraft Bob"
+            programArgs "--username", "Bob"
         }
     }
 }
