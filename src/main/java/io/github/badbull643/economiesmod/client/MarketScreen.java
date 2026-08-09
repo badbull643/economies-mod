@@ -11,7 +11,9 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.text.LiteralText;
+import net.minecraft.util.WorldSavePath;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 
@@ -30,6 +32,7 @@ public class MarketScreen extends Screen {
     private static final int FIELD_HEIGHT = 20;
     private static final int FIELD_GAP = 16;
     private static final long MAX_QTY = 100_000L;
+    private boolean resetArmed = false;
 
     public MarketScreen() {
         super(new LiteralText("Market"));
@@ -89,11 +92,36 @@ public class MarketScreen extends Screen {
                 new LiteralText("Connect"), b -> onConnect()));
         this.addButton(new ButtonWidget(rowX + 150, connY + 24, 70, FIELD_HEIGHT,
                 new LiteralText("Disconnect"), b -> onDisconnect()));
+
+        this.addButton(new ButtonWidget(rowX + 230, connY, 70, FIELD_HEIGHT,
+                new LiteralText("Host"), b -> onHost()));
+        this.addButton(new ButtonWidget(rowX + 230, connY + 24, 70, FIELD_HEIGHT,
+                new LiteralText("Stop"), b -> onStopHosting()));
+        this.addButton(new ButtonWidget(rowX, connY + 48, 90, FIELD_HEIGHT,
+                new LiteralText("Reset log"), b -> onReset()));
+    }
+
+    private void onReset() {
+        if (!resetArmed) {
+            resetArmed = true;
+            status = "Click again to DISCARD all local market history";
+            return;
+        }
+        resetArmed = false;
+        MarketStateHolder.resetLog();
+        status = "Local history discarded — reconnect to sync";
     }
 
     // ─────────── connection ───────────
+    private static long lastConnectAttempt = 0;
 
     private void onConnect() {
+        long now = System.currentTimeMillis();
+        if (now - lastConnectAttempt < 3000) {
+            status = "Wait a moment before retrying";
+            return;
+        }
+        lastConnectAttempt = now;
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
 
@@ -129,6 +157,37 @@ public class MarketScreen extends Screen {
     private void onDisconnect() {
         MarketStateHolder.disconnect();
         status = "Disconnected — using local market";
+    }
+
+    ///////////////////
+    private static long lastHostAttempt = 0;
+
+    private void onHost() {
+        long now = System.currentTimeMillis();
+        if (now - lastHostAttempt < 3000) {
+            status = "Wait a moment before retrying";
+            return;
+        }
+        lastHostAttempt = now;
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null || mc.getServer() == null) return;
+
+        Path worldDir = mc.getServer().getSavePath(WorldSavePath.ROOT);
+        UUID me = MinecraftIds.userIdOf(mc.player);
+
+        status = "Starting host...";
+        new Thread(() -> {
+            MarketStateHolder.startHosting(worldDir, 25555, me);
+            status = MarketStateHolder.mode() == MarketStateHolder.Mode.HOSTING
+                    ? "Hosting on port 25555"
+                    : "Failed to start host";
+        }, "market-host-start").start();
+    }
+
+    private void onStopHosting() {
+        MarketStateHolder.stopHosting();
+        status = "Stopped hosting";
     }
 
     // ─────────── actions ───────────
@@ -294,7 +353,7 @@ public class MarketScreen extends Screen {
         renderBalances(matrices, listX);
 
         if (!status.isEmpty()) {
-            label(matrices, status, rowX, rowY + FIELD_HEIGHT + 130, 0xFFDD66);
+            label(matrices, status, rowX, rowY + FIELD_HEIGHT + 154, 0xFFDD66);
         }
 
         this.amountField.render(matrices, mouseX, mouseY, delta);
@@ -306,7 +365,9 @@ public class MarketScreen extends Screen {
     }
 
     private void renderConnectionStatus(MatrixStack matrices, int x, int y) {
-        if (MarketStateHolder.isConnected()) {
+        if (MarketStateHolder.mode() == MarketStateHolder.Mode.HOSTING) {
+            label(matrices, "● hosting", x, y, 0xFFDD66);
+        }else if (MarketStateHolder.isConnected()) {
             label(matrices, "● connected to host", x, y, 0x88FF88);
         } else if (MarketStateHolder.mode() == MarketStateHolder.Mode.CONNECTED) {
             label(matrices, "● connection lost", x, y, 0xFF8888);

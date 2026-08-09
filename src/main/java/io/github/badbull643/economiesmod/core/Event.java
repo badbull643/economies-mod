@@ -34,4 +34,5 @@ public abstract class Event {
         public UUID targetUserId;
         public long amount;
     }
+
 }

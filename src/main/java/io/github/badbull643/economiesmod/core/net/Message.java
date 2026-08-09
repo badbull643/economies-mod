@@ -9,6 +9,7 @@ public abstract class Message {
 
     public static class Hello extends Message {
         public String userId;
+        public String publicKey;      // base64
         public long lastSeq;
         public String lastHash;
         public String protocolVersion;
@@ -19,6 +20,7 @@ public abstract class Message {
         public String clientEventId;
         public String eventType;
         public String eventJson;
+        public String signature;      // base64, over canonicalPayload(event)
         public Propose() { type = "Propose"; }
     }
 
@@ -52,5 +54,10 @@ public abstract class Message {
 
     public static class Pong extends Message {
         public Pong() { type = "Pong"; }
+    }
+
+    public static class SteppingDown extends Message {
+        public long finalSeq;
+        public SteppingDown() { type = "SteppingDown"; }
     }
 }

@@ -29,6 +29,12 @@
     },
     "done": true
   },
+  "minecraft:husbandry/balanced_diet": {
+    "criteria": {
+      "cooked_beef": "2026-08-08 22:43:11 +0100"
+    },
+    "done": false
+  },
   "minecraft:recipes/combat/shield": {
     "criteria": {
       "has_iron_ingot": "2026-08-08 21:10:00 +0100"
@@ -89,6 +95,12 @@
   "minecraft:recipes/tools/iron_hoe": {
     "criteria": {
       "has_iron_ingot": "2026-08-08 21:10:00 +0100"
+    },
+    "done": true
+  },
+  "minecraft:husbandry/root": {
+    "criteria": {
+      "consumed_item": "2026-08-08 22:43:11 +0100"
     },
     "done": true
   },

@@ -99,4 +99,57 @@ public class EventApplier {
         }
         return state;
     }
+    /** Checks whether an event would be accepted, without mutating state. */
+    public static Result validate(MarketState state, SequencedEvent se) {
+        if (se == null || se.event == null) return Result.reject("null event");
+
+        Event e = se.event;
+        if (e.userId == null) return Result.reject("missing userId");
+
+        if (e instanceof Event.Deposit) {
+            Event.Deposit d = (Event.Deposit) e;
+            if (d.quantity <= 0) return Result.reject("quantity must be positive");
+            if (d.itemId == null || d.itemId.isEmpty()) return Result.reject("missing itemId");
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.Withdraw) {
+            Event.Withdraw w = (Event.Withdraw) e;
+            if (w.itemId == null || w.itemId.isEmpty()) return Result.reject("missing itemId");
+            if (!state.canWithdraw(w.userId, w.itemId, w.quantity)) {
+                return Result.reject("insufficient item balance");
+            }
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.PlaceOrder) {
+            Event.PlaceOrder p = (Event.PlaceOrder) e;
+            if (p.itemId == null || p.itemId.isEmpty()) return Result.reject("missing itemId");
+            Order probe = new Order(se.seq, p.price, p.itemId, p.volume, p.isBid, p.userId);
+            MarketState.SubmitResult sr = state.canSubmit(probe);
+            return sr.accepted ? Result.ok(Collections.emptyList()) : Result.reject(sr.reason);
+        }
+
+        if (e instanceof Event.CancelOrder) {
+            Event.CancelOrder c = (Event.CancelOrder) e;
+            if (c.itemId == null || c.itemId.isEmpty()) return Result.reject("missing itemId");
+            if (!state.canCancel(c.orderId, c.itemId, c.isBid, c.userId)) {
+                return Result.reject("order not found or not owned");
+            }
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.InjectCredits) {
+            Event.InjectCredits ic = (Event.InjectCredits) e;
+            if (ic.amount <= 0) return Result.reject("amount must be positive");
+            if (ic.targetUserId == null) return Result.reject("missing targetUserId");
+            return Result.ok(Collections.emptyList());
+        }
+
+        return Result.reject("unknown event type: " + e.getClass().getSimpleName());
+    }
+
+
+
+
 }

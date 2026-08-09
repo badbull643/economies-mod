@@ -26,23 +26,39 @@ public class MessageChannel implements AutoCloseable {
                 new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
         this.out = new PrintWriter(
                 new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), true);
+
     }
 
     public synchronized void send(Message msg) {
         out.println(gson.toJson(msg));
     }
 
-    /** Blocks until a message arrives. Returns null when the peer disconnects. */
+    private static final int MAX_LINE_LENGTH = 1_000_000;   // 1 MB — generous for a Sync batch
+
     public Message receive() throws IOException {
-        String line;
-        do {
-            line = in.readLine();
-            if (line == null) return null;
-        } while (line.trim().isEmpty());
+        String line = readLineCapped();
+        while (line != null && line.trim().isEmpty()) {
+            line = readLineCapped();
+        }
+        if (line == null) return null;
 
         JsonObject obj = new JsonParser().parse(line).getAsJsonObject();
         String type = obj.get("type").getAsString();
         return gson.fromJson(obj, classFor(type));
+    }
+
+    private String readLineCapped() throws IOException {
+        StringBuilder sb = new StringBuilder();
+        int c;
+        while ((c = in.read()) != -1) {
+            if (c == '\n') return sb.toString();
+            if (c == '\r') continue;
+            sb.append((char) c);
+            if (sb.length() > MAX_LINE_LENGTH) {
+                throw new IOException("message exceeded " + MAX_LINE_LENGTH + " bytes");
+            }
+        }
+        return sb.length() > 0 ? sb.toString() : null;
     }
 
     private Class<? extends Message> classFor(String type) {

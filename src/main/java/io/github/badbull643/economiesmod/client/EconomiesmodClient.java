@@ -3,6 +3,7 @@ package io.github.badbull643.economiesmod.client;
 import io.github.badbull643.economiesmod.core.Event;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
@@ -16,13 +17,20 @@ public class EconomiesmodClient implements ClientModInitializer {
     public void onInitializeClient() {
         MarketKeybinds.register();
 
+
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            String name = mc.getSession().getUsername();
+            Path keyFile = FabricLoader.getInstance().getConfigDir()
+                    .resolve("economiesmod-identity-" + name + ".key");
+            MarketStateHolder.loadKeys(keyFile);
+
             Path worldDir = server.getSavePath(WorldSavePath.ROOT);
             MarketStateHolder.loadLocal(worldDir);
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
-            MarketStateHolder.disconnect();
+            MarketStateHolder.shutdown();
         });
 
         MarketStateHolder.setOnApplied(se -> {

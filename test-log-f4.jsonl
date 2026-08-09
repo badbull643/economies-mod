@@ -1,2 +1,0 @@
-{"seq":1,"prevHash":"0","hash":"3481d722e7961d7c4b37d44c5f8f7cabf307bfca0d7c27e037430aea44f69922","eventType":"Deposit","event":{"itemId":"minecraft:iron_ingot","quantity":100,"userId":"00000000-0000-0000-0000-000000000001","timestamp":0}}
-{"seq":2,"prevHash":"3481d722e7961d7c4b37d44c5f8f7cabf307bfca0d7c27e037430aea44f69922","hash":"d1f813f0bc72f2e1f4c85df52765b516a60ec1cb4c94ef92a44b1ad7387c9396","eventType":"PlaceOrder","event":{"itemId":"minecraft:iron_ingot","price":10,"volume":60,"isBid":false,"userId":"00000000-0000-0000-0000-000000000001","timestamp":0}}

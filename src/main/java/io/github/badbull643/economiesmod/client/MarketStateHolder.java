@@ -1,9 +1,11 @@
 package io.github.badbull643.economiesmod.client;
 
 import io.github.badbull643.economiesmod.core.*;
+import io.github.badbull643.economiesmod.core.net.HostServer;
 import io.github.badbull643.economiesmod.core.net.MarketClient;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -18,13 +20,33 @@ import java.util.function.Consumer;
  */
 public class MarketStateHolder {
 
-    public enum Mode { LOCAL, CONNECTED }
+    public enum Mode { LOCAL, CONNECTED, HOSTING }
 
     private static Mode mode = Mode.LOCAL;
 
     // LOCAL mode
     private static MarketState localState;
     private static EventLog localLog;
+
+    private static PlayerKeys keys;
+    private static Path currentWorldDir;
+
+
+    private static HostServer hostServer;
+    private static Thread hostThread;
+
+
+
+
+    /** Loads (or generates) this player's signing identity. Call once at mod init. */
+    public static void loadKeys(Path keyFile) {
+        try {
+            keys = PlayerKeys.loadOrCreate(keyFile);
+            System.out.println("[economiesmod] identity loaded from " + keyFile);
+        } catch (Exception e) {
+            System.err.println("[economiesmod] failed to load identity: " + e);
+        }
+    }
 
     // CONNECTED mode
     private static MarketClient client;
@@ -47,7 +69,7 @@ public class MarketStateHolder {
     public static Mode mode() { return mode; }
 
     public static MarketState get() {
-        if (mode == Mode.CONNECTED) {
+        if (mode != Mode.LOCAL) {
             return client != null ? client.state() : new MarketState();
         }
         if (localState == null) localState = new MarketState();
@@ -57,12 +79,12 @@ public class MarketStateHolder {
     // ─────────── LOCAL mode ───────────
 
     public static void loadLocal(Path worldDir) {
+        currentWorldDir = worldDir;
         mode = Mode.LOCAL;
         disconnectIfConnected();
 
-        Path logFile = worldDir.resolve("economiesmod").resolve("market.jsonl");
         try {
-            localLog = new EventLog(logFile);
+            localLog = new EventLog(logPathFor(worldDir));
             long bad = localLog.verifyChain();
             if (bad != -1) {
                 System.err.println("[economiesmod] log chain broken at seq " + bad);
@@ -78,13 +100,30 @@ public class MarketStateHolder {
     // ─────────── CONNECTED mode ───────────
 
     public static void connect(String host, int port, UUID userId) {
+        connect(host, port, userId, Mode.CONNECTED, true);
+    }
+
+    private static void connect(String host, int port, UUID userId,
+                                Mode targetMode, boolean persist) {
+        if (keys == null) {
+            onRejected.accept("no identity loaded");
+            return;
+        }
         try {
-            MarketClient c = new MarketClient(userId);
+            EventLog log = localLog != null
+                    ? localLog
+                    : new EventLog(logPathFor(currentWorldDir));
+
+            MarketClient c = new MarketClient(userId, keys, log, persist);
             c.setOnRejected(onRejected);
             c.setOnApplied(onApplied);
             c.connect(host, port);
+
             client = c;
-            mode = Mode.CONNECTED;
+            localLog = log;
+            localState = null;
+            mode = targetMode;
+
             System.out.println("[economiesmod] connected to " + host + ":" + port
                     + " at seq " + c.lastSeq());
         } catch (IOException e) {
@@ -93,9 +132,14 @@ public class MarketStateHolder {
         }
     }
 
+
     public static void disconnect() {
         disconnectIfConnected();
-        mode = Mode.LOCAL;
+        if (currentWorldDir != null) {
+            loadLocal(currentWorldDir);
+        } else {
+            mode = Mode.LOCAL;
+        }
     }
 
     private static void disconnectIfConnected() {
@@ -106,7 +150,7 @@ public class MarketStateHolder {
     }
 
     public static boolean isConnected() {
-        return mode == Mode.CONNECTED && client != null && client.isConnected();
+        return mode != Mode.LOCAL && client != null && client.isConnected();
     }
 
     // ─────────── submitting events ───────────
@@ -119,7 +163,7 @@ public class MarketStateHolder {
      * later via the state-changed callback or onRejected.
      */
     public static Submission submit(Event event) {
-        if (mode == Mode.CONNECTED) {
+        if (mode != Mode.LOCAL) {
             if (client == null || !client.isConnected()) {
                 return Submission.failed("not connected");
             }
@@ -127,9 +171,24 @@ public class MarketStateHolder {
             return Submission.pending();
         }
 
-        // LOCAL
-        if (localLog == null) return Submission.failed("no log open");
+        // LOCAL — recover the log if something left us without one.
+        if (localLog == null) {
+            if (currentWorldDir != null) {
+                loadLocal(currentWorldDir);
+            }
+            if (localLog == null) return Submission.failed("no log open");
+        }
+
         try {
+            // Validate before logging — a rejected event must not enter history.
+            SequencedEvent probe = new SequencedEvent();
+            probe.seq = localLog.lastSeq() + 1;
+            probe.event = event;
+            EventApplier.Result check = EventApplier.validate(get(), probe);
+            if (!check.accepted) {
+                return Submission.failed(check.reason);
+            }
+
             SequencedEvent se = localLog.append(event);
             EventApplier.Result r = EventApplier.apply(get(), se);
             if (r.accepted) {
@@ -168,4 +227,97 @@ public class MarketStateHolder {
             return new Submission(false, false, reason, null);
         }
     }
+
+
+    public static void startHosting(Path worldDir, int port, UUID userId) {
+        currentWorldDir = worldDir;
+        disconnectIfConnected();
+        localLog = null;   // the HostServer's own EventLog owns the file while hosting
+        localState = null;
+
+        try {
+            hostServer = new HostServer(port, logPathFor(worldDir));
+            hostThread = new Thread(() -> {
+                try {
+                    hostServer.start();
+                } catch (IOException e) {
+                    System.err.println("[economiesmod] host stopped: " + e);
+                }
+            }, "market-host");
+            hostThread.setDaemon(true);
+            hostThread.start();
+
+            IOException bindErr = hostServer.awaitBound(3000);
+            if (bindErr != null) {
+                System.err.println("[economiesmod] could not bind port " + port + ": " + bindErr);
+                hostServer = null;
+                loadLocal(worldDir);
+                onRejected.accept("port " + port + " already in use");
+                return;
+            }
+
+            connect("localhost", port, userId, Mode.HOSTING, false);
+
+            if (client == null || !client.isConnected()) {
+                System.err.println("[economiesmod] host started but self-connect failed");
+                hostServer.stop();
+                hostServer = null;
+                loadLocal(worldDir);
+                onRejected.accept("host started but could not connect to itself");
+                return;
+            }
+
+            System.out.println("[economiesmod] hosting on port " + port);
+        } catch (Exception e) {
+            onRejected.accept("failed to start host: " + e.getMessage());
+            System.err.println("[economiesmod] host start failed: " + e);
+        }
+    }
+
+    public static void stopHosting() {
+        disconnectIfConnected();
+        if (hostServer != null) {
+            hostServer.stop();
+            hostServer = null;
+        }
+        if (currentWorldDir != null) {
+            loadLocal(currentWorldDir);   // reopens the local log and sets mode
+        } else {
+            mode = Mode.LOCAL;
+        }
+    }
+
+    /** Full teardown — the world is closing. Unlike stopHosting, doesn't reopen a local log. */
+    public static void shutdown() {
+        disconnectIfConnected();
+        if (hostServer != null) {
+            hostServer.stop();
+            hostServer = null;
+        }
+        localLog = null;
+        localState = null;
+        currentWorldDir = null;
+        mode = Mode.LOCAL;
+    }
+
+    private static Path logPathFor(Path worldDir) {
+        return worldDir.resolve("economiesmod").resolve("market.jsonl");
+    }
+
+    /** Discards the local history entirely. Only for resolving a fork — destructive. */
+    public static void resetLog() {
+        disconnectIfConnected();
+        if (currentWorldDir == null) return;
+        try {
+            Files.deleteIfExists(logPathFor(currentWorldDir));
+            loadLocal(currentWorldDir);
+            System.out.println("[economiesmod] local history discarded");
+        } catch (IOException e) {
+            System.err.println("[economiesmod] reset failed: " + e);
+        }
+    }
+
+
+
+
 }

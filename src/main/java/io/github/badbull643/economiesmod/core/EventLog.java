@@ -184,4 +184,27 @@ public class EventLog {
         return null;
     }
 
+    /**
+     * Appends a line received from a host verbatim. The host already assigned the
+     * sequence number and computed the hash — recomputing would risk divergence.
+     */
+    public synchronized void appendRaw(String line) throws IOException {
+        SequencedEvent se = parseLine(line);
+        if (se.seq != lastSeq + 1) {
+            throw new IOException("out of order: expected " + (lastSeq + 1) + " got " + se.seq);
+        }
+        if (!lastHash.equals(se.prevHash)) {
+            throw new IOException("chain break at seq " + se.seq);
+        }
+
+        try (BufferedWriter w = Files.newBufferedWriter(file,
+                StandardCharsets.UTF_8, StandardOpenOption.APPEND)) {
+            w.write(line);
+            w.newLine();
+        }
+
+        lastSeq = se.seq;
+        lastHash = se.hash;
+    }
+
 }

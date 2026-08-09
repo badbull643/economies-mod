@@ -6,6 +6,7 @@ import io.github.badbull643.economiesmod.core.*;
 
 import java.io.IOException;
 import java.net.Socket;
+import java.security.GeneralSecurityException;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -20,7 +21,8 @@ import java.util.function.Consumer;
 public class MarketClient {
 
     private final Gson gson = new Gson();
-    private final MarketState state = new MarketState();
+    private final MarketState state;
+    private final EventLog log;
     private final UUID userId;
 
     private MessageChannel channel;
@@ -28,19 +30,29 @@ public class MarketClient {
     private volatile boolean connected = false;
     private volatile long lastSeq = 0;
     private volatile String lastHash = "0";
+    private final PlayerKeys keys;
+    private final boolean persist;
 
     /** Called when a proposal is rejected, so the UI can report it. */
     private Consumer<String> onRejected = reason -> {};
     /** Called after any event is applied, so the UI can refresh. */
     private Runnable onStateChanged = () -> {};
 
-    public MarketClient(UUID userId) {
+
+    public MarketClient(UUID userId, PlayerKeys keys, EventLog log,boolean persist) throws IOException {
         this.userId = userId;
+        this.keys = keys;
+        this.log = log;
+        this.state = EventApplier.replay(log);
+        this.persist = persist;
+        this.appliedSeq = log.lastSeq();
+        this.lastHash = log.lastHash();
     }
 
     public MarketState state() { return state; }
     public boolean isConnected() { return connected; }
-    public long lastSeq() { return lastSeq; }
+    public EventLog log() { return log; }
+    public long lastSeq() { return appliedSeq; }
 
     public void setOnRejected(Consumer<String> handler) { this.onRejected = handler; }
     public void setOnStateChanged(Runnable handler) { this.onStateChanged = handler; }
@@ -57,9 +69,14 @@ public class MarketClient {
 
         Message.Hello hello = new Message.Hello();
         hello.userId = userId.toString();
-        hello.lastSeq = lastSeq;
-        hello.lastHash = lastHash;
+        hello.publicKey = keys.publicKeyString();
+        hello.lastSeq = log.lastSeq();
+        hello.lastHash = log.lastHash();
         hello.protocolVersion = HostServer.PROTOCOL_VERSION;
+        //test
+        System.out.println("[client] hello: lastSeq=" + hello.lastSeq
+                + " appliedSeq=" + appliedSeq + " persist=" + persist);
+        //test
         channel.send(hello);
 
         Message reply = channel.receive();
@@ -88,13 +105,19 @@ public class MarketClient {
             return null;
         }
         String clientEventId = UUID.randomUUID().toString();
+        event.clientEventId = clientEventId;   // must be set BEFORE signing
 
         Message.Propose p = new Message.Propose();
         p.clientEventId = clientEventId;
         p.eventType = event.getClass().getSimpleName();
         p.eventJson = gson.toJson(event);
+        try {
+            p.signature = keys.sign(EventCanonical.canonicalPayload(event));
+        } catch (GeneralSecurityException e) {
+            onRejected.accept("failed to sign: " + e.getMessage());
+            return null;
+        }
         channel.send(p);
-
         return clientEventId;
     }
 
@@ -126,19 +149,30 @@ public class MarketClient {
         }
     }
 
+    private volatile long appliedSeq = 0;
+
     private void applyLine(String line) {
         SequencedEvent se = EventLog.parseLine(line);
 
-        if (se.seq != lastSeq + 1) {
-            System.err.println("[client] sequence gap: expected " + (lastSeq + 1)
-                    + " got " + se.seq);
+        if (se.seq != appliedSeq + 1) {
+            System.err.println("[client] sequence gap: expected " + (appliedSeq + 1)
+                    + " got " + se.seq + " (persist=" + persist + ")");
             return;
         }
 
-        EventApplier.Result result = EventApplier.apply(state, se);
-        lastSeq = se.seq;
+        if (persist) {
+            try {
+                log.appendRaw(line);
+            } catch (IOException e) {
+                System.err.println("[client] failed to persist event: " + e);
+                return;
+            }
+        }
+
+        appliedSeq = se.seq;
         lastHash = se.hash;
 
+        EventApplier.Result result = EventApplier.apply(state, se);
         if (result.accepted) {
             onApplied.accept(se);
         }

@@ -118,6 +118,121 @@ public class MarketTests {
             check("negative price rejected", f.accepted ? 1 : 0, 0);
             check("balance untouched", m.itemBalances().getBalance(ALICE, IRON), 100);
         }
+
+
+        System.out.println("\nGROUP I — signing and identity");
+
+        section("I1: signature round-trips");
+        {
+            PlayerKeys keys = PlayerKeys.generate();
+            Event.Deposit d = new Event.Deposit();
+            d.userId = ALICE;
+            d.clientEventId = "abc-123";
+            d.timestamp = 1000L;
+            d.itemId = IRON;
+            d.quantity = 50;
+
+            String payload = EventCanonical.canonicalPayload(d);
+            String sig = keys.sign(payload);
+            check("valid signature verifies",
+                    PlayerKeys.verify(payload, sig, keys.publicKey()) ? 1 : 0, 1);
+        }
+
+        section("I2: tampering with any signed field breaks the signature");
+        {
+            PlayerKeys keys = PlayerKeys.generate();
+            Event.PlaceOrder p = new Event.PlaceOrder();
+            p.userId = ALICE;
+            p.clientEventId = "abc-123";
+            p.timestamp = 1000L;
+            p.itemId = IRON;
+            p.price = 10;
+            p.volume = 60;
+            p.isBid = false;
+
+            String sig = keys.sign(EventCanonical.canonicalPayload(p));
+
+            p.volume = 600;   // attacker inflates the order
+            check("tampered volume rejected",
+                    PlayerKeys.verify(EventCanonical.canonicalPayload(p), sig, keys.publicKey()) ? 1 : 0, 0);
+
+            p.volume = 60;
+            p.price = 1;      // attacker changes the price
+            check("tampered price rejected",
+                    PlayerKeys.verify(EventCanonical.canonicalPayload(p), sig, keys.publicKey()) ? 1 : 0, 0);
+
+            p.price = 10;
+            p.userId = BOB;   // attacker reassigns ownership
+            check("tampered userId rejected",
+                    PlayerKeys.verify(EventCanonical.canonicalPayload(p), sig, keys.publicKey()) ? 1 : 0, 0);
+
+            p.userId = ALICE;
+            p.clientEventId = "different";   // signature lifted onto another proposal
+            check("tampered clientEventId rejected",
+                    PlayerKeys.verify(EventCanonical.canonicalPayload(p), sig, keys.publicKey()) ? 1 : 0, 0);
+        }
+
+        section("I3: a different key cannot forge");
+        {
+            PlayerKeys alice = PlayerKeys.generate();
+            PlayerKeys mallory = PlayerKeys.generate();
+
+            Event.Withdraw w = new Event.Withdraw();
+            w.userId = ALICE;
+            w.clientEventId = "x";
+            w.timestamp = 1L;
+            w.itemId = IRON;
+            w.quantity = 100;
+
+            String payload = EventCanonical.canonicalPayload(w);
+            String mallorySig = mallory.sign(payload);
+
+            check("mallory's signature fails against alice's key",
+                    PlayerKeys.verify(payload, mallorySig, alice.publicKey()) ? 1 : 0, 0);
+        }
+
+        section("I4: key registry rejects a changed key");
+        {
+            Path regFile = Paths.get("./test-keys.json");
+            Files.deleteIfExists(regFile);
+
+            KeyRegistry reg = new KeyRegistry(regFile, true);
+            PlayerKeys real = PlayerKeys.generate();
+            PlayerKeys impostor = PlayerKeys.generate();
+
+            check("first key accepted (TOFU)",
+                    reg.register(ALICE, real.publicKeyString()) ? 1 : 0, 1);
+            check("same key accepted again",
+                    reg.register(ALICE, real.publicKeyString()) ? 1 : 0, 1);
+            check("different key refused",
+                    reg.register(ALICE, impostor.publicKeyString()) ? 1 : 0, 0);
+            check("lookup returns the real key",
+                    PlayerKeys.encodePublic(reg.lookup(ALICE)).equals(real.publicKeyString()) ? 1 : 0, 1);
+        }
+
+        section("I5: registry persists across reload");
+        {
+            Path regFile = Paths.get("./test-keys2.json");
+            Files.deleteIfExists(regFile);
+
+            PlayerKeys keys = PlayerKeys.generate();
+            new KeyRegistry(regFile, true).register(ALICE, keys.publicKeyString());
+
+            KeyRegistry reloaded = new KeyRegistry(regFile, true);
+            check("known after reload", reloaded.isKnown(ALICE) ? 1 : 0, 1);
+            check("impostor still refused after reload",
+                    reloaded.register(ALICE, PlayerKeys.generate().publicKeyString()) ? 1 : 0, 0);
+        }
+
+        section("I6: trust-on-first-use off rejects unknown identities");
+        {
+            Path regFile = Paths.get("./test-keys3.json");
+            Files.deleteIfExists(regFile);
+
+            KeyRegistry strict = new KeyRegistry(regFile, false);
+            check("unknown identity refused when TOFU is off",
+                    strict.register(ALICE, PlayerKeys.generate().publicKeyString()) ? 1 : 0, 0);
+        }
     }
 
     // ── helpers ──
@@ -190,4 +305,5 @@ public class MarketTests {
         e.userId = user; e.targetUserId = user; e.amount = amount;
         return e;
     }
+
 }

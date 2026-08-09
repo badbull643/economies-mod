@@ -128,6 +128,17 @@ public class OrderBook {
         return out;
     }
 
+    public Order find(long orderId, boolean isBid) {
+        TreeMap<Long, Deque<Order>> side = isBid ? bids : asks;
+        for (Deque<Order> queue : side.values()) {
+            for (Order o : queue) {
+                if (o.orderId() == orderId) return o;
+            }
+        }
+        return null;
+    }
+
+
     // package-private — used by MarketState to snapshot the resting orders
     TreeMap<Long, Deque<Order>> asks() { return asks; }
     TreeMap<Long, Deque<Order>> bids() { return bids; }

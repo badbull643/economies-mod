@@ -8,25 +8,39 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Path;
+import java.security.PublicKey;
 import java.util.*;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 public class HostServer {
 
     public static final String PROTOCOL_VERSION = "1";
+    private static final int MAX_CONNECTIONS = 64;
 
     private final int port;
     private final EventLog log;
     private final MarketState state;
     private final Gson gson = new Gson();
 
+    private ServerSocket serverSocket;
+
+    private final KeyRegistry keyRegistry;
+
+    private Thread sequencerThread;
+
     private final List<MessageChannel> clients = new CopyOnWriteArrayList<>();
-    private final BlockingQueue<Proposal> queue = new LinkedBlockingQueue<>();
-    private final Set<String> seenEventIds = new HashSet<>();
+    private final BlockingQueue<Proposal> queue = new LinkedBlockingQueue<>(1000);
+    private static final int DEDUP_CACHE_SIZE = 10_000;
+
+    private final Set<String> seenEventIds = Collections.newSetFromMap(
+            new LinkedHashMap<String, Boolean>(16, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > DEDUP_CACHE_SIZE;
+                }
+            });
 
     private volatile boolean running = true;
 
@@ -40,10 +54,32 @@ public class HostServer {
         }
     }
 
+    //////////////////////
+    private static class RateLimiter {
+        private final int maxPerWindow;
+        private final long windowMillis;
+        private long windowStart = System.currentTimeMillis();
+        private int count = 0;
+
+        RateLimiter(int maxPerWindow, long windowMillis) {
+            this.maxPerWindow = maxPerWindow;
+            this.windowMillis = windowMillis;
+        }
+
+        synchronized boolean allow() {
+            long now = System.currentTimeMillis();
+            if (now - windowStart > windowMillis) {
+                windowStart = now;
+                count = 0;
+            }
+            return ++count <= maxPerWindow;
+        }
+    }
+
     public HostServer(int port, Path logFile) throws IOException {
         this.port = port;
         this.log = new EventLog(logFile);
-
+        this.keyRegistry = new KeyRegistry(logFile.resolveSibling("known-keys.json"), true);
         long bad = log.verifyChain();
         if (bad != -1) {
             throw new IOException("log chain broken at seq " + bad + " — refusing to start");
@@ -53,32 +89,72 @@ public class HostServer {
         System.out.println("[host] replayed " + log.lastSeq() + " events");
     }
 
-    public void start() throws IOException {
-        // The sequencer owns the log and state. Single thread, no locks needed.
-        Thread sequencer = new Thread(this::sequencerLoop, "market-sequencer");
-        sequencer.setDaemon(true);
-        sequencer.start();
+    private final CountDownLatch bound = new CountDownLatch(1);
+    private volatile IOException bindError;
 
-        try (ServerSocket ss = new ServerSocket(port)) {
-            System.out.println("[host] listening on port " + port);
+    public void start() throws IOException {
+        sequencerThread = new Thread(this::sequencerLoop, "market-sequencer");
+        sequencerThread.setDaemon(true);
+        sequencerThread.start();
+
+        try {
+            serverSocket = new ServerSocket(port);
+        } catch (IOException e) {
+            bindError = e;
+            bound.countDown();          // release the waiter even on failure
+            throw e;
+        }
+        bound.countDown();
+        System.out.println("[host] listening on port " + port);
+
+        try {
             while (running) {
-                Socket socket = ss.accept();
+                Socket socket = serverSocket.accept();
+
+                if (clients.size() >= MAX_CONNECTIONS) {
+                    System.out.println("[host] refusing connection — at capacity");
+                    try (MessageChannel ch = new MessageChannel(socket)) {
+                        Message.Error err = new Message.Error();
+                        err.reason = "server full";
+                        ch.send(err);
+                    } catch (IOException ignored) {}
+                    continue;
+                }
+
                 Thread t = new Thread(() -> handleClient(socket), "market-client");
                 t.setDaemon(true);
                 t.start();
             }
+        } catch (IOException e) {
+            if (running) throw e;
+        } finally {
+            for (MessageChannel ch : clients) {
+                try { ch.close(); } catch (IOException ignored) {}
+            }
+            clients.clear();
         }
+    }
+
+    public IOException awaitBound(long millis) throws InterruptedException {
+        if (!bound.await(millis, TimeUnit.MILLISECONDS)) {
+            return new IOException("timed out waiting for bind");
+        }
+        return bindError;
     }
 
     // ─────────── per-connection reader thread ───────────
 
     private void handleClient(Socket socket) {
         MessageChannel channel = null;
+        RateLimiter limiter = new RateLimiter(30, 10_000);   // 30 proposals per 10s
+
         try {
+            // Drop connections that don't complete a handshake promptly.
+            socket.setSoTimeout(10_000);
+
             channel = new MessageChannel(socket);
             System.out.println("[host] connection from " + channel.remoteAddress());
 
-            // First message must be Hello
             Message first = channel.receive();
             if (!(first instanceof Message.Hello)) {
                 sendError(channel, "expected Hello as first message");
@@ -86,18 +162,35 @@ public class HostServer {
             }
 
             if (!handshake(channel, (Message.Hello) first)) {
-                return;   // handshake sent its own Error and we're done
+                return;   // handshake sent its own Error
             }
+
+            // Synced clients may sit idle indefinitely.
+            socket.setSoTimeout(0);
 
             clients.add(channel);
             System.out.println("[host] " + channel.remoteAddress() + " synced and live ("
                     + clients.size() + " connected)");
 
-            // Read loop
             Message msg;
             while ((msg = channel.receive()) != null) {
                 if (msg instanceof Message.Propose) {
-                    queue.put(new Proposal(channel, (Message.Propose) msg));
+                    Message.Propose prop = (Message.Propose) msg;
+
+                    if (!limiter.allow()) {
+                        Message.Rejected r = new Message.Rejected();
+                        r.clientEventId = prop.clientEventId;
+                        r.reason = "rate limited";
+                        channel.send(r);
+                        continue;
+                    }
+
+                    if (!queue.offer(new Proposal(channel, prop))) {
+                        Message.Rejected r = new Message.Rejected();
+                        r.clientEventId = prop.clientEventId;
+                        r.reason = "server busy";
+                        channel.send(r);
+                    }
                 } else if (msg instanceof Message.Ping) {
                     channel.send(new Message.Pong());
                 } else {
@@ -119,6 +212,26 @@ public class HostServer {
     private boolean handshake(MessageChannel channel, Message.Hello hello) throws IOException {
         if (!PROTOCOL_VERSION.equals(hello.protocolVersion)) {
             sendError(channel, "protocol version mismatch — server is " + PROTOCOL_VERSION);
+            return false;
+        }
+
+        UUID claimedUser;
+        try {
+            claimedUser = UUID.fromString(hello.userId);
+        } catch (Exception e) {
+            sendError(channel, "malformed userId");
+            return false;
+        }
+
+        if (hello.publicKey == null || hello.publicKey.isEmpty()) {
+            sendError(channel, "no public key presented");
+            return false;
+        }
+
+        if (!keyRegistry.register(claimedUser, hello.publicKey)) {
+            System.err.println("[host] REFUSED " + claimedUser
+                    + " — presented a key that doesn't match the one on record");
+            sendError(channel, "public key does not match registered identity");
             return false;
         }
 
@@ -170,13 +283,13 @@ public class HostServer {
     private void processProposal(Proposal p) throws IOException {
         Message.Propose msg = p.msg;
 
-        // Deduplicate retried proposals.
+
+
         if (msg.clientEventId != null && !seenEventIds.add(msg.clientEventId)) {
             reject(p.from, msg.clientEventId, "duplicate proposal");
             return;
         }
 
-        // Deserialise the event using the same dispatch the log uses.
         Event event;
         try {
             event = gson.fromJson(msg.eventJson, EventLog.classFor(msg.eventType));
@@ -185,17 +298,51 @@ public class HostServer {
             return;
         }
 
-        // Dry-run validation against a throwaway copy would be ideal, but we don't
-        // have state cloning. Instead: append first, apply, and if it's rejected the
-        // event stays in the log as a no-op. Not perfect — see note below.
+        // Verify the signature before anything else.
+        if (msg.signature == null || msg.signature.isEmpty()) {
+            reject(p.from, msg.clientEventId, "unsigned proposal");
+            return;
+        }
+
+        PublicKey key = keyRegistry.lookup(event.userId);
+        if (key == null) {
+            reject(p.from, msg.clientEventId, "unknown identity");
+            return;
+        }
+
+        String payload = EventCanonical.canonicalPayload(event);
+        if (!PlayerKeys.verify(payload, msg.signature, key)) {
+            System.err.println("[host] BAD SIGNATURE from " + event.userId
+                    + " — possible impersonation attempt");
+            reject(p.from, msg.clientEventId, "invalid signature");
+            return;
+        }
+
+
+        // Validate BEFORE logging — a rejected proposal must not enter history.
+        SequencedEvent probe = new SequencedEvent();
+        probe.seq = log.lastSeq() + 1;
+        probe.event = event;
+        EventApplier.Result check = EventApplier.validate(state, probe);
+        if (!check.accepted) {
+            System.out.println("[host] rejected " + msg.eventType + ": " + check.reason);
+            reject(p.from, msg.clientEventId, check.reason);
+            return;
+        }
+
+        // Valid — now it becomes history.
         SequencedEvent se = log.append(event);
         EventApplier.Result result = EventApplier.apply(state, se);
 
         if (result.accepted) {
+            System.out.println("[host] seq " + se.seq + " " + msg.eventType);
             Message.Accepted acc = new Message.Accepted();
             acc.logLine = log.rawLineFor(se.seq);
             broadcast(acc);
         } else {
+            // Shouldn't happen — validate said yes. Loud, because it means the two
+            // paths disagree, which is a bug.
+            System.err.println("[host] BUG: validate passed but apply rejected: " + result.reason);
             reject(p.from, msg.clientEventId, result.reason);
         }
     }
@@ -225,8 +372,15 @@ public class HostServer {
 
     public void stop() {
         running = false;
+        if (sequencerThread != null) {
+            sequencerThread.interrupt();
+            sequencerThread = null;
+        }
+        if (serverSocket != null) {
+            try { serverSocket.close(); } catch (IOException ignored) {}
+            serverSocket = null;
+        }
     }
-
     // ─────────── standalone entry point ───────────
 
     public static void main(String[] args) throws Exception {

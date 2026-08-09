@@ -56,28 +56,14 @@ public class MarketState {
 
     // Single entry point: submit an order, match it, settle the fills.
     public SubmitResult submitOrder(Order order) {
-        if (order.volume() <= 0 || order.value() <= 0) {
-            return SubmitResult.reject("volume and price must be positive");
-        }
+        SubmitResult check = canSubmit(order);
+        if (!check.accepted) return check;
 
+        // Reserve
         if (!order.isBid()) {
-            long available = itemBalances.getBalance(order.userID(), order.itemID());
-            if (available < order.volume()) {
-                return SubmitResult.reject("insufficient item balance");
-            }
             itemBalances.adjust(order.userID(), order.itemID(), -order.volume());
         } else {
-            long maxCost;
-            try {
-                maxCost = Math.multiplyExact(order.volume(), order.value());
-            } catch (ArithmeticException e) {
-                return SubmitResult.reject("order value too large");
-            }
-            long available = wallets.getBalance(order.userID());
-            if (available < maxCost) {
-                return SubmitResult.reject("insufficient credits");
-            }
-            wallets.adjust(order.userID(), -maxCost);
+            wallets.adjust(order.userID(), -Math.multiplyExact(order.volume(), order.value()));
         }
 
         OrderBook book = bookFor(order.itemID());
@@ -95,6 +81,41 @@ public class MarketState {
         }
 
         return SubmitResult.ok(fills);
+    }
+
+
+    public boolean canWithdraw(UUID userId, String itemId, long qty) {
+        return qty > 0 && itemBalances.getBalance(userId, itemId) >= qty;
+    }
+
+    public boolean canCancel(long orderId, String itemId, boolean isBid, UUID userId) {
+        Order o = bookFor(itemId).find(orderId, isBid);
+        return o != null && o.userID().equals(userId);
+    }
+    /** Checks whether an order would be accepted, without mutating anything. */
+    public SubmitResult canSubmit(Order order) {
+        if (order.volume() <= 0 || order.value() <= 0) {
+            return SubmitResult.reject("volume and price must be positive");
+        }
+
+        if (!order.isBid()) {
+            long available = itemBalances.getBalance(order.userID(), order.itemID());
+            if (available < order.volume()) {
+                return SubmitResult.reject("insufficient item balance");
+            }
+        } else {
+            long maxCost;
+            try {
+                maxCost = Math.multiplyExact(order.volume(), order.value());
+            } catch (ArithmeticException e) {
+                return SubmitResult.reject("order value too large");
+            }
+            if (wallets.getBalance(order.userID()) < maxCost) {
+                return SubmitResult.reject("insufficient credits");
+            }
+        }
+
+        return SubmitResult.ok(Collections.emptyList());
     }
 
     public boolean withdraw(UUID userId, String itemId, long qty) {
