@@ -24,5 +24,7 @@ public class Fill {
     public long quantity() { return quantity; }
     public long price()    { return price; }
     public String itemId() { return itemId; }      // was int
-    public long amount()   { return Math.multiplyExact(quantity, price); }
+    public long amount() {
+        return Math.multiplyExact(quantity, price);
+    }
 }

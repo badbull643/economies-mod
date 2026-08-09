@@ -11,7 +11,7 @@ public class WalletRegistry {
         return balances.getOrDefault(userId, 0L);
     }
 
-    public void setBalance(UUID userId, long amount) {
+    void setBalance(UUID userId, long amount) {
         balances.put(userId, amount);
     }
 

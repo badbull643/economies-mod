@@ -1,5 +1,7 @@
 package io.github.badbull643.economiesmod.core.net;
 
+import io.github.badbull643.economiesmod.core.PeerCache;
+
 import java.util.List;
 
 public abstract class Message {
@@ -9,7 +11,9 @@ public abstract class Message {
 
     public static class Hello extends Message {
         public String userId;
-        public String publicKey;      // base64
+        public String displayName;   // so the host can label this peer
+        public int hostPort;         // the port this peer would host on, not the ephemeral one
+        public String publicKey;
         public long lastSeq;
         public String lastHash;
         public String protocolVersion;
@@ -33,6 +37,7 @@ public abstract class Message {
     public static class Sync extends Message {
         public List<String> logLines;
         public boolean complete;
+        public List<PeerCache.Peer> knownPeers;    // ← new
         public Sync() { type = "Sync"; }
     }
 
@@ -60,4 +65,22 @@ public abstract class Message {
         public long finalSeq;
         public SteppingDown() { type = "SteppingDown"; }
     }
+
+    /** Lightweight liveness/status probe. No handshake, no state. */
+    public static class Query extends Message {
+        public String protocolVersion;
+        public Query() { type = "Query"; }
+    }
+
+    public static class QueryReply extends Message {
+        public boolean hosting;
+        public String userId;        // ← this one
+        public String hostName;
+        public long lastSeq;
+        public String lastHash;
+        public int clientCount;
+        public String protocolVersion;
+        public QueryReply() { type = "QueryReply"; }
+    }
+
 }

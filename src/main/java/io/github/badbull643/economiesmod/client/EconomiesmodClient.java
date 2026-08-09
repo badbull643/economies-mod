@@ -21,9 +21,10 @@ public class EconomiesmodClient implements ClientModInitializer {
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             MinecraftClient mc = MinecraftClient.getInstance();
             String name = mc.getSession().getUsername();
-            Path keyFile = FabricLoader.getInstance().getConfigDir()
-                    .resolve("economiesmod-identity-" + name + ".key");
-            MarketStateHolder.loadKeys(keyFile);
+            Path configDir = FabricLoader.getInstance().getConfigDir();
+
+            MarketStateHolder.loadKeys(configDir.resolve("economiesmod-identity-" + name + ".key"));
+            MarketStateHolder.loadPeers(configDir.resolve("economiesmod-peers-" + name + ".json"));
 
             Path worldDir = server.getSavePath(WorldSavePath.ROOT);
             MarketStateHolder.loadLocal(worldDir);

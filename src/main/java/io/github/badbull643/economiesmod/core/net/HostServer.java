@@ -7,6 +7,7 @@ import io.github.badbull643.economiesmod.core.*;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.file.Path;
 import java.security.PublicKey;
 import java.util.*;
@@ -29,6 +30,7 @@ public class HostServer {
     private final KeyRegistry keyRegistry;
 
     private Thread sequencerThread;
+    private final PeerCache peerCache;
 
     private final List<MessageChannel> clients = new CopyOnWriteArrayList<>();
     private final BlockingQueue<Proposal> queue = new LinkedBlockingQueue<>(1000);
@@ -76,10 +78,19 @@ public class HostServer {
         }
     }
 
-    public HostServer(int port, Path logFile) throws IOException {
+    private final String hostName;
+
+    private final String hostUserId;
+
+    public HostServer(int port, Path logFile, String hostName, String hostUserId,
+                      PeerCache peerCache) throws IOException {
         this.port = port;
+        this.hostName = hostName;
+        this.hostUserId = hostUserId;
+        this.peerCache = peerCache;
         this.log = new EventLog(logFile);
         this.keyRegistry = new KeyRegistry(logFile.resolveSibling("known-keys.json"), true);
+
         long bad = log.verifyChain();
         if (bad != -1) {
             throw new IOException("log chain broken at seq " + bad + " — refusing to start");
@@ -156,6 +167,20 @@ public class HostServer {
             System.out.println("[host] connection from " + channel.remoteAddress());
 
             Message first = channel.receive();
+
+            if (first instanceof Message.Query) {
+                Message.QueryReply reply = new Message.QueryReply();
+                reply.hosting = true;
+                reply.userId = hostUserId;
+                reply.lastSeq = log.lastSeq();
+                reply.lastHash = log.lastHash();
+                reply.hostName = hostName;
+                reply.clientCount = clients.size();
+                reply.protocolVersion = PROTOCOL_VERSION;
+                channel.send(reply);
+                return;   // probe done, close the connection
+            }
+
             if (!(first instanceof Message.Hello)) {
                 sendError(channel, "expected Hello as first message");
                 return;
@@ -198,12 +223,16 @@ public class HostServer {
                 }
             }
         } catch (Exception e) {
-            System.out.println("[host] client error: " + e.getMessage());
+            if (running && !(e instanceof SocketException)) {
+                System.out.println("[host] client error: " + e);
+                e.printStackTrace();
+            }
         } finally {
             if (channel != null) {
                 clients.remove(channel);
+                int remaining = clients.size();
                 try { channel.close(); } catch (IOException ignored) {}
-                System.out.println("[host] client disconnected (" + clients.size() + " remain)");
+                System.out.println("[host] client disconnected (" + remaining + " remain)");
             }
         }
     }
@@ -254,14 +283,36 @@ public class HostServer {
         }
 
         // Catch them up.
+
+        if (peerCache != null) {
+            peerCache.record(hello.userId, hello.displayName,
+                    addressOf(channel), hello.hostPort);
+        }
+
         List<SequencedEvent> missing = log.readFrom(hello.lastSeq + 1);
         Message.Sync sync = new Message.Sync();
         sync.logLines = log.rawLinesFrom(hello.lastSeq + 1);
         sync.complete = true;
+        sync.knownPeers = peerCache != null ? peerCache.all() : Collections.emptyList();
         channel.send(sync);
         System.out.println("[host] synced " + missing.size() + " events to "
                 + channel.remoteAddress());
         return true;
+    }
+
+    /** Extracts just the IP from "/127.0.0.1:55148". */
+    private static String addressOf(MessageChannel channel) {
+        String raw = channel.remoteAddress();
+        if (raw.startsWith("/")) raw = raw.substring(1);
+
+        if (raw.startsWith("[")) {
+            // IPv6: /[2001:db8::1]:55148 — take what's inside the brackets.
+            int close = raw.indexOf(']');
+            return close > 0 ? raw.substring(1, close) : raw;
+        }
+
+        int colon = raw.lastIndexOf(':');
+        return colon > 0 ? raw.substring(0, colon) : raw;
     }
 
     // ─────────── the sequencer: one thread, owns log + state ───────────
@@ -385,8 +436,12 @@ public class HostServer {
 
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 25555;
-        Path logFile = Paths.get(args.length > 1 ? args[1] : "./server-market.jsonl");
+        Path logFile = Paths.get(args.length > 1 ? args[1] : "server-market.jsonl");
+        String hostName = args.length > 2 ? args[2] : "dedicated";
+
         System.out.println("[host] log file: " + logFile.toAbsolutePath());
-        new HostServer(port, logFile).start();
+        PeerCache peers = new PeerCache(logFile.resolveSibling("server-peers.json"));
+        String hostUserId = args.length > 3 ? args[3] : "00000000-0000-0000-0000-0000000000ff";
+        new HostServer(port, logFile, hostName, hostUserId, peers).start();
     }
 }

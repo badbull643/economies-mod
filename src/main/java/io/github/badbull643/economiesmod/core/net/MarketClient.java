@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
 
+
 /**
  * Connects to a HostServer, keeps a local replica of market state by applying
  * every broadcast event in sequence order.
@@ -39,16 +40,26 @@ public class MarketClient {
     private Runnable onStateChanged = () -> {};
 
 
-    public MarketClient(UUID userId, PlayerKeys keys, EventLog log,boolean persist) throws IOException {
+    private final String displayName;
+
+    private final PeerCache peerCache;
+
+    private final int myHostPort;
+
+    public MarketClient(UUID userId, String displayName, PlayerKeys keys,
+                        EventLog log, boolean persist, PeerCache peerCache,
+                        int myHostPort) throws IOException {
         this.userId = userId;
+        this.displayName = displayName;
         this.keys = keys;
         this.log = log;
-        this.state = EventApplier.replay(log);
         this.persist = persist;
+        this.peerCache = peerCache;
+        this.myHostPort = myHostPort;
         this.appliedSeq = log.lastSeq();
         this.lastHash = log.lastHash();
+        this.state = EventApplier.replay(log);
     }
-
     public MarketState state() { return state; }
     public boolean isConnected() { return connected; }
     public EventLog log() { return log; }
@@ -67,11 +78,18 @@ public class MarketClient {
         Socket socket = new Socket(host, port);
         channel = new MessageChannel(socket);
 
+
+
         Message.Hello hello = new Message.Hello();
+
         hello.userId = userId.toString();
         hello.publicKey = keys.publicKeyString();
         hello.lastSeq = log.lastSeq();
         hello.lastHash = log.lastHash();
+
+        //hardcoded for now
+        hello.hostPort = myHostPort;
+        hello.displayName = displayName;
         hello.protocolVersion = HostServer.PROTOCOL_VERSION;
         //test
         System.out.println("[client] hello: lastSeq=" + hello.lastSeq
@@ -90,7 +108,11 @@ public class MarketClient {
             throw new IOException("expected Sync, got " + (reply == null ? "nothing" : reply.type));
         }
 
-        applySyncLines(((Message.Sync) reply).logLines);
+        Message.Sync sync = (Message.Sync) reply;
+        applySyncLines(sync.logLines);
+        if (peerCache != null) {
+            peerCache.merge(sync.knownPeers);
+        }
         connected = true;
 
         reader = new Thread(this::readerLoop, "market-client-reader");
@@ -184,4 +206,5 @@ public class MarketClient {
             try { channel.close(); } catch (IOException ignored) {}
         }
     }
+
 }

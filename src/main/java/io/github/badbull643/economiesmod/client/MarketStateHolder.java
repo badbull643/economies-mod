@@ -3,6 +3,7 @@ package io.github.badbull643.economiesmod.client;
 import io.github.badbull643.economiesmod.core.*;
 import io.github.badbull643.economiesmod.core.net.HostServer;
 import io.github.badbull643.economiesmod.core.net.MarketClient;
+import net.minecraft.client.MinecraftClient;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -35,7 +36,11 @@ public class MarketStateHolder {
     private static HostServer hostServer;
     private static Thread hostThread;
 
+    // in MarketStateHolder
+    private static int myHostPort = 25555;
 
+    public static void setMyHostPort(int port) { myHostPort = port; }
+    public static int myHostPort() { return myHostPort; }
 
 
     /** Loads (or generates) this player's signing identity. Call once at mod init. */
@@ -76,6 +81,13 @@ public class MarketStateHolder {
         return localState;
     }
 
+    private static PeerCache peerCache;
+
+    public static void loadPeers(Path peerFile) {
+        peerCache = new PeerCache(peerFile);
+    }
+
+
     // ─────────── LOCAL mode ───────────
 
     public static void loadLocal(Path worldDir) {
@@ -99,12 +111,13 @@ public class MarketStateHolder {
 
     // ─────────── CONNECTED mode ───────────
 
-    public static void connect(String host, int port, UUID userId) {
-        connect(host, port, userId, Mode.CONNECTED, true);
+    public static void connect(String host, int port, UUID userId, String displayName) {
+        connect(host, port, userId, displayName, Mode.CONNECTED, true);
     }
 
-    private static void connect(String host, int port, UUID userId,
+    private static void connect(String host, int port, UUID userId, String displayName,
                                 Mode targetMode, boolean persist) {
+
         if (keys == null) {
             onRejected.accept("no identity loaded");
             return;
@@ -114,7 +127,8 @@ public class MarketStateHolder {
                     ? localLog
                     : new EventLog(logPathFor(currentWorldDir));
 
-            MarketClient c = new MarketClient(userId, keys, log, persist);
+            MarketClient c = new MarketClient(userId, displayName, keys, log, persist,
+                    peerCache, myHostPort);
             c.setOnRejected(onRejected);
             c.setOnApplied(onApplied);
             c.connect(host, port);
@@ -229,14 +243,16 @@ public class MarketStateHolder {
     }
 
 
-    public static void startHosting(Path worldDir, int port, UUID userId) {
+    public static void startHosting(Path worldDir, int port, UUID userId, String playerName) {
         currentWorldDir = worldDir;
+        myHostPort = port;
         disconnectIfConnected();
         localLog = null;   // the HostServer's own EventLog owns the file while hosting
         localState = null;
 
         try {
-            hostServer = new HostServer(port, logPathFor(worldDir));
+            hostServer = new HostServer(port, logPathFor(worldDir), playerName,
+                    userId.toString(), peerCache);
             hostThread = new Thread(() -> {
                 try {
                     hostServer.start();
@@ -256,7 +272,7 @@ public class MarketStateHolder {
                 return;
             }
 
-            connect("localhost", port, userId, Mode.HOSTING, false);
+            connect("localhost", port, userId, playerName, Mode.HOSTING, false);
 
             if (client == null || !client.isConnected()) {
                 System.err.println("[economiesmod] host started but self-connect failed");
@@ -269,6 +285,11 @@ public class MarketStateHolder {
 
             System.out.println("[economiesmod] hosting on port " + port);
         } catch (Exception e) {
+            if (hostServer != null) {
+                hostServer.stop();
+                hostServer = null;
+            }
+            loadLocal(worldDir);
             onRejected.accept("failed to start host: " + e.getMessage());
             System.err.println("[economiesmod] host start failed: " + e);
         }
@@ -315,8 +336,38 @@ public class MarketStateHolder {
         } catch (IOException e) {
             System.err.println("[economiesmod] reset failed: " + e);
         }
+
     }
 
+
+    /** Summarises what the local player would lose if the log were discarded. */
+    public static String describeLoss(UUID userId) {
+        MarketState s = get();
+        if (s == null) return "nothing";
+
+        StringBuilder sb = new StringBuilder();
+        long credits = s.wallets().getBalance(userId);
+        if (credits > 0) sb.append(credits).append(" credits");
+
+        for (String itemId : s.activeItems()) {
+            long held = s.itemBalances().getBalance(userId, itemId);
+            long resting = 0;
+            for (Order o : s.bookFor(itemId).restingAsks()) {
+                if (o.userID().equals(userId)) resting += o.volume();
+            }
+            long total = held + resting;
+            if (total > 0) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append(total).append(" ").append(itemId);
+            }
+        }
+
+        return sb.length() > 0 ? sb.toString() : "nothing";
+    }
+
+    public static PeerCache peers() {
+        return peerCache;
+    }
 
 
 

@@ -101,6 +101,28 @@ public class MarketTests {
             check("iron buyer got nothing", m.itemBalances().getBalance(BOB, IRON), 0);
         }
 
+        section("F9: cancel via event replays correctly");
+        {
+            Path file = Paths.get("./test-log-f9.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+
+            apply(log, live, deposit(ALICE, IRON, 100));
+            SequencedEvent orderSe = log.append(placeOrder(ALICE, IRON, 10, 60, false));
+            EventApplier.apply(live, orderSe);
+            check("reserved", live.itemBalances().getBalance(ALICE, IRON), 40);
+
+            apply(log, live, cancelOrder(ALICE, IRON, orderSe.seq, false));
+            check("refunded via event", live.itemBalances().getBalance(ALICE, IRON), 100);
+
+            MarketState replayed = EventApplier.replay(log);
+            check("replay agrees", replayed.itemBalances().getBalance(ALICE, IRON), 100);
+            check("no resting order after replay",
+                    replayed.bookFor(IRON).restingAsks().size(), 0);
+        }
+
+
         section("G1: zero-volume order");
         {
             MarketState m = new MarketState();

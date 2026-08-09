@@ -146,6 +146,10 @@ public class MarketState {
     }
 
 
+    public Set<String> activeItems() {
+        return markets.keySet();
+    }
+
     Map<String, OrderBook> markets() { return markets; }
 
     public static class SubmitResult {
