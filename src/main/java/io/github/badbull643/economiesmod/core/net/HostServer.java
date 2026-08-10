@@ -284,7 +284,12 @@ public class HostServer {
 
         // Catch them up.
 
-        if (peerCache != null) {
+// Catch them up.
+
+
+
+        //test here
+        if (peerCache != null && !hello.userId.equals(hostUserId)) {
             peerCache.record(hello.userId, hello.displayName,
                     addressOf(channel), hello.hostPort);
         }
@@ -423,10 +428,12 @@ public class HostServer {
 
     public void stop() {
         running = false;
+
         if (sequencerThread != null) {
             sequencerThread.interrupt();
             sequencerThread = null;
         }
+
         if (serverSocket != null) {
             try { serverSocket.close(); } catch (IOException ignored) {}
             serverSocket = null;
