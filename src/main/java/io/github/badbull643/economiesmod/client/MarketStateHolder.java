@@ -310,11 +310,11 @@ public class MarketStateHolder {
 
     /** Full teardown — the world is closing. Unlike stopHosting, doesn't reopen a local log. */
     public static void shutdown() {
-        disconnectIfConnected();
         if (hostServer != null) {
             hostServer.stop();
             hostServer = null;
         }
+        disconnectIfConnected();
         localLog = null;
         localState = null;
         currentWorldDir = null;
@@ -326,8 +326,17 @@ public class MarketStateHolder {
     }
 
     /** Discards the local history entirely. Only for resolving a fork — destructive. */
+    /** Discards the local history entirely. Only for resolving a fork — destructive. */
     public static void resetLog() {
+        // Stop hosting first — otherwise the running HostServer keeps its in-memory
+        // lastSeq and would append to a recreated file mid-chain, and its socket
+        // stays bound so nothing else can host.
+        if (hostServer != null) {
+            hostServer.stop();
+            hostServer = null;
+        }
         disconnectIfConnected();
+
         if (currentWorldDir == null) return;
         try {
             Files.deleteIfExists(logPathFor(currentWorldDir));
@@ -336,7 +345,6 @@ public class MarketStateHolder {
         } catch (IOException e) {
             System.err.println("[economiesmod] reset failed: " + e);
         }
-
     }
 
 

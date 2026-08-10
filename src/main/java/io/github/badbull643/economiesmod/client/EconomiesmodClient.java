@@ -31,6 +31,7 @@ public class EconomiesmodClient implements ClientModInitializer {
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            System.out.println("[economiesmod] world stopping — shutting down");
             MarketStateHolder.shutdown();
         });
 
