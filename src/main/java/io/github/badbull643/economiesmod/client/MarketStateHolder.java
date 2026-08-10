@@ -122,6 +122,10 @@ public class MarketStateHolder {
             onRejected.accept("no identity loaded");
             return;
         }
+
+        disconnectIfConnected();
+
+
         try {
             EventLog log = localLog != null
                     ? localLog

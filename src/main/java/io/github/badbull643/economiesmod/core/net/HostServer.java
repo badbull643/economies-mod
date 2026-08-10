@@ -298,7 +298,19 @@ public class HostServer {
         Message.Sync sync = new Message.Sync();
         sync.logLines = log.rawLinesFrom(hello.lastSeq + 1);
         sync.complete = true;
-        sync.knownPeers = peerCache != null ? peerCache.all() : Collections.emptyList();
+
+        // Don't propagate loopback addresses — they're only valid on the machine
+        // that recorded them.
+        List<PeerCache.Peer> shareable = new ArrayList<>();
+        if (peerCache != null) {
+            for (PeerCache.Peer p : peerCache.all()) {
+                if (!"127.0.0.1".equals(p.address) && !"localhost".equals(p.address)) {
+                    shareable.add(p);
+                }
+            }
+        }
+        sync.knownPeers = shareable;
+
         channel.send(sync);
         System.out.println("[host] synced " + missing.size() + " events to "
                 + channel.remoteAddress());

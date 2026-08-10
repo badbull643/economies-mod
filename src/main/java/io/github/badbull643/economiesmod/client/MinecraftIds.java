@@ -16,6 +16,7 @@ public class MinecraftIds {
         return Registry.ITEM.get(new Identifier(id));
     }
 
+    /** Looks up an item by name. Returns AIR for unknown or malformed identifiers. */
     public static Item itemFromName(String name) {
         try {
             return Registry.ITEM.get(new Identifier(name));
