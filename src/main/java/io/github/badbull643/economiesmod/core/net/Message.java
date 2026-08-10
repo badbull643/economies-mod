@@ -37,7 +37,10 @@ public abstract class Message {
     public static class Sync extends Message {
         public List<String> logLines;
         public boolean complete;
-        public List<PeerCache.Peer> knownPeers;    // ← new
+        public List<PeerCache.Peer> knownPeers;
+        public String hostUserId;      // new
+        public String hostName;        // new
+        public int hostPort;           // new — the port the host is actually listening on
         public Sync() { type = "Sync"; }
     }
 

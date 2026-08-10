@@ -110,8 +110,13 @@ public class MarketClient {
 
         Message.Sync sync = (Message.Sync) reply;
         applySyncLines(sync.logLines);
+
         if (peerCache != null) {
             peerCache.merge(sync.knownPeers);
+            // Record the host: the address we dialled, plus the identity they report.
+            if (sync.hostUserId != null && !sync.hostUserId.equals(userId.toString())) {
+                peerCache.record(sync.hostUserId, sync.hostName, host, sync.hostPort);
+            }
         }
         connected = true;
 

@@ -298,7 +298,9 @@ public class HostServer {
         Message.Sync sync = new Message.Sync();
         sync.logLines = log.rawLinesFrom(hello.lastSeq + 1);
         sync.complete = true;
-
+        sync.hostUserId = hostUserId;
+        sync.hostName = hostName;
+        sync.hostPort = port;
         // Don't propagate loopback addresses — they're only valid on the machine
         // that recorded them.
         List<PeerCache.Peer> shareable = new ArrayList<>();
