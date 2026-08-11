@@ -109,7 +109,12 @@ public class MarketClient {
         }
 
         Message.Sync sync = (Message.Sync) reply;
-        applySyncLines(sync.logLines);
+        try {
+            applySyncLines(sync.logLines);
+        } catch (IllegalStateException e) {
+            channel.close();
+            throw new IOException("cannot read host's events — mod version mismatch?");
+        }
 
         if (peerCache != null) {
             peerCache.merge(sync.knownPeers);
@@ -179,7 +184,16 @@ public class MarketClient {
     private volatile long appliedSeq = 0;
 
     private void applyLine(String line) {
-        SequencedEvent se = EventLog.parseLine(line);
+        SequencedEvent se;
+        try {
+            se = EventLog.parseLine(line);
+        } catch (IllegalStateException e) {
+            System.err.println("[client] cannot parse event: " + e.getMessage()
+                    + " — your mod version may be out of date");
+            onRejected.accept("Unknown event type — update the mod");
+            disconnect();
+            return;
+        }
 
         if (se.seq != appliedSeq + 1) {
             System.err.println("[client] sequence gap: expected " + (appliedSeq + 1)

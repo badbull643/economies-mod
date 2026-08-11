@@ -181,6 +181,8 @@ public class MarketStateHolder {
      * later via the state-changed callback or onRejected.
      */
     public static Submission submit(Event event) {
+
+        //the local branch only for testing though
         if (mode != Mode.LOCAL) {
             if (client == null || !client.isConnected()) {
                 return Submission.failed("not connected");
@@ -358,7 +360,15 @@ public class MarketStateHolder {
         if (s == null) return "nothing";
 
         StringBuilder sb = new StringBuilder();
+
         long credits = s.wallets().getBalance(userId);
+        for (String itemId : s.activeItems()) {
+            for (Order o : s.bookFor(itemId).restingBids()) {
+                if (o.userID().equals(userId)) {
+                    credits += o.volume() * o.value();   // reserved, still yours
+                }
+            }
+        }
         if (credits > 0) sb.append(credits).append(" credits");
 
         for (String itemId : s.activeItems()) {

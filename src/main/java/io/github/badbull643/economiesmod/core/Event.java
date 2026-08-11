@@ -35,4 +35,10 @@ public abstract class Event {
         public long amount;
     }
 
+    public static class DepositAndList extends Event {
+        public String itemId;
+        public long quantity;
+        public long price;
+    }
+
 }

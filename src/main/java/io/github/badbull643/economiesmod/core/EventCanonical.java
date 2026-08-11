@@ -36,6 +36,10 @@ public class EventCanonical {
         } else if (e instanceof Event.InjectCredits) {
             Event.InjectCredits ic = (Event.InjectCredits) e;
             sb.append('|').append(ic.targetUserId).append('|').append(ic.amount);
+        } else if (e instanceof Event.DepositAndList) {
+            Event.DepositAndList d = (Event.DepositAndList) e;
+            sb.append('|').append(d.itemId).append('|').append(d.quantity)
+                    .append('|').append(d.price);
         }
 
         return sb.toString();

@@ -41,7 +41,7 @@ public class MarketScreen extends Screen {
     private static final long MAX_QTY = 100_000L;
 
     private boolean resetArmed = false;
-
+    private boolean hostArmed = false;
     // Row positions, set in init() so render and hit-tests can't drift.
     private int rowX;
     private int rowY;
@@ -137,6 +137,15 @@ public class MarketScreen extends Screen {
         startPoll();
     }
 
+    /** Trading requires a host — local writes would fork you from the shared market. */
+    private boolean requireConnected() {
+        if (MarketStateHolder.mode() == MarketStateHolder.Mode.LOCAL) {
+            status = "Market is closed — connect to a host or start hosting to trade";
+            return false;
+        }
+        return true;
+    }
+
     private void onReset() {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
@@ -230,6 +239,26 @@ public class MarketScreen extends Screen {
     private static long lastHostAttempt = 0;
 
     private void onHost() {
+
+
+        // Warn if someone else already appears to be hosting.
+        if (!hostArmed) {
+            MinecraftClient mcCheck = MinecraftClient.getInstance();
+            String myUuid = mcCheck.player != null
+                    ? MinecraftIds.userIdOf(mcCheck.player).toString() : null;
+
+            for (PeerPoll.HostInfo h : discovered) {
+                if (h.reply.userId != null && !h.reply.userId.equals(myUuid)) {
+                    hostArmed = true;
+                    status = h.reply.hostName + " is already hosting ("
+                            + h.reply.lastSeq + " events). Hosting yourself creates a "
+                            + "SEPARATE market — click Host again to do it anyway";
+                    return;
+                }
+            }
+        }
+        hostArmed = false;
+
         long now = System.currentTimeMillis();
         if (now - lastHostAttempt < 3000) {
             status = "Wait a moment before retrying";
@@ -417,6 +446,7 @@ public class MarketScreen extends Screen {
     }
 
     private void onSell() {
+        if (!requireConnected()) return;
         OrderRequest req = parseForm();
         if (req == null) return;
 
@@ -428,26 +458,21 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        Event.Deposit dep = new Event.Deposit();
-        dep.userId = req.userId;
-        dep.itemId = req.itemId;
-        dep.quantity = req.qty;
-        dep.timestamp = System.currentTimeMillis();
-        MarketStateHolder.submit(dep);
+        // Deposit and list as one atomic event — two separate proposals could be
+        // interleaved, leaving items deposited but never listed.
+        Event.DepositAndList e = new Event.DepositAndList();
+        e.userId = req.userId;
+        e.itemId = req.itemId;
+        e.quantity = req.qty;
+        e.price = req.price;
+        e.timestamp = System.currentTimeMillis();
 
-        Event.PlaceOrder order = new Event.PlaceOrder();
-        order.userId = req.userId;
-        order.itemId = req.itemId;
-        order.price = req.price;
-        order.volume = req.qty;
-        order.isBid = false;
-        order.timestamp = System.currentTimeMillis();
-
-        report(MarketStateHolder.submit(order),
+        report(MarketStateHolder.submit(e),
                 "Listed " + req.qty + " at " + req.price, "Sell sent...");
     }
 
     private void onBuy() {
+        if (!requireConnected()) return;
         OrderRequest req = parseForm();
         if (req == null) return;
 
@@ -464,6 +489,7 @@ public class MarketScreen extends Screen {
     }
 
     private void onWithdraw() {
+        if (!requireConnected()) return;
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) { status = "No player"; return; }
 
@@ -497,6 +523,7 @@ public class MarketScreen extends Screen {
     }
 
     private void onAddCredits() {
+        if (!requireConnected()) return;
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
 
@@ -511,6 +538,7 @@ public class MarketScreen extends Screen {
     }
 
     private void onCancel() {
+        if (!requireConnected()) return;
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
 
@@ -599,7 +627,7 @@ public class MarketScreen extends Screen {
         } else if (MarketStateHolder.mode() == MarketStateHolder.Mode.CONNECTED) {
             label(matrices, "● connection lost", x, y, 0xFF8888);
         } else {
-            label(matrices, "● local market", x, y, 0xAAAAAA);
+            label(matrices, "● market closed — not connected", x, y, 0xAAAAAA);
         }
     }
 
@@ -691,6 +719,7 @@ public class MarketScreen extends Screen {
     @Override
     public void removed() {
         resetArmed = false;
+        hostArmed = false;
         savedItemText = itemField.getText();
         savedItemText = itemField.getText();
         savedHostText = hostField.getText();

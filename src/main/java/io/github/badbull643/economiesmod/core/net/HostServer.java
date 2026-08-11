@@ -17,7 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 public class HostServer {
 
-    public static final String PROTOCOL_VERSION = "1";
+    public static final String PROTOCOL_VERSION = "2";
     private static final int MAX_CONNECTIONS = 64;
 
     private final int port;

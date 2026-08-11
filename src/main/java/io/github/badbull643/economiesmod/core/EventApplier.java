@@ -88,6 +88,18 @@ public class EventApplier {
             return Result.ok(Collections.emptyList());
         }
 
+        if (e instanceof Event.DepositAndList) {
+            Event.DepositAndList d = (Event.DepositAndList) e;
+            if (d.quantity <= 0 || d.price <= 0) return Result.reject("invalid quantity or price");
+            if (d.itemId == null || d.itemId.isEmpty()) return Result.reject("missing itemId");
+
+            state.deposit(d.userId, d.itemId, d.quantity);
+            Order order = new Order(se.seq, d.price, d.itemId, d.quantity, false, d.userId);
+            MarketState.SubmitResult sr = state.submitOrder(order);
+
+            return sr.accepted ? Result.ok(sr.fills) : Result.reject(sr.reason);
+        }
+
         return Result.reject("unknown event type: " + e.getClass().getSimpleName());
     }
 
@@ -143,6 +155,14 @@ public class EventApplier {
             Event.InjectCredits ic = (Event.InjectCredits) e;
             if (ic.amount <= 0) return Result.reject("amount must be positive");
             if (ic.targetUserId == null) return Result.reject("missing targetUserId");
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.DepositAndList) {
+            Event.DepositAndList d = (Event.DepositAndList) e;
+            if (d.quantity <= 0) return Result.reject("quantity must be positive");
+            if (d.price <= 0) return Result.reject("price must be positive");
+            if (d.itemId == null || d.itemId.isEmpty()) return Result.reject("missing itemId");
             return Result.ok(Collections.emptyList());
         }
 
