@@ -78,23 +78,18 @@ public class MarketClient {
         Socket socket = new Socket(host, port);
         channel = new MessageChannel(socket);
 
-
-
         Message.Hello hello = new Message.Hello();
-
         hello.userId = userId.toString();
         hello.publicKey = keys.publicKeyString();
         hello.lastSeq = log.lastSeq();
         hello.lastHash = log.lastHash();
-
-        //hardcoded for now
         hello.hostPort = myHostPort;
         hello.displayName = displayName;
         hello.protocolVersion = HostServer.PROTOCOL_VERSION;
-        //test
+
         System.out.println("[client] hello: lastSeq=" + hello.lastSeq
                 + " appliedSeq=" + appliedSeq + " persist=" + persist);
-        //test
+
         channel.send(hello);
 
         Message reply = channel.receive();
@@ -109,6 +104,15 @@ public class MarketClient {
         }
 
         Message.Sync sync = (Message.Sync) reply;
+
+        if (peerCache != null && sync.hostUserId != null
+                && !sync.hostUserId.equals(userId.toString())
+                && peerCache.keyChanged(sync.hostUserId, sync.hostPublicKey)) {
+            System.err.println("[client] WARNING: " + sync.hostName
+                    + "'s identity key has changed since last seen");
+            onRejected.accept("Warning: " + sync.hostName + "'s key has changed");
+        }
+
         try {
             applySyncLines(sync.logLines);
         } catch (IllegalStateException e) {
@@ -120,9 +124,11 @@ public class MarketClient {
             peerCache.merge(sync.knownPeers);
             // Record the host: the address we dialled, plus the identity they report.
             if (sync.hostUserId != null && !sync.hostUserId.equals(userId.toString())) {
-                peerCache.record(sync.hostUserId, sync.hostName, host, sync.hostPort);
+                peerCache.record(sync.hostUserId, sync.hostName, host,
+                        sync.hostPort, sync.hostPublicKey);
             }
         }
+
         connected = true;
 
         reader = new Thread(this::readerLoop, "market-client-reader");

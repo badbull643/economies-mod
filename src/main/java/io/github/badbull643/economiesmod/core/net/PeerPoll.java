@@ -23,7 +23,8 @@ public class PeerPoll {
      * Probes all peers in parallel. Returns whoever answered within the deadline.
      * Blocking — call off the game thread.
      */
-    public static List<HostInfo> findHosts(List<PeerCache.Peer> peers, int timeoutMillis) {
+    public static List<HostInfo> findHosts(List<PeerCache.Peer> peers,
+                                           PeerCache cache, int timeoutMillis) {
         if (peers.isEmpty()) return Collections.emptyList();
 
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(peers.size(), 16));
@@ -32,12 +33,14 @@ public class PeerPoll {
         for (PeerCache.Peer p : peers) {
             futures.add(pool.submit(() -> {
                 Probe.Result r = Probe.probe(p.address, p.port, timeoutMillis);
-                //test
-                /*if (!r.reachable) {
-                    System.out.println("[peers] " + p.displayName + " unreachable at "
-                            + p.address + ":" + p.port);
-                }*/
-                return (r.reachable && r.reply.hosting) ? new HostInfo(p, r.reply) : null;
+                if (!r.reachable || !r.reply.hosting) return null;
+
+                // Pin or verify the host's key against what we've seen before.
+                if (cache != null && cache.keyChanged(r.reply.userId, r.reply.publicKey)) {
+                    System.err.println("[peers] " + r.reply.hostName
+                            + " presented a changed key — proceeding anyway");
+                }
+                return new HostInfo(p, r.reply);
             }));
         }
         pool.shutdown();

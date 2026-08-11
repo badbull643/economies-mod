@@ -9,12 +9,14 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
 import java.security.PublicKey;
 import java.util.*;
 import java.util.concurrent.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+
 public class HostServer {
 
     public static final String PROTOCOL_VERSION = "2";
@@ -82,11 +84,14 @@ public class HostServer {
 
     private final String hostUserId;
 
+    private final PlayerKeys hostKeys;
+
     public HostServer(int port, Path logFile, String hostName, String hostUserId,
-                      PeerCache peerCache) throws IOException {
+                      PlayerKeys hostKeys, PeerCache peerCache) throws IOException {
         this.port = port;
         this.hostName = hostName;
         this.hostUserId = hostUserId;
+        this.hostKeys = hostKeys;
         this.peerCache = peerCache;
         this.log = new EventLog(logFile);
         this.keyRegistry = new KeyRegistry(logFile.resolveSibling("known-keys.json"), true);
@@ -169,14 +174,21 @@ public class HostServer {
             Message first = channel.receive();
 
             if (first instanceof Message.Query) {
+                Message.Query q = (Message.Query) first;
                 Message.QueryReply reply = new Message.QueryReply();
                 reply.hosting = true;
                 reply.userId = hostUserId;
+                reply.hostName = hostName;
                 reply.lastSeq = log.lastSeq();
                 reply.lastHash = log.lastHash();
-                reply.hostName = hostName;
                 reply.clientCount = clients.size();
                 reply.protocolVersion = PROTOCOL_VERSION;
+                reply.publicKey = hostKeys.publicKeyString();
+                try {
+                    reply.signature = hostKeys.sign(Probe.queryPayload(reply, q.nonce));
+                } catch (GeneralSecurityException e) {
+                    reply.signature = null;
+                }
                 channel.send(reply);
                 return;   // probe done, close the connection
             }
@@ -291,7 +303,7 @@ public class HostServer {
         //test here
         if (peerCache != null && !hello.userId.equals(hostUserId)) {
             peerCache.record(hello.userId, hello.displayName,
-                    addressOf(channel), hello.hostPort);
+                    addressOf(channel), hello.hostPort,hello.publicKey);
         }
 
         List<SequencedEvent> missing = log.readFrom(hello.lastSeq + 1);
@@ -301,6 +313,7 @@ public class HostServer {
         sync.hostUserId = hostUserId;
         sync.hostName = hostName;
         sync.hostPort = port;
+        sync.hostPublicKey = hostKeys.publicKeyString();
         // Don't propagate loopback addresses — they're only valid on the machine
         // that recorded them.
         List<PeerCache.Peer> shareable = new ArrayList<>();
@@ -348,6 +361,11 @@ public class HostServer {
                 e.printStackTrace();
             }
         }
+    }
+
+    // in HostServer
+    public boolean forgetIdentity(UUID userId) throws IOException {
+        return keyRegistry.forget(userId);
     }
 
     private void processProposal(Proposal p) throws IOException {
@@ -459,10 +477,12 @@ public class HostServer {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 25555;
         Path logFile = Paths.get(args.length > 1 ? args[1] : "server-market.jsonl");
         String hostName = args.length > 2 ? args[2] : "dedicated";
+        String hostUserId = args.length > 3 ? args[3]
+                : "00000000-0000-0000-0000-0000000000ff";
 
         System.out.println("[host] log file: " + logFile.toAbsolutePath());
+        PlayerKeys keys = PlayerKeys.loadOrCreate(logFile.resolveSibling("server-identity.key"));
         PeerCache peers = new PeerCache(logFile.resolveSibling("server-peers.json"));
-        String hostUserId = args.length > 3 ? args[3] : "00000000-0000-0000-0000-0000000000ff";
-        new HostServer(port, logFile, hostName, hostUserId, peers).start();
+        new HostServer(port, logFile, hostName, hostUserId, keys, peers).start();
     }
 }

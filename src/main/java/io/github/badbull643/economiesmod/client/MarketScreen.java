@@ -326,7 +326,7 @@ public class MarketScreen extends Screen {
                 for (PeerCache.Peer p : cache.all()) {
                     if (!me.equals(p.userId)) others.add(p);
                 }
-                discovered = PeerPoll.findHosts(others, 2000);
+                discovered = PeerPoll.findHosts(others, cache, 2000);
             } finally {
                 polling = false;
             }

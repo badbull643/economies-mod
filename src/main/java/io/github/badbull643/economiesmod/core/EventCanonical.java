@@ -1,5 +1,7 @@
 package io.github.badbull643.economiesmod.core;
 
+import io.github.badbull643.economiesmod.core.net.Message;
+
 /**
  * Produces the exact string that gets signed for an event.
  *
@@ -44,4 +46,5 @@ public class EventCanonical {
 
         return sb.toString();
     }
+
 }

@@ -85,4 +85,12 @@ public class KeyRegistry {
     public synchronized boolean isKnown(UUID userId) {
         return keys.containsKey(userId.toString());
     }
+
+    public synchronized boolean forget(UUID userId) throws IOException {
+        if (keys.remove(userId.toString()) != null) {
+            save();
+            return true;
+        }
+        return false;
+    }
 }

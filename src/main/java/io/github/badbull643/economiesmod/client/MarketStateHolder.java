@@ -258,7 +258,7 @@ public class MarketStateHolder {
 
         try {
             hostServer = new HostServer(port, logPathFor(worldDir), playerName,
-                    userId.toString(), peerCache);
+                    userId.toString(), keys, peerCache);
             hostThread = new Thread(() -> {
                 try {
                     hostServer.start();

@@ -38,9 +38,10 @@ public abstract class Message {
         public List<String> logLines;
         public boolean complete;
         public List<PeerCache.Peer> knownPeers;
-        public String hostUserId;      // new
-        public String hostName;        // new
-        public int hostPort;           // new — the port the host is actually listening on
+        public String hostUserId;
+        public String hostName;
+        public int hostPort;
+        public String hostPublicKey;
         public Sync() { type = "Sync"; }
     }
 
@@ -72,17 +73,20 @@ public abstract class Message {
     /** Lightweight liveness/status probe. No handshake, no state. */
     public static class Query extends Message {
         public String protocolVersion;
+        public String nonce;
         public Query() { type = "Query"; }
     }
 
     public static class QueryReply extends Message {
         public boolean hosting;
-        public String userId;        // ← this one
+        public String userId;
         public String hostName;
         public long lastSeq;
         public String lastHash;
         public int clientCount;
         public String protocolVersion;
+        public String publicKey;      // so the client can verify without prior knowledge
+        public String signature;      // over the canonical payload below
         public QueryReply() { type = "QueryReply"; }
     }
 

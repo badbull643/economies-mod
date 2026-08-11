@@ -18,6 +18,7 @@ public class PeerCache {
         public String displayName;
         public String address;
         public int port;
+        public String publicKey;     // pinned on first sight
         public long lastSeen;
     }
 
@@ -55,7 +56,7 @@ public class PeerCache {
     }
 
     public synchronized void record(String userId, String displayName,
-                                    String address, int port) {
+                                    String address, int port, String publicKey) {
         if (userId == null || address == null) return;
 
         Peer p = peers.get(userId);
@@ -67,6 +68,7 @@ public class PeerCache {
         p.displayName = displayName;
         p.address = address;
         p.port = port;
+        if (publicKey != null) p.publicKey = publicKey;
         p.lastSeen = System.currentTimeMillis();
         save();
     }
@@ -88,5 +90,16 @@ public class PeerCache {
             }
         }
         if (changed) save();
+    }
+
+    /**
+     * Trust-on-first-use for a peer's key. Returns false if we've seen this peer
+     * before with a different key — i.e. someone is claiming their identity.
+     */
+    /** True if this peer is known with a different key than the one presented. */
+    public synchronized boolean keyChanged(String userId, String publicKey) {
+        if (userId == null || publicKey == null) return false;
+        Peer p = peers.get(userId);
+        return p != null && p.publicKey != null && !p.publicKey.equals(publicKey);
     }
 }
