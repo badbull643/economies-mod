@@ -15,7 +15,9 @@ import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /**
@@ -63,6 +65,93 @@ public class MarketStateHolder {
     /** Records that this market was seen at a given height, from a poll or a sync. */
     public static void observeMarketHeight(UUID marketId, long seq) {
         if (highWater != null) highWater.observe(marketId, seq);
+    }
+
+    /**
+     * A host advertising a head that isn't on our chain.
+     *
+     * Not an error on its own — one of us is on a branch the other doesn't have, and
+     * which of us is "right" isn't a question the data answers. It's a warning that
+     * trading with that host will not do what either party expects.
+     */
+    public static class Divergence {
+        public final String hostName;
+        public final long seq;
+        public final String theirHash;
+        public final String ourHash;
+
+        Divergence(String hostName, long seq, String theirHash, String ourHash) {
+            this.hostName = hostName;
+            this.seq = seq;
+            this.theirHash = theirHash;
+            this.ourHash = ourHash;
+        }
+
+        public String describe() {
+            return (hostName == null ? "a host" : hostName)
+                    + " is on a different branch of this market (differs at event " + seq + ")";
+        }
+    }
+
+    private static volatile Divergence divergence;
+
+    /** The most recently detected divergence, or null if everything we've seen agrees. */
+    public static Divergence divergence() { return divergence; }
+
+    // (hostUserId → "seq:hash") for heads we've already compared. Checking costs a full
+    // read of the log, and a poll repeats every 10s against a head that usually hasn't
+    // moved, so the same comparison would otherwise be redone indefinitely.
+    private static final Map<String, String> checkedHeads = new ConcurrentHashMap<>();
+
+    /**
+     * Compares a discovered host's advertised head against our own chain.
+     *
+     * This is the cheap half of Certificate Transparency's gossip idea: participants
+     * comparing what they've each been told, so a split shows up without anyone having
+     * to attempt a connection first. Discovery already fetches (seq, hash) from every
+     * host it polls — signed, and nonce-bound against replay — so the comparison costs
+     * nothing extra on the wire.
+     *
+     * Only meaningful when their head is at or behind ours: our hash at their seq is a
+     * point they must also have if we share a history. If they're ahead of us we hold
+     * no opinion, which is the same position the host takes during a handshake.
+     */
+    public static void observeHostHead(UUID marketId, long seq, String hash,
+                                       String hostUserId, String hostName) {
+        observeMarketHeight(marketId, seq);
+
+        MarketState s = get();
+        if (s == null || s.marketId() == null || marketId == null) return;
+        if (!s.marketId().equals(marketId)) return;          // different market entirely
+        if (hash == null || hostUserId == null || seq <= 0) return;
+        if (currentWorldDir == null || chainBrokenAt != -1) return;
+
+        String head = seq + ":" + hash;
+        if (head.equals(checkedHeads.get(hostUserId))) return;
+
+        try {
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            if (seq > log.lastSeq()) return;      // they're ahead; nothing of ours to compare
+            String ours = log.hashAt(seq);
+            if (ours == null) return;
+
+            checkedHeads.put(hostUserId, head);
+
+            if (ours.equals(hash)) {
+                // They're on our chain after all — clear any earlier warning about them.
+                Divergence d = divergence;
+                if (d != null && hostName != null && hostName.equals(d.hostName)) {
+                    divergence = null;
+                }
+            } else {
+                divergence = new Divergence(hostName, seq, hash, ours);
+                System.err.println("[economiesmod] divergence: " + hostName
+                        + " reports " + hash + " at event " + seq
+                        + ", we have " + ours);
+            }
+        } catch (IOException e) {
+            // A poll is best-effort; a read failure here is not worth surfacing.
+        }
     }
 
     /** Seq of the first broken link in the local log, or -1 if the chain is sound. */
@@ -672,6 +761,9 @@ public class MarketStateHolder {
             // The watermark describes the market being discarded, so it goes with it —
             // otherwise a fresh market would look permanently behind the old one.
             if (highWater != null) highWater.clear();
+            // Both are judgements about a history that no longer exists.
+            divergence = null;
+            checkedHeads.clear();
             loadLocal(currentWorldDir);
             System.out.println("[economiesmod] local history discarded");
         } catch (IOException e) {

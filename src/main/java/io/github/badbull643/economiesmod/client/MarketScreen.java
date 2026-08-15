@@ -550,8 +550,12 @@ public class MarketScreen extends Screen {
                 for (PeerPoll.HostInfo h : discovered) {
                     if (h.reply.marketId == null) continue;
                     try {
-                        MarketStateHolder.observeMarketHeight(
-                                UUID.fromString(h.reply.marketId), h.reply.lastSeq);
+                        // Also compares their head against our chain — the poll already
+                        // carries a signed (seq, hash), so a split is detectable here
+                        // without anyone attempting a connection first.
+                        MarketStateHolder.observeHostHead(
+                                UUID.fromString(h.reply.marketId), h.reply.lastSeq,
+                                h.reply.lastHash, h.reply.userId, h.reply.hostName);
                     } catch (IllegalArgumentException ignored) {
                         // malformed marketId from a peer — not ours to fix
                     }
@@ -973,9 +977,17 @@ public class MarketScreen extends Screen {
             label(matrices, "Reset log to continue", listX, 54, 0xFF6666);
         } else {
             long behind = MarketStateHolder.eventsBehind();
+            MarketStateHolder.Divergence split = MarketStateHolder.divergence();
             if (behind > 0) {
                 label(matrices, behind + " events behind — connect to catch up before hosting",
                         listX, 42, 0xFFAA55);
+            }
+            // Below the behind-warning rather than instead of it: they're different
+            // problems and both can be true at once. Found passively by discovery, so
+            // it can be showing before anyone has tried to connect.
+            if (split != null) {
+                label(matrices, "FORKED — " + split.describe(),
+                        listX, behind > 0 ? 54 : 42, 0xFF8844);
             }
         }
         renderBook(matrices, listX, rowY + 6);
