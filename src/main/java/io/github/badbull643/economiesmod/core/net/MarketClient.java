@@ -286,7 +286,11 @@ public class MarketClient {
             onRejected.accept("not connected");
             return null;
         }
-        String clientEventId = UUID.randomUUID().toString();
+        // Honour an id the caller already chose. A deposit has to write its journal
+        // entry before it touches the inventory, and that entry is keyed by this id —
+        // so the id must exist before the event is proposed, not be minted here.
+        String clientEventId = event.clientEventId != null
+                ? event.clientEventId : UUID.randomUUID().toString();
         event.clientEventId = clientEventId;   // must be set BEFORE signing
         // Stamped here rather than at each call site: a caller that forgets would
         // produce an event that is valid nowhere, and one that lied would be caught

@@ -38,6 +38,30 @@ public class MarketScreen extends Screen {
      *  by callbacks — hence volatile. */
     private static volatile String status = "";
 
+    /**
+     * Result of settling interrupted inventory operations at world load.
+     *
+     * Held rather than shown immediately, because it is worked out before the player
+     * has any reason to open this screen — and an item silently reappearing in your
+     * inventory with no explanation is worse than the original problem.
+     */
+    private static volatile String recoveryNote = "";
+
+    public static void reportRecovery(int returned, int unconfirmed) {
+        StringBuilder sb = new StringBuilder();
+        if (returned > 0) {
+            sb.append("Returned items from ").append(returned)
+              .append(returned == 1 ? " deposit that" : " deposits that")
+              .append(" never completed");
+        }
+        if (unconfirmed > 0) {
+            if (sb.length() > 0) sb.append(". ");
+            sb.append(unconfirmed).append(unconfirmed == 1 ? " withdrawal" : " withdrawals")
+              .append(" may not have reached you — see the log");
+        }
+        recoveryNote = sb.toString();
+    }
+
     private static final int FIELD_HEIGHT = 20;
     private static final int AMOUNT_W = 50;
     private static final int ITEM_W = 160;
@@ -713,6 +737,10 @@ public class MarketScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // Any click acknowledges the recovery note — it describes something already
+        // done, so it does not need to keep occupying a line.
+        recoveryNote = "";
+
         // The re-place list occupies the discovery area while it exists, so it claims
         // clicks there first.
         if (button == 0 && !MarketStateHolder.pendingReplace().isEmpty()) {
@@ -819,8 +847,20 @@ public class MarketScreen extends Screen {
 
         MinecraftClient mc = MinecraftClient.getInstance();
 
+        // Journal the operation BEFORE the items leave, keyed by the id the event will
+        // carry. Removing first and proposing second is deliberate — never credit before
+        // removing — but it leaves a window where a crash loses the items with nothing
+        // anywhere recording they were owed. This entry is that record; the log settles
+        // it on the next start.
+        String clientEventId = UUID.randomUUID().toString();
+        PendingOps journal = MarketStateHolder.pendingOps();
+        if (journal != null) {
+            journal.recordDeposit(req.userId, clientEventId, req.itemId, req.qty);
+        }
+
         // Remove physical items FIRST — never credit before removing.
         if (!InventoryBridge.remove(mc.player, req.item, (int) req.qty)) {
+            if (journal != null) journal.clearDeposit(clientEventId);
             status = "You don't have " + req.qty + " of that";
             return;
         }
@@ -833,9 +873,16 @@ public class MarketScreen extends Screen {
         e.quantity = req.qty;
         e.price = req.price;
         e.timestamp = System.currentTimeMillis();
+        e.clientEventId = clientEventId;
 
-        report(MarketStateHolder.submit(e),
-                "Listed " + req.qty + " at " + req.price, "Sell sent...");
+        MarketStateHolder.Submission s = MarketStateHolder.submit(e);
+        // A submission that fails outright never becomes an event, so nothing will ever
+        // clear this entry — settle it here rather than leaving a false refund waiting.
+        if (journal != null && !s.pending && !s.accepted) {
+            journal.clearDeposit(clientEventId);
+            InventoryBridge.give(mc.player, req.item, (int) req.qty);
+        }
+        report(s, "Listed " + req.qty + " at " + req.price, "Sell sent...");
     }
 
     private void onBuy() {
@@ -989,6 +1036,13 @@ public class MarketScreen extends Screen {
                 label(matrices, "FORKED — " + split.describe(),
                         listX, behind > 0 ? 54 : 42, 0xFF8844);
             }
+        }
+
+        // Shown the first time the screen is opened after a recovery, then dismissed by
+        // any click — it explains something that already happened, so it only has to be
+        // seen once.
+        if (!recoveryNote.isEmpty()) {
+            label(matrices, recoveryNote, listX, 66, 0x88CCFF);
         }
         renderBook(matrices, listX, rowY + 6);
         renderBalances(matrices, listX);
