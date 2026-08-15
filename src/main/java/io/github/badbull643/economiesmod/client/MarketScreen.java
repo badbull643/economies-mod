@@ -5,6 +5,7 @@ import io.github.badbull643.economiesmod.core.net.PeerPoll;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.item.Item;
@@ -75,12 +76,74 @@ public class MarketScreen extends Screen {
     private static final int ROW_WIDTH = PRICE_X_OFF + PRICE_W;       // 280
     private static final long MAX_QTY = 100_000L;
 
+    /** Left column, for whichever list the current tab shows. */
+    private static final int LIST_W = 190;
+    /** Right column, for that tab's controls. */
+    private static final int CONTROLS_W = 230;
+    private static final int CONTENT_W = LIST_W + 16 + CONTROLS_W;
+    private static final int CONTENT_H = 150;
+    private static final int ROW_STEP = 24;
+
     // Row positions, set in init() so render and hit-tests can't drift.
     private int rowX;
     private int rowY;
     private int buttonsY;
     private int cancelY;
     private int connY;
+
+    /** Left column, where the lists live. */
+    private int listX;
+
+    // ─── tabs ───
+    //
+    // Three clusters used at wildly different rates — trading constantly, connecting
+    // once a session, market lifecycle rarely and mostly destructively — were all
+    // competing for one surface. Separating them is most of what made this screen
+    // hard to read.
+    //
+    // Hand-rolled: 1.16.5 has no tab widget. Every widget is built once and shown or
+    // hidden per tab rather than rebuilt, because ClickableWidget skips both rendering
+    // and hit-testing when invisible, and rebuilding would clear what's typed.
+
+    private static final int TAB_TRADE = 0;
+    private static final int TAB_NETWORK = 1;
+    private static final int TAB_MARKET = 2;
+    private static final String[] TAB_NAMES = {"Trade", "Network", "Market"};
+
+    /** Static so the tab you were on survives closing and reopening the screen. */
+    private static int activeTab = TAB_TRADE;
+
+    private final List<ClickableWidget> tradeWidgets = new ArrayList<>();
+    private final List<ClickableWidget> networkWidgets = new ArrayList<>();
+    private final List<ClickableWidget> marketWidgets = new ArrayList<>();
+    private final List<ButtonWidget> tabButtons = new ArrayList<>();
+
+    private <T extends ClickableWidget> T onTab(List<ClickableWidget> tab, T widget) {
+        tab.add(widget);
+        return this.addButton(widget);
+    }
+
+    private void selectTab(int tab) {
+        activeTab = tab;
+        applyTabVisibility();
+    }
+
+    private void applyTabVisibility() {
+        setShown(tradeWidgets, activeTab == TAB_TRADE);
+        setShown(networkWidgets, activeTab == TAB_NETWORK);
+        setShown(marketWidgets, activeTab == TAB_MARKET);
+        for (int i = 0; i < tabButtons.size(); i++) {
+            // The current tab's own button is the one thing that shouldn't be clickable.
+            tabButtons.get(i).active = (i != activeTab);
+        }
+    }
+
+    private static void setShown(List<ClickableWidget> widgets, boolean shown) {
+        for (ClickableWidget w : widgets) {
+            w.visible = shown;
+            w.active = shown;
+        }
+    }
 
     /**
      * Field contents come from persisted settings rather than statics now, so they
@@ -121,107 +184,127 @@ public class MarketScreen extends Screen {
 
         MarketStateHolder.setOnRejected(reason -> status = "Rejected: " + reason);
 
-        this.rowX = (int) (this.width * 0.42);
-        this.rowY = (int) (this.height * 0.28);
-        this.buttonsY = rowY + FIELD_HEIGHT + 40;
-        this.cancelY = buttonsY + 64;
-        this.connY = cancelY + 32;
+        tradeWidgets.clear();
+        networkWidgets.clear();
+        marketWidgets.clear();
+        tabButtons.clear();
 
-        // ─── Trade entry fields ───
+        // A fixed box, centred and clamped, instead of origins derived from the window
+        // size. The percentages this used to use put the bottom row off-screen at GUI
+        // scale 3 and higher, because the rows below them were a fixed pixel height
+        // that the percentage never accounted for.
+        int boxX = Math.max(4, (this.width - CONTENT_W) / 2);
+        int boxY = Math.max(30, Math.min((this.height - CONTENT_H) / 2, this.height - CONTENT_H - 30));
+
+        this.listX = boxX;
+        this.rowX = boxX + LIST_W + 16;
+        this.rowY = boxY + 22;
+        this.buttonsY = rowY + ROW_STEP;
+        this.cancelY = rowY + ROW_STEP * 2;
+        this.connY = rowY;
+
+        // ─── tab bar ───
+        int tabW = 62;
+        for (int i = 0; i < TAB_NAMES.length; i++) {
+            final int index = i;
+            ButtonWidget tab = new ButtonWidget(boxX + i * (tabW + 2), boxY - 4, tabW,
+                    FIELD_HEIGHT, new LiteralText(TAB_NAMES[i]), b -> selectTab(index));
+            tabButtons.add(tab);
+            this.addButton(tab);
+        }
+
+        // ─── TRADE ───
         this.amountField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, AMOUNT_W, FIELD_HEIGHT, new LiteralText("Amount"));
-        this.itemField = new TextFieldWidget(this.textRenderer,
-                rowX + ITEM_X_OFF, rowY, ITEM_W, FIELD_HEIGHT, new LiteralText("Item"));
-        this.priceField = new TextFieldWidget(this.textRenderer,
-                rowX + PRICE_X_OFF, rowY, PRICE_W, FIELD_HEIGHT, new LiteralText("Price"));
+                rowX, rowY, 45, FIELD_HEIGHT, new LiteralText("Amount"));
+        this.amountField.setSuggestion("qty");
+        onTab(tradeWidgets, this.amountField);
 
+        this.itemField = new TextFieldWidget(this.textRenderer,
+                rowX + 50, rowY, 130, FIELD_HEIGHT, new LiteralText("Item"));
         this.itemField.setMaxLength(64);
         this.itemField.setText(savedItem());
+        onTab(tradeWidgets, this.itemField);
 
-        this.addChild(this.amountField);
-        this.addChild(this.itemField);
-        this.addChild(this.priceField);
+        this.priceField = new TextFieldWidget(this.textRenderer,
+                rowX + 185, rowY, 45, FIELD_HEIGHT, new LiteralText("Price"));
+        this.priceField.setSuggestion("price");
+        onTab(tradeWidgets, this.priceField);
 
-        int buttonWidth = 74;
-
-        // ─── Row 1: Buy / Sell ───
-        this.addButton(new ButtonWidget(rowX, buttonsY, buttonWidth, FIELD_HEIGHT,
+        onTab(tradeWidgets, new ButtonWidget(rowX, buttonsY, 110, FIELD_HEIGHT,
                 new LiteralText("Buy"), b -> onBuy()));
-        this.addButton(new ButtonWidget(rowX + ROW_WIDTH - buttonWidth, buttonsY,
-                buttonWidth, FIELD_HEIGHT, new LiteralText("Sell"), b -> onSell()));
+        onTab(tradeWidgets, new ButtonWidget(rowX + 120, buttonsY, 110, FIELD_HEIGHT,
+                new LiteralText("Sell"), b -> onSell()));
 
-        // ─── Row 2: Withdraw / credits ───
-        this.addButton(new ButtonWidget(rowX, buttonsY + 24, 100, FIELD_HEIGHT,
+        onTab(tradeWidgets, new ButtonWidget(rowX, cancelY, 110, FIELD_HEIGHT,
                 new LiteralText("Withdraw"), b -> onWithdraw()));
 
-        // Sharing a market by file is how someone joins who was never online at the
-        // same time as anyone holding it.
-        this.addButton(new ButtonWidget(rowX + 110, buttonsY + 24, 80, FIELD_HEIGHT,
-                new LiteralText("Export"), b -> onExport()));
-        this.importButton = new ButtonWidget(rowX + 200, buttonsY + 24, 80, FIELD_HEIGHT,
-                new LiteralText("Import"), b -> onImport());
-        this.addButton(this.importButton);
-
-        // ─── Row 3: cancel by order id ───
         this.cancelField = new TextFieldWidget(this.textRenderer,
-                rowX, cancelY, 60, FIELD_HEIGHT, new LiteralText("Order ID"));
-        this.addChild(this.cancelField);
-        this.addButton(new ButtonWidget(rowX + 70, cancelY, 70, FIELD_HEIGHT,
+                rowX + 120, cancelY, 45, FIELD_HEIGHT, new LiteralText("Order ID"));
+        this.cancelField.setSuggestion("id");
+        onTab(tradeWidgets, this.cancelField);
+        onTab(tradeWidgets, new ButtonWidget(rowX + 170, cancelY, 60, FIELD_HEIGHT,
                 new LiteralText("Cancel"), b -> onCancel()));
 
-        // ─── Row 4: connection ───
+        // ─── NETWORK ───
         this.hostField = new TextFieldWidget(this.textRenderer,
-                rowX, connY, 140, FIELD_HEIGHT, new LiteralText("Host"));
+                rowX, rowY, 175, FIELD_HEIGHT, new LiteralText("Host"));
         this.hostField.setMaxLength(64);
         this.hostField.setText(savedHost());
-        this.addChild(this.hostField);
+        onTab(networkWidgets, this.hostField);
 
-        this.addButton(new ButtonWidget(rowX + 150, connY, 70, FIELD_HEIGHT,
+        this.hostPortField = new TextFieldWidget(this.textRenderer,
+                rowX + 185, rowY, 45, FIELD_HEIGHT, new LiteralText("Port"));
+        this.hostPortField.setText(savedPort());
+        onTab(networkWidgets, this.hostPortField);
+
+        onTab(networkWidgets, new ButtonWidget(rowX, rowY + ROW_STEP, 110, FIELD_HEIGHT,
                 new LiteralText("Connect"), b -> onConnect()));
 
         // Host serves the market this world already holds. With no market there is
         // nothing to serve, so the button is disabled rather than silently creating
         // one — that silent creation is what fragments a friend group into two
         // permanently incompatible economies.
-        this.hostButton = new ButtonWidget(rowX + 230, connY, 70, FIELD_HEIGHT,
+        this.hostButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP, 110, FIELD_HEIGHT,
                 new LiteralText("Host"), b -> onHost());
-        this.hostButton.active = MarketStateHolder.hasMarket();
-        this.addButton(this.hostButton);
+        onTab(networkWidgets, this.hostButton);
 
-        this.hostPortField = new TextFieldWidget(this.textRenderer,
-                rowX + 310, connY, 45, FIELD_HEIGHT, new LiteralText("Port"));
-        this.hostPortField.setText(savedPort());
-        this.addChild(this.hostPortField);
-
-        // ─── Row 5: disconnect / stop ───
-        this.migrateButton = new ButtonWidget(rowX, connY + 24, 140, FIELD_HEIGHT,
-                new LiteralText("Migrate to host"), b -> onMigrate());
-        this.addButton(this.migrateButton);
-
-        this.addButton(new ButtonWidget(rowX + 150, connY + 24, 70, FIELD_HEIGHT,
+        onTab(networkWidgets, new ButtonWidget(rowX, rowY + ROW_STEP * 2, 110, FIELD_HEIGHT,
                 new LiteralText("Disconnect"), b -> onDisconnect()));
-        this.addButton(new ButtonWidget(rowX + 230, connY + 24, 70, FIELD_HEIGHT,
-                new LiteralText("Stop"), b -> onStopHosting()));
+        onTab(networkWidgets, new ButtonWidget(rowX + 120, rowY + ROW_STEP * 2, 110,
+                FIELD_HEIGHT, new LiteralText("Stop hosting"), b -> onStopHosting()));
 
-        // ─── Row 6: log reset, discovery refresh, and creating a market ───
-        // All on one row: this screen already runs off the bottom at GUI scale 3+,
-        // so a new row would push the discovery list off-screen.
-        this.addButton(new ButtonWidget(rowX, connY + 48, 70, FIELD_HEIGHT,
-                new LiteralText("Reset log"), b -> onReset()));
-        this.addButton(new ButtonWidget(rowX + 75, connY + 48, 60, FIELD_HEIGHT,
-                new LiteralText("Refresh"), b -> startPoll()));
+        onTab(networkWidgets, new ButtonWidget(rowX, rowY + ROW_STEP * 3, 110, FIELD_HEIGHT,
+                new LiteralText("Refresh hosts"), b -> startPoll()));
 
+        // ─── MARKET ───
         this.marketNameField = new TextFieldWidget(this.textRenderer,
-                rowX + 140, connY + 48, 110, FIELD_HEIGHT, new LiteralText("Market name"));
+                rowX, rowY, 230, FIELD_HEIGHT, new LiteralText("Market name"));
         this.marketNameField.setMaxLength(32);
         this.marketNameField.setText(savedMarketName());
-        this.addChild(this.marketNameField);
+        this.marketNameField.setSuggestion("new market name");
+        onTab(marketWidgets, this.marketNameField);
 
-        this.createButton = new ButtonWidget(rowX + 255, connY + 48, 100, FIELD_HEIGHT,
+        this.createButton = new ButtonWidget(rowX, rowY + ROW_STEP, 110, FIELD_HEIGHT,
                 new LiteralText("Create market"), b -> onCreateMarket());
-        this.createButton.active = !MarketStateHolder.hasMarket();
-        this.addButton(this.createButton);
+        onTab(marketWidgets, this.createButton);
 
+        // Sharing a market by file is how someone joins who was never online at the
+        // same time as anyone holding it.
+        this.importButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP, 110, FIELD_HEIGHT,
+                new LiteralText("Import from file"), b -> onImport());
+        onTab(marketWidgets, this.importButton);
+
+        onTab(marketWidgets, new ButtonWidget(rowX, rowY + ROW_STEP * 2, 110, FIELD_HEIGHT,
+                new LiteralText("Export to file"), b -> onExport()));
+
+        this.migrateButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP * 2, 110,
+                FIELD_HEIGHT, new LiteralText("Migrate to host"), b -> onMigrate());
+        onTab(marketWidgets, this.migrateButton);
+
+        onTab(marketWidgets, new ButtonWidget(rowX, rowY + ROW_STEP * 3, 110, FIELD_HEIGHT,
+                new LiteralText("Reset log"), b -> onReset()));
+
+        applyTabVisibility();
         startPoll();
     }
 
@@ -383,13 +466,20 @@ public class MarketScreen extends Screen {
                 });
     }
 
-    /** Host and Create are mutually exclusive: you either hold a market or you don't. */
+    /**
+     * Host and Create are mutually exclusive: you either hold a market or you don't.
+     *
+     * Every branch is also gated on visible, because this runs each frame and would
+     * otherwise re-enable buttons belonging to a tab that isn't showing — which would
+     * make them clickable again the moment the tab's own visibility rule was applied
+     * before this one.
+     */
     private void refreshMarketButtons() {
         boolean has = MarketStateHolder.hasMarket();
-        if (hostButton != null) hostButton.active = has;
-        if (createButton != null) createButton.active = !has;
+        if (hostButton != null) hostButton.active = hostButton.visible && has;
+        if (createButton != null) createButton.active = createButton.visible && !has;
         // Import adopts a market, so it needs the same empty slate Create does.
-        if (importButton != null) importButton.active = !has;
+        if (importButton != null) importButton.active = importButton.visible && !has;
     }
 
     private void onExport() {
@@ -636,8 +726,44 @@ public class MarketScreen extends Screen {
         }, "market-discovery").start();
     }
 
+    /**
+     * Top of the list area under the controls.
+     *
+     * Below the tallest tab's fourth row, so it is clear of every tab's controls —
+     * they all share the same rows, so one clearance works for all of them.
+     */
     private int discoveryStartY() {
-        return connY + 76;
+        return rowY + ROW_STEP * 4 + 6;
+    }
+
+    /** What this world holds, on the Market tab's left column. */
+    private void renderMarketSummary(MatrixStack matrices, int x) {
+        MarketState market = MarketStateHolder.get();
+        label(matrices, "This world", x, rowY - 11, 0xFFFFFF);
+
+        if (market == null || market.marketId() == null) {
+            label(matrices, "No market yet.", x, rowY + 2, 0x808080);
+            label(matrices, "Create one, import a", x, rowY + 14, 0x808080);
+            label(matrices, "file, or connect to", x, rowY + 26, 0x808080);
+            label(matrices, "someone hosting one.", x, rowY + 38, 0x808080);
+            return;
+        }
+
+        label(matrices, "'" + market.marketName() + "'", x, rowY + 2, 0xFFDD66);
+        label(matrices, market.registeredCount() + " participant(s)", x, rowY + 16, 0xA0A0A0);
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player != null) {
+            label(matrices, "You hold:", x, rowY + 34, 0xA0A0A0);
+            // describeLoss is the same net-position calculation migration credits from,
+            // so what this says is exactly what a migration would carry.
+            String held = MarketStateHolder.describeLoss(MinecraftIds.userIdOf(mc.player));
+            for (OrderedText line : this.textRenderer.wrapLines(
+                    new LiteralText(held), LIST_W)) {
+                this.textRenderer.drawWithShadow(matrices, line, x, rowY + 46, 0xFFFF88);
+                break;   // one line is enough here; the Trade tab has the detail
+            }
+        }
     }
 
     /**
@@ -724,11 +850,9 @@ public class MarketScreen extends Screen {
 
     private void renderDiscovery(MatrixStack matrices) {
         // The re-place list takes this space while it exists — it's transient and
-        // actionable, discovery is neither.
-        if (!MarketStateHolder.pendingReplace().isEmpty()) {
-            renderReplaceList(matrices);
-            return;
-        }
+        // actionable, discovery is neither. render() draws it directly now, on
+        // whichever tab you are on, so this only has to stand aside.
+        if (!MarketStateHolder.pendingReplace().isEmpty()) return;
 
         int x = rowX;
         int y = discoveryStartY();
@@ -824,7 +948,9 @@ public class MarketScreen extends Screen {
             }
         }
 
-        if (button == 0 && !polling) {
+        // Only where the host list is actually drawn. Hit-testing it from another tab
+        // would join a host from a row nobody can see.
+        if (button == 0 && !polling && activeTab == TAB_NETWORK) {
             MinecraftClient mc = MinecraftClient.getInstance();
             String myUuid = mc.player != null
                     ? MinecraftIds.userIdOf(mc.player).toString() : null;
@@ -1059,51 +1185,57 @@ public class MarketScreen extends Screen {
             startPoll();
         }
 
-        drawCenteredText(matrices, this.textRenderer, this.title, this.width / 2, 16, 0xFFFFFF);
+        drawCenteredText(matrices, this.textRenderer, this.title, this.width / 2, 8, 0xFFFFFF);
 
-        int listX = (int) (this.width * 0.08);
+        int listX = this.listX;
 
-        label(matrices, "Amount", rowX, rowY - 11, 0xA0A0A0);
-        label(matrices, "Item", rowX + ITEM_X_OFF, rowY - 11, 0xA0A0A0);
-        label(matrices, "Price", rowX + PRICE_X_OFF, rowY - 11, 0xA0A0A0);
-        label(matrices, "Cancel order", rowX, cancelY - 11, 0xA0A0A0);
-        label(matrices, "Order book:", listX, rowY - 11, 0xFFFFFF);
-        label(matrices, "Port", rowX + 310, connY - 11, 0xA0A0A0);
-        label(matrices, "New market name", rowX + 140, connY + 37, 0xA0A0A0);
-
-        renderConnectionStatus(matrices, listX, 30);
+        renderConnectionStatus(matrices, listX, 20);
 
         // Persistent, not a status-line message — this one doesn't get to scroll away.
         if (MarketStateHolder.chainBrokenAt() != -1) {
             String why = MarketStateHolder.damageReason();
             label(matrices, "LOG UNUSABLE — " + (why == null ? "damaged" : why),
-                    listX, 42, 0xFF6666);
-            label(matrices, "Reset log to continue", listX, 54, 0xFF6666);
+                    listX, 32, 0xFF6666);
         } else {
             long behind = MarketStateHolder.eventsBehind();
             MarketStateHolder.Divergence split = MarketStateHolder.divergence();
             if (behind > 0) {
-                label(matrices, behind + " events behind — connect to catch up before hosting",
-                        listX, 42, 0xFFAA55);
+                label(matrices, behind + " events behind — connect to catch up",
+                        listX, 32, 0xFFAA55);
             }
             // Below the behind-warning rather than instead of it: they're different
             // problems and both can be true at once. Found passively by discovery, so
             // it can be showing before anyone has tried to connect.
             if (split != null) {
                 label(matrices, "FORKED — " + split.describe(),
-                        listX, behind > 0 ? 54 : 42, 0xFF8844);
+                        listX, behind > 0 ? 42 : 32, 0xFF8844);
             }
+        }
+
+        // Only the current tab's left column. Sharing one surface between all three is
+        // what made this screen unreadable in the first place.
+        if (activeTab == TAB_TRADE) {
+            label(matrices, "Order book", listX, rowY - 11, 0xFFFFFF);
+            renderBook(matrices, listX, rowY + 2);
+            renderBalances(matrices, listX);
+        } else if (activeTab == TAB_NETWORK) {
+            renderDiscovery(matrices);
+        } else {
+            renderMarketSummary(matrices, listX);
+        }
+
+        // The re-place checklist belongs to whichever tab you are on: it appears right
+        // after a migration and is the only thing you should be doing next.
+        if (!MarketStateHolder.pendingReplace().isEmpty()) {
+            renderReplaceList(matrices);
         }
 
         // Shown the first time the screen is opened after a recovery, then dismissed by
         // any click — it explains something that already happened, so it only has to be
         // seen once.
         if (!recoveryNote.isEmpty()) {
-            label(matrices, recoveryNote, listX, 66, 0x88CCFF);
+            label(matrices, recoveryNote, listX, this.height - 36, 0x88CCFF);
         }
-        renderBook(matrices, listX, rowY + 6);
-        renderBalances(matrices, listX);
-        renderDiscovery(matrices);
 
         if (!status.isEmpty()) {
             label(matrices, status, listX, this.height - 24, 0xFFDD66);
@@ -1119,14 +1251,9 @@ public class MarketScreen extends Screen {
                     listX, this.height - 12, 0x707070);
         }
 
-        this.amountField.render(matrices, mouseX, mouseY, delta);
-        this.itemField.render(matrices, mouseX, mouseY, delta);
-        this.priceField.render(matrices, mouseX, mouseY, delta);
-        this.hostField.render(matrices, mouseX, mouseY, delta);
-        this.cancelField.render(matrices, mouseX, mouseY, delta);
-        this.hostPortField.render(matrices, mouseX, mouseY, delta);
-        this.marketNameField.render(matrices, mouseX, mouseY, delta);
-
+        // The text fields are registered with addButton now, so super.render draws
+        // them — and skips the ones belonging to a tab that isn't showing, which
+        // hand-rolled render calls could not do.
         super.render(matrices, mouseX, mouseY, delta);
 
         // Last, so it sits above the buttons super.render just drew.
