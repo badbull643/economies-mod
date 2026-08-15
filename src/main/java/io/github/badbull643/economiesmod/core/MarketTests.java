@@ -1161,6 +1161,29 @@ public class MarketTests {
             check("and is still usable afterwards", new PendingOps(file).size(), 1);
         }
 
+        section("N4: reading a book doesn't create one");
+        {
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 10);
+
+            // A player can hold an item they have never listed. Listing every such item
+            // is exactly what the overview does, and it must not leave a trail of empty
+            // books behind it.
+            check("no book before anything is listed", m.hasBook(IRON) ? 1 : 0, 0);
+            check("peek returns nothing", m.peekBook(IRON) == null ? 1 : 0, 1);
+            check("peeking created nothing", m.activeItems().size(), 0);
+
+            m.submitOrder(new Order(1, 5, IRON, 10, false, ALICE));
+            check("listing creates the book", m.hasBook(IRON) ? 1 : 0, 1);
+            check("peek now finds it", m.peekBook(IRON) == null ? 0 : 1, 1);
+            check("and it is the same book",
+                    m.peekBook(IRON) == m.bookFor(IRON) ? 1 : 0, 1);
+
+            // The old accessor still creates, because placing an order needs it to.
+            m.bookFor(DIAMOND);
+            check("bookFor still creates on demand", m.activeItems().size(), 2);
+        }
+
         System.out.println("\nGROUP Q — persisted settings");
 
         section("Q1: settings survive being written and re-read");
