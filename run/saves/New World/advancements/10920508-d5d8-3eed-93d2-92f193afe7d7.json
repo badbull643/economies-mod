@@ -233,6 +233,12 @@
     },
     "done": true
   },
+  "minecraft:recipes/food/baked_potato_from_smoking": {
+    "criteria": {
+      "has_potato": "2026-08-13 15:49:56 +0100"
+    },
+    "done": true
+  },
   "minecraft:recipes/building_blocks/spruce_slab": {
     "criteria": {
       "has_planks": "2026-08-10 23:50:40 +0100"
@@ -241,7 +247,8 @@
   },
   "minecraft:adventure/kill_all_mobs": {
     "criteria": {
-      "minecraft:skeleton": "2026-08-10 23:51:02 +0100"
+      "minecraft:skeleton": "2026-08-10 23:51:02 +0100",
+      "minecraft:zombie": "2026-08-13 15:49:41 +0100"
     },
     "done": false
   },
@@ -273,6 +280,12 @@
   "minecraft:recipes/combat/shield": {
     "criteria": {
       "has_iron_ingot": "2026-08-08 22:36:36 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/food/baked_potato": {
+    "criteria": {
+      "has_potato": "2026-08-13 15:49:56 +0100"
     },
     "done": true
   },
@@ -381,6 +394,12 @@
   "minecraft:recipes/redstone/spruce_pressure_plate": {
     "criteria": {
       "has_planks": "2026-08-10 23:50:40 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/food/baked_potato_from_campfire_cooking": {
+    "criteria": {
+      "has_potato": "2026-08-13 15:49:56 +0100"
     },
     "done": true
   },
