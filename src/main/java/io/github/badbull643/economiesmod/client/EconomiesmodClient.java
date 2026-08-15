@@ -26,6 +26,8 @@ public class EconomiesmodClient implements ClientModInitializer {
             MarketStateHolder.loadKeys(configDir.resolve("economiesmod-identity-" + name + ".key"));
             MarketStateHolder.loadPeers(configDir.resolve("economiesmod-peers-" + name + ".json"));
 
+            MarketStateHolder.ensureShareFolders();
+
             Path worldDir = server.getSavePath(WorldSavePath.ROOT);
             MarketStateHolder.loadLocal(worldDir);
         });
