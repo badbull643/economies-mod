@@ -451,8 +451,13 @@ public class HostServer {
 
         // Client ahead of us: we're stale, or they're on a different history.
         if (hello.lastSeq > log.lastSeq()) {
-            System.err.println("[host] REFUSED: client at seq " + hello.lastSeq
-                    + " is ahead of server at " + log.lastSeq());
+            // Not a terminal refusal, unlike the two above: we're telling them where our
+            // head is so they can work out whether they merely extend us — which we can't
+            // tell from here — and offer the tail back. Reads as a failure on stderr when
+            // it is usually the first half of a successful fast-forward.
+            System.out.println("[host] behind: client at seq " + hello.lastSeq
+                    + ", we're at " + log.lastSeq()
+                    + " — sent our head so they can offer a catch-up");
             Message.Error err = new Message.Error();
             err.code = Refusal.AHEAD;
             err.reason = "you have events this host doesn't (you " + hello.lastSeq
