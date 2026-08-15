@@ -396,6 +396,8 @@ public class HostServer {
     /** Returns true if the client is caught up and should join the live set. */
     private boolean handshake(MessageChannel channel, Message.Hello hello) throws IOException {
         if (!PROTOCOL_VERSION.equals(hello.protocolVersion)) {
+            System.out.println("[host] refused " + hello.displayName + " — their protocol "
+                    + hello.protocolVersion + ", ours " + PROTOCOL_VERSION);
             sendError(channel, "protocol version mismatch — server is " + PROTOCOL_VERSION);
             return false;
         }
