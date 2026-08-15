@@ -103,7 +103,7 @@ public class MarketTests {
 
         section("F9: cancel via event replays correctly");
         {
-            Path file = Paths.get("./test-log-f9.jsonl");
+            Path file = scratch("test-log-f9.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -219,7 +219,7 @@ public class MarketTests {
 
         section("I4: key registry rejects a changed key");
         {
-            Path regFile = Paths.get("./test-keys.json");
+            Path regFile = scratch("test-keys.json");
             Files.deleteIfExists(regFile);
 
             KeyRegistry reg = new KeyRegistry(regFile, true);
@@ -238,7 +238,7 @@ public class MarketTests {
 
         section("I5: registry persists across reload");
         {
-            Path regFile = Paths.get("./test-keys2.json");
+            Path regFile = scratch("test-keys2.json");
             Files.deleteIfExists(regFile);
 
             PlayerKeys keys = PlayerKeys.generate();
@@ -252,7 +252,7 @@ public class MarketTests {
 
         section("I6: trust-on-first-use off rejects unknown identities");
         {
-            Path regFile = Paths.get("./test-keys3.json");
+            Path regFile = scratch("test-keys3.json");
             Files.deleteIfExists(regFile);
 
             KeyRegistry strict = new KeyRegistry(regFile, false);
@@ -262,7 +262,7 @@ public class MarketTests {
 
         section("J1: the log stores signatures, so authorship survives a round trip");
         {
-            Path file = Paths.get("./test-log-j1.jsonl");
+            Path file = scratch("test-log-j1.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -284,7 +284,7 @@ public class MarketTests {
 
         section("J2: the hash chain covers the signature");
         {
-            Path file = Paths.get("./test-log-j2.jsonl");
+            Path file = scratch("test-log-j2.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -339,7 +339,7 @@ public class MarketTests {
 
         section("J4: market identity survives replay");
         {
-            Path file = Paths.get("./test-log-j4.jsonl");
+            Path file = scratch("test-log-j4.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -359,7 +359,7 @@ public class MarketTests {
         {
             // Exactly the shape of a pre-market-identity log: no MarketCreated, just
             // events. Rejecting only the first one would rebuild almost all the state.
-            Path file = Paths.get("./test-log-j6.jsonl");
+            Path file = scratch("test-log-j6.jsonl");
             Files.deleteIfExists(file);
             EventLog legacy = new EventLog(file);
 
@@ -386,7 +386,7 @@ public class MarketTests {
         {
             // The exact shape of the corruption seen in testing: a HostServer and a
             // client log both open on one file, each with its own idea of the end.
-            Path file = Paths.get("./test-log-j7.jsonl");
+            Path file = scratch("test-log-j7.jsonl");
             Files.deleteIfExists(file);
             EventLog first = new EventLog(file);
             MarketState live = new MarketState();
@@ -410,7 +410,7 @@ public class MarketTests {
 
         section("K1: identity registration is self-certifying and once-only");
         {
-            Path file = Paths.get("./test-log-k1.jsonl");
+            Path file = scratch("test-log-k1.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -436,7 +436,7 @@ public class MarketTests {
 
         section("K2: an unregistered author cannot write anything");
         {
-            Path file = Paths.get("./test-log-k2.jsonl");
+            Path file = scratch("test-log-k2.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -451,7 +451,7 @@ public class MarketTests {
 
         section("K3: welcome grant is once per identity per market");
         {
-            Path file = Paths.get("./test-log-k3.jsonl");
+            Path file = scratch("test-log-k3.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -487,8 +487,8 @@ public class MarketTests {
             // Lift a genuine, correctly-signed event out of one market and offer it to
             // another. Before marketId was signed this verified perfectly, which made
             // hand-forging a migration trivial.
-            Path fileX = Paths.get("./test-log-l1x.jsonl");
-            Path fileY = Paths.get("./test-log-l1y.jsonl");
+            Path fileX = scratch("test-log-l1x.jsonl");
+            Path fileY = scratch("test-log-l1y.jsonl");
             Files.deleteIfExists(fileX);
             Files.deleteIfExists(fileY);
 
@@ -523,7 +523,7 @@ public class MarketTests {
             // from an older version looks like. This used to throw out of the EventLog
             // constructor, through loadLocal, and crash the world on load, which left
             // no way to reach the Reset that would have fixed it.
-            Path file = Paths.get("./test-log-l3.jsonl");
+            Path file = scratch("test-log-l3.jsonl");
             Files.deleteIfExists(file);
             Files.write(file, java.util.Arrays.asList(
                     "{\"seq\":1,\"prevHash\":\"0\",\"hash\":\"abc\",\"eventType\":\"InjectCredits\","
@@ -551,8 +551,8 @@ public class MarketTests {
             // lastSeq() reads 0 for a log we can't parse, so the "already holds a
             // market" guard alone would let the copy destroy history that a matching
             // build could still read.
-            Path src = Paths.get("./test-archive-l4.jsonl");
-            Path dest = Paths.get("./test-import-l4.jsonl");
+            Path src = scratch("test-archive-l4.jsonl");
+            Path dest = scratch("test-import-l4.jsonl");
             Files.deleteIfExists(src);
             Files.deleteIfExists(dest);
 
@@ -582,7 +582,7 @@ public class MarketTests {
             // player and chain it correctly. Nothing about the hash chain objects —
             // the host computes it — so only the signature check stands in the way.
             // This is the same verdict a client now reaches on a broadcast line.
-            Path file = Paths.get("./test-log-l5.jsonl");
+            Path file = scratch("test-log-l5.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -614,7 +614,7 @@ public class MarketTests {
 
         section("L6: high-water mark remembers how far a market has reached");
         {
-            Path file = Paths.get("./test-highwater-l6.json");
+            Path file = scratch("test-highwater-l6.json");
             Files.deleteIfExists(file);
             UUID marketA = UUID.randomUUID();
             UUID marketB = UUID.randomUUID();
@@ -647,7 +647,7 @@ public class MarketTests {
 
         section("M1: net position counts what's locked in resting orders");
         {
-            Path file = Paths.get("./test-log-m1.jsonl");
+            Path file = scratch("test-log-m1.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -666,7 +666,7 @@ public class MarketTests {
 
         section("M2: migration credits a beneficiary and can't be replayed");
         {
-            Path file = Paths.get("./test-log-m2.jsonl");
+            Path file = scratch("test-log-m2.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -714,7 +714,7 @@ public class MarketTests {
         {
             // C and D concentrate their grants into C, C migrates, D then tries to join
             // fresh and collect a second grant. The participant list is what stops it.
-            Path file = Paths.get("./test-log-m3.jsonl");
+            Path file = scratch("test-log-m3.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -778,7 +778,7 @@ public class MarketTests {
             // The mint: join and take the grant, reset, create your own market and take
             // that grant too, then migrate it back. Each new market has a fresh id, so
             // the per-branch replay guard never fires — only "are you already here" does.
-            Path file = Paths.get("./test-log-m6.jsonl");
+            Path file = scratch("test-log-m6.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -824,8 +824,8 @@ public class MarketTests {
             // The test the host cannot perform for itself: given only "you are ahead of
             // me", is the client a strict extension or a divergent branch? The client
             // answers it by checking its own hash at the host's head.
-            Path shared = Paths.get("./test-log-m5-shared.jsonl");
-            Path forked = Paths.get("./test-log-m5-fork.jsonl");
+            Path shared = scratch("test-log-m5-shared.jsonl");
+            Path forked = scratch("test-log-m5-fork.jsonl");
             Files.deleteIfExists(shared);
             Files.deleteIfExists(forked);
 
@@ -864,7 +864,7 @@ public class MarketTests {
 
         section("L2: the founder is granted like everyone else");
         {
-            Path file = Paths.get("./test-log-l2.jsonl");
+            Path file = scratch("test-log-l2.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -888,8 +888,8 @@ public class MarketTests {
 
         section("K4: a sound archive verifies and imports");
         {
-            Path src = Paths.get("./test-archive-k4.jsonl");
-            Path dest = Paths.get("./test-import-k4.jsonl");
+            Path src = scratch("test-archive-k4.jsonl");
+            Path dest = scratch("test-import-k4.jsonl");
             Files.deleteIfExists(src);
             Files.deleteIfExists(dest);
 
@@ -914,7 +914,7 @@ public class MarketTests {
             // A doctored log with the chain recomputed. This passes every hash check;
             // only the signature catches it. If this test ever goes green-by-accident,
             // import is worthless.
-            Path src = Paths.get("./test-archive-k5.jsonl");
+            Path src = scratch("test-archive-k5.jsonl");
             Files.deleteIfExists(src);
             EventLog log = new EventLog(src);
             MarketState live = new MarketState();
@@ -948,8 +948,8 @@ public class MarketTests {
 
         section("K6: import refuses to overwrite existing history");
         {
-            Path src = Paths.get("./test-archive-k6.jsonl");
-            Path dest = Paths.get("./test-import-k6.jsonl");
+            Path src = scratch("test-archive-k6.jsonl");
+            Path dest = scratch("test-import-k6.jsonl");
             Files.deleteIfExists(src);
             Files.deleteIfExists(dest);
 
@@ -972,7 +972,7 @@ public class MarketTests {
 
         section("J5: a second market cannot be created in an existing log");
         {
-            Path file = Paths.get("./test-log-j5.jsonl");
+            Path file = scratch("test-log-j5.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
             MarketState live = new MarketState();
@@ -986,12 +986,36 @@ public class MarketTests {
             }
             check("second createMarket refused", refused, 1);
         }
+
+        System.out.println();
+        if (failures == 0) {
+            System.out.println("ALL " + checksRun + " CHECKS PASSED");
+        } else {
+            System.out.println(failures + " of " + checksRun + " checks FAILED");
+        }
+        System.exit(failures == 0 ? 0 : 1);
     }
 
     // ── helpers ──
 
     private static int failures = 0;
     private static int checksRun = 0;
+
+    /**
+     * Scratch files go under build/, not the directory you happened to launch from.
+     * Nothing here cleans up after itself — each test deletes its own file on the way
+     * in — so they need somewhere to live that isn't the repo root.
+     */
+    private static final Path SCRATCH_DIR = Paths.get("build", "test-scratch");
+
+    private static Path scratch(String name) {
+        try {
+            Files.createDirectories(SCRATCH_DIR);
+        } catch (IOException e) {
+            throw new RuntimeException("could not create scratch dir " + SCRATCH_DIR, e);
+        }
+        return SCRATCH_DIR.resolve(name);
+    }
 
     private static void section(String name) {
         System.out.println("  [" + name + "]");

@@ -67,6 +67,15 @@ jar {
     }
 }
 
+// The core engine imports no Minecraft, so the whole suite runs on a bare JVM in
+// milliseconds. Exits non-zero on failure, so this is safe to gate on.
+tasks.register('coreTests', JavaExec) {
+    group = 'verification'
+    description = 'Runs the core engine test suite without launching Minecraft.'
+    mainClass = 'io.github.badbull643.economiesmod.core.MarketTests'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
 // configure the maven publication
 publishing {
     publications {
