@@ -98,6 +98,9 @@ public class HostServer {
 
     private final PlayerKeys hostKeys;
 
+
+
+    //change too about 50
     public static final long DEFAULT_WELCOME_GRANT = 1000L;
 
     public HostServer(int port, Path logFile, String hostName, String hostUserId,

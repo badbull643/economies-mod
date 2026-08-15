@@ -166,6 +166,7 @@ public class EventApplier {
 
             Order order = new Order(se.seq, p.price, p.itemId, p.volume, p.isBid, p.userId);
             MarketState.SubmitResult sr = state.submitOrder(order);
+            if (sr.accepted) state.recordTrades(se.seq, e.timestamp, sr.fills);
 
             return sr.accepted ? Result.ok(sr.fills) : Result.reject(sr.reason);
         }
@@ -188,6 +189,7 @@ public class EventApplier {
             state.deposit(d.userId, d.itemId, d.quantity);
             Order order = new Order(se.seq, d.price, d.itemId, d.quantity, false, d.userId);
             MarketState.SubmitResult sr = state.submitOrder(order);
+            if (sr.accepted) state.recordTrades(se.seq, e.timestamp, sr.fills);
 
             return sr.accepted ? Result.ok(sr.fills) : Result.reject(sr.reason);
         }

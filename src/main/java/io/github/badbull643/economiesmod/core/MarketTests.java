@@ -987,6 +987,102 @@ public class MarketTests {
             check("second createMarket refused", refused, 1);
         }
 
+        System.out.println("\nGROUP N — trade history");
+
+        section("N1: a crossing order records a trade, a resting one does not");
+        {
+            Path file = scratch("test-log-n1.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+
+            apply(log, live, deposit(ALICE, IRON, 100));
+            grant(log, live, BOB, 1000);
+
+            // Rests — nothing has traded yet.
+            apply(log, live, placeOrder(ALICE, IRON, 10, 60, false));
+            check("no trade from a resting order", live.trades().countFor(IRON), 0);
+            check("no last price yet", live.trades().lastPrice(IRON), -1);
+
+            // Crosses.
+            apply(log, live, placeOrder(BOB, IRON, 10, 60, true));
+            check("one trade recorded", live.trades().countFor(IRON), 1);
+            check("recorded at the resting price", live.trades().lastPrice(IRON), 10);
+
+            Trade t = live.trades().recentFor(IRON).get(0);
+            check("trade quantity", t.quantity, 60);
+            check("trade amount", t.amount(), 600);
+            check("buyer is the aggressor", t.buyerId.equals(BOB) ? 1 : 0, 1);
+            check("seller is the rester", t.sellerId.equals(ALICE) ? 1 : 0, 1);
+            check("trade carries the event's seq", t.seq, log.lastSeq());
+        }
+
+        section("N2: history survives replay identically");
+        {
+            Path file = scratch("test-log-n2.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+
+            apply(log, live, deposit(ALICE, IRON, 100));
+            grant(log, live, BOB, 10_000);
+            apply(log, live, placeOrder(ALICE, IRON, 8, 30, false));
+            apply(log, live, placeOrder(ALICE, IRON, 9, 30, false));
+            apply(log, live, placeOrder(BOB, IRON, 10, 60, true));
+
+            check("two fills recorded live", live.trades().countFor(IRON), 2);
+
+            // The whole point of deriving it rather than storing it: a replica that
+            // only ever saw the log must arrive at the same history.
+            MarketState replayed = EventApplier.replay(log);
+            check("replay agrees on count", replayed.trades().countFor(IRON), 2);
+            check("replay agrees on last price",
+                    replayed.trades().lastPrice(IRON), live.trades().lastPrice(IRON));
+            check("replay agrees on first price",
+                    replayed.trades().recentFor(IRON).get(0).price,
+                    live.trades().recentFor(IRON).get(0).price);
+            check("walking the book fills cheapest first",
+                    live.trades().recentFor(IRON).get(0).price, 8);
+        }
+
+        section("N3: history is bounded and per-item");
+        {
+            Path file = scratch("test-log-n3.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+
+            apply(log, live, deposit(ALICE, IRON, 5));
+            apply(log, live, deposit(ALICE, WOOD, 5));
+            grant(log, live, BOB, 10_000);
+
+            apply(log, live, placeOrder(ALICE, IRON, 3, 5, false));
+            apply(log, live, placeOrder(BOB, IRON, 3, 5, true));
+
+            check("iron traded", live.trades().countFor(IRON), 1);
+            check("wood did not", live.trades().countFor(WOOD), 0);
+            check("unknown item is empty, not null",
+                    live.trades().recentFor(DIAMOND).size(), 0);
+            check("only traded items listed", live.trades().tradedItems().size(), 1);
+
+            // The cap is what stops a long-lived market growing this forever.
+            TradeHistory bounded = new TradeHistory();
+            Fill f = new Fill(BOB, ALICE, 1, 1, IRON);
+            for (int i = 0; i < TradeHistory.MAX_PER_ITEM + 50; i++) {
+                bounded.record(new Trade(i, i, f));
+            }
+            check("history capped", bounded.countFor(IRON), TradeHistory.MAX_PER_ITEM);
+            check("the cap drops the oldest, not the newest",
+                    bounded.recentFor(IRON).get(TradeHistory.MAX_PER_ITEM - 1).seq,
+                    TradeHistory.MAX_PER_ITEM + 49);
+        }
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");
@@ -1069,6 +1165,18 @@ public class MarketTests {
         SequencedEvent se = log.readFrom(1).get(0);
         EventApplier.apply(state, se);
         return mc;
+    }
+
+    /** Puts currency in a wallet through a real event. Tests that later replay the log
+     *  must use this rather than WalletRegistry.setBalance, which replay cannot
+     *  reproduce — the balance would silently vanish and orders would be rejected. */
+    private static void grant(EventLog log, MarketState state, UUID user, long amount)
+            throws Exception {
+        Event.WelcomeGrant wg = new Event.WelcomeGrant();
+        wg.userId = ALICE;              // the founder issues grants
+        wg.targetUserId = user;
+        wg.amount = amount;
+        apply(log, state, wg);
     }
 
     /** Registers a user in the log, since nothing they author is valid until then. */
