@@ -261,7 +261,7 @@ public class MarketStateHolder {
     /** Called when a proposal is rejected, in either mode. */
     private static Consumer<String> onRejected = reason -> {};
 
-    private static Consumer<SequencedEvent> onApplied = se -> {};
+    private static Consumer<AppliedEvent> onApplied = a -> {};
 
     /**
      * What actually gets wired to every apply path, in both modes.
@@ -270,12 +270,12 @@ public class MarketStateHolder {
      * it can't be lost by a caller replacing the handler — and so LOCAL and CONNECTED
      * cannot drift apart, which is where this class has been bitten before.
      */
-    private static final Consumer<SequencedEvent> APPLIED = se -> {
-        noteApplied(se);
-        onApplied.accept(se);
+    private static final Consumer<AppliedEvent> APPLIED = a -> {
+        noteApplied(a.event);
+        onApplied.accept(a);
     };
 
-    public static void setOnApplied(Consumer<SequencedEvent> handler) {
+    public static void setOnApplied(Consumer<AppliedEvent> handler) {
         onApplied = handler;
         if (client != null) client.setOnApplied(APPLIED);
     }
@@ -650,7 +650,9 @@ public class MarketStateHolder {
             SequencedEvent se = localLog.append(event, signature);
             EventApplier.Result r = EventApplier.apply(get(), se);
             if (r.accepted) {
-                APPLIED.accept(se);
+                // Always live here — this path only ever applies an event the player
+                // has just authored, never a replayed one.
+                APPLIED.accept(new AppliedEvent(se, r, true));
             }
             return r.accepted ? Submission.accepted(r) : Submission.failed(r.reason);
         } catch (IOException e) {

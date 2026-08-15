@@ -2,6 +2,7 @@ package io.github.badbull643.economiesmod.client;
 
 import io.github.badbull643.economiesmod.core.Event;
 import io.github.badbull643.economiesmod.core.PendingOps;
+import io.github.badbull643.economiesmod.core.SequencedEvent;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -58,7 +59,14 @@ public class EconomiesmodClient implements ClientModInitializer {
             settlePendingOps(mc);
         });
 
-        MarketStateHolder.setOnApplied(se -> {
+        MarketStateHolder.setOnApplied(applied -> {
+            // Replayed history must not hand over anything. Joining a market syncs its
+            // whole log, which includes every withdrawal you ever made in it — acting
+            // on those would give you the items a second time, and again on every
+            // rejoin. Reset-then-connect made that a repeatable duplication.
+            if (!applied.live) return;
+
+            SequencedEvent se = applied.event;
             if (!(se.event instanceof Event.Withdraw)) return;
 
             Event.Withdraw w = (Event.Withdraw) se.event;

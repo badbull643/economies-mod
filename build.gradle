@@ -127,3 +127,10 @@ tasks.register('chunkTest', JavaExec) {
     mainClass = 'io.github.badbull643.economiesmod.core.net.ChunkTest'
     classpath = sourceSets.main.runtimeClasspath
 }
+
+tasks.register('replayGuardTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks a synced history is not mistaken for live traffic.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.ReplayGuardTest'
+    classpath = sourceSets.main.runtimeClasspath
+}

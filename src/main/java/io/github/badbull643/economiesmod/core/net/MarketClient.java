@@ -88,10 +88,20 @@ public class MarketClient {
     public void setOnStateChanged(Runnable handler) { this.onStateChanged = handler; }
 
 
-    /** Called after each event is applied, with the event itself. */
-    private Consumer<SequencedEvent> onApplied = se -> {};
+    /** Called after each event is applied, with the fills and whether it was live. */
+    private Consumer<AppliedEvent> onApplied = a -> {};
 
-    public void setOnApplied(Consumer<SequencedEvent> handler) { this.onApplied = handler; }
+    public void setOnApplied(Consumer<AppliedEvent> handler) { this.onApplied = handler; }
+
+    /**
+     * True while a whole history is being replayed into local state during connect.
+     *
+     * Applying a synced event and applying a broadcast one are the same operation, so
+     * nothing downstream could tell them apart — and a handler with an effect outside
+     * the ledger must, or it repeats every historical event of this player's each time
+     * they join. Volatile because connect() and the reader thread both touch it.
+     */
+    private volatile boolean replaying = false;
 
     public void connect(String host, int port) throws IOException {
         Socket socket = new Socket(host, port);
@@ -343,10 +353,15 @@ public class MarketClient {
 
     /** Returns false if a line failed verification, meaning the connection is finished. */
     private boolean applySyncLines(List<String> lines) {
-        for (String line : lines) {
-            if (!applyLine(line)) return false;
+        replaying = true;
+        try {
+            for (String line : lines) {
+                if (!applyLine(line)) return false;
+            }
+            return true;
+        } finally {
+            replaying = false;
         }
-        return true;
     }
 
     private volatile long appliedSeq = 0;
@@ -403,7 +418,7 @@ public class MarketClient {
 
         EventApplier.Result result = EventApplier.apply(state, se);
         if (result.accepted) {
-            onApplied.accept(se);
+            onApplied.accept(new AppliedEvent(se, result, !replaying));
         }
         return true;
     }
