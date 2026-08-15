@@ -12,6 +12,7 @@ import net.minecraft.item.Items;
 import net.minecraft.text.LiteralText;
 import net.minecraft.util.WorldSavePath;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,6 +27,12 @@ public class MarketScreen extends Screen {
     private TextFieldWidget hostField;
     private TextFieldWidget cancelField;
     private TextFieldWidget hostPortField;
+    private TextFieldWidget marketNameField;
+    private ButtonWidget hostButton;
+    private ButtonWidget createButton;
+    private ButtonWidget importButton;
+    private ButtonWidget migrateButton;
+    private boolean migrateArmed = false;
 
     /** Set from the game thread by button handlers, and from the network thread
      *  by callbacks — hence volatile. */
@@ -52,6 +59,10 @@ public class MarketScreen extends Screen {
     private static String savedHostText = "localhost:25555";
     private static String savedPortText = "25555";
     private static String savedItemText = "minecraft:iron_ingot";
+    private static String savedMarketName = "";
+
+    private boolean createArmed = false;
+    private boolean importArmed = false;
 
     public MarketScreen() {
         super(new LiteralText("Market"));
@@ -95,8 +106,14 @@ public class MarketScreen extends Screen {
         // ─── Row 2: Withdraw / credits ───
         this.addButton(new ButtonWidget(rowX, buttonsY + 24, 100, FIELD_HEIGHT,
                 new LiteralText("Withdraw"), b -> onWithdraw()));
-        this.addButton(new ButtonWidget(rowX + 110, buttonsY + 24, 100, FIELD_HEIGHT,
-                new LiteralText("+1000 credits"), b -> onAddCredits()));
+
+        // Sharing a market by file is how someone joins who was never online at the
+        // same time as anyone holding it.
+        this.addButton(new ButtonWidget(rowX + 110, buttonsY + 24, 80, FIELD_HEIGHT,
+                new LiteralText("Export"), b -> onExport()));
+        this.importButton = new ButtonWidget(rowX + 200, buttonsY + 24, 80, FIELD_HEIGHT,
+                new LiteralText("Import"), b -> onImport());
+        this.addButton(this.importButton);
 
         // ─── Row 3: cancel by order id ───
         this.cancelField = new TextFieldWidget(this.textRenderer,
@@ -114,8 +131,15 @@ public class MarketScreen extends Screen {
 
         this.addButton(new ButtonWidget(rowX + 150, connY, 70, FIELD_HEIGHT,
                 new LiteralText("Connect"), b -> onConnect()));
-        this.addButton(new ButtonWidget(rowX + 230, connY, 70, FIELD_HEIGHT,
-                new LiteralText("Host"), b -> onHost()));
+
+        // Host serves the market this world already holds. With no market there is
+        // nothing to serve, so the button is disabled rather than silently creating
+        // one — that silent creation is what fragments a friend group into two
+        // permanently incompatible economies.
+        this.hostButton = new ButtonWidget(rowX + 230, connY, 70, FIELD_HEIGHT,
+                new LiteralText("Host"), b -> onHost());
+        this.hostButton.active = MarketStateHolder.hasMarket();
+        this.addButton(this.hostButton);
 
         this.hostPortField = new TextFieldWidget(this.textRenderer,
                 rowX + 310, connY, 45, FIELD_HEIGHT, new LiteralText("Port"));
@@ -123,27 +147,47 @@ public class MarketScreen extends Screen {
         this.addChild(this.hostPortField);
 
         // ─── Row 5: disconnect / stop ───
+        this.migrateButton = new ButtonWidget(rowX, connY + 24, 140, FIELD_HEIGHT,
+                new LiteralText("Migrate to host"), b -> onMigrate());
+        this.addButton(this.migrateButton);
+
         this.addButton(new ButtonWidget(rowX + 150, connY + 24, 70, FIELD_HEIGHT,
                 new LiteralText("Disconnect"), b -> onDisconnect()));
         this.addButton(new ButtonWidget(rowX + 230, connY + 24, 70, FIELD_HEIGHT,
                 new LiteralText("Stop"), b -> onStopHosting()));
 
-        // ─── Row 6: log reset and discovery refresh ───
-        this.addButton(new ButtonWidget(rowX, connY + 48, 90, FIELD_HEIGHT,
+        // ─── Row 6: log reset, discovery refresh, and creating a market ───
+        // All on one row: this screen already runs off the bottom at GUI scale 3+,
+        // so a new row would push the discovery list off-screen.
+        this.addButton(new ButtonWidget(rowX, connY + 48, 70, FIELD_HEIGHT,
                 new LiteralText("Reset log"), b -> onReset()));
-        this.addButton(new ButtonWidget(rowX + 100, connY + 48, 90, FIELD_HEIGHT,
+        this.addButton(new ButtonWidget(rowX + 75, connY + 48, 60, FIELD_HEIGHT,
                 new LiteralText("Refresh"), b -> startPoll()));
+
+        this.marketNameField = new TextFieldWidget(this.textRenderer,
+                rowX + 140, connY + 48, 110, FIELD_HEIGHT, new LiteralText("Market name"));
+        this.marketNameField.setMaxLength(32);
+        this.marketNameField.setText(savedMarketName);
+        this.addChild(this.marketNameField);
+
+        this.createButton = new ButtonWidget(rowX + 255, connY + 48, 100, FIELD_HEIGHT,
+                new LiteralText("Create market"), b -> onCreateMarket());
+        this.createButton.active = !MarketStateHolder.hasMarket();
+        this.addButton(this.createButton);
 
         startPoll();
     }
 
     /** Trading requires a host — local writes would fork you from the shared market. */
     private boolean requireConnected() {
-        if (MarketStateHolder.mode() == MarketStateHolder.Mode.LOCAL) {
-            status = "Market is closed — connect to a host or start hosting to trade";
-            return false;
-        }
-        return true;
+        // Tested on the live socket, not on mode: being in CONNECTED mode with a dead
+        // client is exactly the case that used to let a trade through to fail later.
+        if (MarketStateHolder.isConnected()) return true;
+
+        status = MarketStateHolder.mode() == MarketStateHolder.Mode.CONNECTED
+                ? "Connection to the host was lost — reconnect to trade"
+                : "Market is closed — connect to a host or start hosting to trade";
+        return false;
     }
 
     private void onReset() {
@@ -225,9 +269,12 @@ public class MarketScreen extends Screen {
 
         new Thread(() -> {
             MarketStateHolder.connect(finalHost, finalPort, me, myName);
-            status = MarketStateHolder.isConnected()
-                    ? "Connected to " + finalHost + ":" + finalPort
-                    : "Connect failed";
+            // Only report success here. Failures already went through onRejected with
+            // the actual reason and what to do about it — overwriting that with a
+            // generic "Connect failed" throws away the only useful part.
+            if (MarketStateHolder.isConnected()) {
+                status = "Connected to " + finalHost + ":" + finalPort;
+            }
         }, "market-connect").start();
     }
 
@@ -236,23 +283,126 @@ public class MarketScreen extends Screen {
         status = "Disconnected — using local market";
     }
 
+    /**
+     * Creates a new market. Two-click confirm, because the cost of doing this by
+     * mistake is not recoverable: a market created here shares no history with any
+     * market your friends are already using, and the two can never be merged.
+     */
+    private void onCreateMarket() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null || mc.getServer() == null) return;
+
+        String name = marketNameField.getText().trim();
+        if (name.isEmpty()) {
+            status = "Give the market a name first";
+            return;
+        }
+
+        if (!createArmed) {
+            createArmed = true;
+            status = "This creates a SEPARATE market — anyone who joins it won't see "
+                    + "trades from any market your friends already use. To join theirs "
+                    + "instead, use Connect. Click again to create '" + name + "'";
+            return;
+        }
+        createArmed = false;
+
+        savedMarketName = name;
+        Path worldDir = mc.getServer().getSavePath(WorldSavePath.ROOT);
+        UUID me = MinecraftIds.userIdOf(mc.player);
+
+        if (MarketStateHolder.createMarket(worldDir, me, name)) {
+            status = "Created '" + name + "' — click Host to start serving it";
+        }
+    }
+
+    /** Host and Create are mutually exclusive: you either hold a market or you don't. */
+    private void refreshMarketButtons() {
+        boolean has = MarketStateHolder.hasMarket();
+        if (hostButton != null) hostButton.active = has;
+        if (createButton != null) createButton.active = !has;
+        // Import adopts a market, so it needs the same empty slate Create does.
+        if (importButton != null) importButton.active = !has;
+    }
+
+    private void onExport() {
+        new Thread(() -> {
+            try {
+                status = "Exported to " + MarketStateHolder.exportMarket();
+            } catch (IOException e) {
+                status = "Export failed: " + e.getMessage();
+            }
+        }, "market-export").start();
+    }
+
+    /**
+     * Two-click, like Create — importing replaces what this world holds, and the
+     * verification pass reads and checks every event, so it isn't instant.
+     */
+    private void onImport() {
+        if (!importArmed) {
+            importArmed = true;
+            status = "Import adopts someone else's market as this world's — click again";
+            return;
+        }
+        importArmed = false;
+
+        status = "Verifying archive...";
+        new Thread(() -> {
+            try {
+                status = "Imported " + MarketStateHolder.importMarket();
+            } catch (MarketArchive.InvalidArchive e) {
+                status = "Archive rejected: " + e.getMessage();
+            } catch (IOException e) {
+                status = "Import failed: " + e.getMessage();
+            }
+        }, "market-import").start();
+    }
+
     private static long lastHostAttempt = 0;
 
     private void onHost() {
 
 
-        // Warn if someone else already appears to be hosting.
-        if (!hostArmed) {
+        // Warn only about a genuine collision — someone else already serving the same
+        // Behind the market — Raft's election restriction, with the high-water mark
+        // standing in for a quorum. Serving a log that is short of where the market has
+        // reached refuses everyone who is current, and forks it outright the moment
+        // this host trades. Checked before the collision warning because it holds
+        // whether or not anyone else is hosting right now, which is the case that
+        // actually bites: you come back after a week and nobody is around to tell you.
+        long behind = MarketStateHolder.eventsBehind();
+        if (!hostArmed && behind > 0) {
+            hostArmed = true;
+            status = "Your copy is " + behind + " events behind this market. Hosting now"
+                    + " would refuse everyone who is up to date, and split the market if"
+                    + " you trade — connect to someone first, or click Host again to"
+                    + " serve it anyway";
+            return;
+        }
+
+        // market. Another host on a different market is not our problem, and warning
+        // about it trains people to click through the warning that matters.
+        // Only if we actually know what's out there. A warning derived from a minute-old
+        // poll is worse than none: it names a host that may have stopped since, and
+        // teaches people to click through the confirm without reading it.
+        if (!hostArmed && pollIsFresh()) {
             MinecraftClient mcCheck = MinecraftClient.getInstance();
             String myUuid = mcCheck.player != null
                     ? MinecraftIds.userIdOf(mcCheck.player).toString() : null;
+            MarketState mine = MarketStateHolder.get();
+            String myMarket = mine != null && mine.marketId() != null
+                    ? mine.marketId().toString() : null;
 
             for (PeerPoll.HostInfo h : discovered) {
-                if (h.reply.userId != null && !h.reply.userId.equals(myUuid)) {
+                boolean isOther = h.reply.userId != null && !h.reply.userId.equals(myUuid);
+                boolean sameMarket = myMarket != null && myMarket.equals(h.reply.marketId);
+                if (isOther && sameMarket) {
                     hostArmed = true;
-                    status = h.reply.hostName + " is already hosting ("
-                            + h.reply.lastSeq + " events). Hosting yourself creates a "
-                            + "SEPARATE market — click Host again to do it anyway";
+                    status = h.reply.hostName + " is already hosting this market ("
+                            + h.reply.lastSeq + " events). Two hosts at once will split "
+                            + "it — connect to them instead, or click Host again to "
+                            + "take over anyway";
                     return;
                 }
             }
@@ -294,6 +444,60 @@ public class MarketScreen extends Screen {
         }, "market-host-start").start();
     }
 
+    /**
+     * Hands this world's market to the host in the address field, which credits what we
+     * hold there. Two-click, because it ends with discarding this market.
+     */
+    private void onMigrate() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return;
+
+        MarketState mine = MarketStateHolder.get();
+        if (mine == null || mine.marketId() == null) {
+            status = "You hold no market to migrate — use Connect";
+            return;
+        }
+
+        UUID me = MinecraftIds.userIdOf(mc.player);
+        if (!migrateArmed) {
+            migrateArmed = true;
+            status = "Migrate '" + mine.marketName() + "' to that host? It will credit "
+                    + MarketStateHolder.describeLoss(me) + " there, then this market is"
+                    + " discarded — click again to confirm";
+            return;
+        }
+        migrateArmed = false;
+
+        String text = hostField.getText().trim();
+        final String host;
+        final int port;
+        try {
+            int colon = text.lastIndexOf(':');
+            host = colon < 0 ? text : text.substring(0, colon);
+            port = colon < 0 ? 25555 : Integer.parseInt(text.substring(colon + 1));
+        } catch (NumberFormatException e) {
+            status = "Bad port — use host:port";
+            return;
+        }
+
+        Path worldDir = mc.getServer() != null
+                ? mc.getServer().getSavePath(WorldSavePath.ROOT) : null;
+        if (worldDir == null) return;
+        String myName = mc.getSession().getUsername();
+
+        status = "Verifying your market with " + host + "...";
+        new Thread(() -> {
+            if (!MarketStateHolder.migrateTo(host, port, me)) return;   // reports its own reason
+
+            // Only now is it safe to discard: the destination has recorded the claim.
+            MarketStateHolder.resetLog();
+            MarketStateHolder.connect(host, port, me, myName);
+            status = MarketStateHolder.isConnected()
+                    ? "Migrated — your balance is here. Old orders listed below to re-place."
+                    : "Migrated, but could not connect — press Connect";
+        }, "market-migrate").start();
+    }
+
     private void onStopHosting() {
         MarketStateHolder.stopHosting();
         status = "Stopped hosting";
@@ -304,6 +508,17 @@ public class MarketScreen extends Screen {
     private static volatile List<PeerPoll.HostInfo> discovered = Collections.emptyList();
     private static volatile boolean polling = false;
     private static final int DISCOVERY_ROW_HEIGHT = 12;
+
+    /** When the last poll finished. A host list with no age on it is a list of claims
+     *  about the past being read as claims about the present. */
+    private static volatile long lastPollAt = 0;
+    private static final long POLL_INTERVAL_MS = 10_000;
+    /** Past this, the list is too old to base a decision on. */
+    private static final long POLL_STALE_MS = 20_000;
+
+    private static boolean pollIsFresh() {
+        return lastPollAt != 0 && System.currentTimeMillis() - lastPollAt < POLL_STALE_MS;
+    }
 
     private void startPoll() {
         if (polling) return;
@@ -327,7 +542,22 @@ public class MarketScreen extends Screen {
                     if (!me.equals(p.userId)) others.add(p);
                 }
                 discovered = PeerPoll.findHosts(others, cache, 2000);
+
+                // Note how far the market has been seen to reach. This is the only
+                // moment we learn it, and it has to outlive the poll — by the time
+                // someone hosts while behind, the peer that knew better is usually
+                // offline.
+                for (PeerPoll.HostInfo h : discovered) {
+                    if (h.reply.marketId == null) continue;
+                    try {
+                        MarketStateHolder.observeMarketHeight(
+                                UUID.fromString(h.reply.marketId), h.reply.lastSeq);
+                    } catch (IllegalArgumentException ignored) {
+                        // malformed marketId from a peer — not ours to fix
+                    }
+                }
             } finally {
+                lastPollAt = System.currentTimeMillis();
                 polling = false;
             }
         }, "market-discovery").start();
@@ -337,11 +567,105 @@ public class MarketScreen extends Screen {
         return connY + 76;
     }
 
-    private void renderDiscovery(MatrixStack matrices) {
+    /**
+     * Orders carried over from a migrated market, waiting to be re-placed.
+     *
+     * Shown with the destination's current price beside each one. The prices you set in
+     * a dead economy mean nothing here, and the difference is usually invisible until
+     * after you've clicked — so it goes on the row.
+     */
+    private void renderReplaceList(MatrixStack matrices) {
+        List<MarketStateHolder.OldOrder> old = MarketStateHolder.pendingReplace();
+        if (old.isEmpty()) return;
+
         int x = rowX;
         int y = discoveryStartY();
 
-        label(matrices, "Hosts:", x, y, 0xFFFFFF);
+        label(matrices, "Orders from your old market — click to re-place, "
+                + "[X] to dismiss all:", x, y, 0xFFDD66);
+        y += DISCOVERY_ROW_HEIGHT + 2;
+
+        MarketState s = MarketStateHolder.get();
+        for (MarketOldRow row : replaceRows()) {
+            MarketStateHolder.OldOrder o = row.order;
+            String here = "";
+            if (s != null) {
+                List<Order> book = o.isBid
+                        ? s.bookFor(o.itemId).restingAsks()
+                        : s.bookFor(o.itemId).restingBids();
+                if (!book.isEmpty()) {
+                    here = o.isBid
+                            ? "   (best ask here: " + book.get(0).value() + ")"
+                            : "   (best bid here: " + book.get(0).value() + ")";
+                }
+            }
+            label(matrices, "  " + (o.isBid ? "Buy  " : "Sell ") + o.volume + " "
+                    + shortItem(o.itemId) + " @ " + o.price + here, x, y, 0x88CCFF);
+            y += DISCOVERY_ROW_HEIGHT;
+        }
+    }
+
+    private static String shortItem(String itemId) {
+        int colon = itemId.indexOf(':');
+        return colon < 0 ? itemId : itemId.substring(colon + 1);
+    }
+
+    /** Wrapper so the render and hit-test iterate the same thing. */
+    private static class MarketOldRow {
+        final MarketStateHolder.OldOrder order;
+        MarketOldRow(MarketStateHolder.OldOrder order) { this.order = order; }
+    }
+
+    /**
+     * Re-places one carried-over order at its original price.
+     *
+     * A plain PlaceOrder — the items and credits are already in the ledger from the
+     * migration, so there is nothing to deposit and no special path for this.
+     */
+    private void replaceOrder(MarketStateHolder.OldOrder o) {
+        if (!requireConnected()) return;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return;
+
+        Event.PlaceOrder p = new Event.PlaceOrder();
+        p.userId = MinecraftIds.userIdOf(mc.player);
+        p.itemId = o.itemId;
+        p.price = o.price;
+        p.volume = o.volume;
+        p.isBid = o.isBid;
+        p.timestamp = System.currentTimeMillis();
+
+        MarketStateHolder.pendingReplace().remove(o);
+        report(MarketStateHolder.submit(p),
+                "Re-placed " + o.volume + " " + shortItem(o.itemId) + " @ " + o.price,
+                "Re-placing...");
+    }
+
+    private List<MarketOldRow> replaceRows() {
+        List<MarketOldRow> rows = new ArrayList<>();
+        for (MarketStateHolder.OldOrder o : MarketStateHolder.pendingReplace()) {
+            rows.add(new MarketOldRow(o));
+        }
+        return rows;
+    }
+
+    private void renderDiscovery(MatrixStack matrices) {
+        // The re-place list takes this space while it exists — it's transient and
+        // actionable, discovery is neither.
+        if (!MarketStateHolder.pendingReplace().isEmpty()) {
+            renderReplaceList(matrices);
+            return;
+        }
+
+        int x = rowX;
+        int y = discoveryStartY();
+
+        // No running counter: it re-polls every 10s, so the age is almost always
+        // uninteresting and a ticking number just pulls the eye. Say something only
+        // when the list has actually gone stale, which now means polling is failing.
+        boolean stale = !polling && lastPollAt != 0 && !pollIsFresh();
+        label(matrices, stale ? "Hosts: (out of date)" : "Hosts:",
+                x, y, stale ? 0xAA8844 : 0xFFFFFF);
         y += DISCOVERY_ROW_HEIGHT + 2;
 
         if (polling) {
@@ -359,19 +683,58 @@ public class MarketScreen extends Screen {
         String myUuid = mc.player != null
                 ? MinecraftIds.userIdOf(mc.player).toString() : null;
 
+        MarketState mine = MarketStateHolder.get();
+        String myMarket = mine != null && mine.marketId() != null
+                ? mine.marketId().toString() : null;
+
         for (PeerPoll.HostInfo h : hosts) {
             boolean isSelf = h.reply.userId != null && h.reply.userId.equals(myUuid);
+            // Whether this host serves the market we hold decides whether clicking it
+            // will work at all, so it belongs on the row rather than in a failure later.
+            boolean joinable = myMarket == null || myMarket.equals(h.reply.marketId);
+            String marketLabel = h.reply.marketName != null ? h.reply.marketName : "unnamed";
+
             String line = "  " + h.reply.hostName
                     + (isSelf ? " (you)" : "")
+                    + "  [" + marketLabel + "]"
+                    + (joinable ? "" : " (different market)")
                     + "  (" + h.reply.lastSeq + " events, "
                     + h.reply.clientCount + " online)";
-            label(matrices, line, x, y, isSelf ? 0xAAAAAA : 0x88CCFF);
+
+            int colour = isSelf ? 0xAAAAAA : (joinable ? 0x88CCFF : 0x996666);
+            label(matrices, line, x, y, colour);
             y += DISCOVERY_ROW_HEIGHT;
         }
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // The re-place list occupies the discovery area while it exists, so it claims
+        // clicks there first.
+        if (button == 0 && !MarketStateHolder.pendingReplace().isEmpty()) {
+            int x = rowX;
+            int headerY = discoveryStartY();
+
+            // Header doubles as dismiss — the list is a convenience, not an obligation.
+            if (mouseX >= x && mouseX <= x + 300
+                    && mouseY >= headerY && mouseY < headerY + DISCOVERY_ROW_HEIGHT) {
+                MarketStateHolder.clearPendingReplace();
+                status = "Dismissed — your balance is unaffected";
+                return true;
+            }
+
+            int y = headerY + DISCOVERY_ROW_HEIGHT + 2;
+            for (MarketOldRow row : replaceRows()) {
+                if (mouseX >= x && mouseX <= x + 300
+                        && mouseY >= y && mouseY < y + DISCOVERY_ROW_HEIGHT) {
+                    replaceOrder(row.order);
+                    return true;
+                }
+                y += DISCOVERY_ROW_HEIGHT;
+            }
+            return true;   // swallow stray clicks in this region
+        }
+
         if (button == 0 && !polling) {
             MinecraftClient mc = MinecraftClient.getInstance();
             String myUuid = mc.player != null
@@ -410,9 +773,9 @@ public class MarketScreen extends Screen {
         status = "Connecting to " + hostLabel + "...";
         new Thread(() -> {
             MarketStateHolder.connect(addr, port, me, myName);
-            status = MarketStateHolder.isConnected()
-                    ? "Connected to " + hostLabel
-                    : "Connect failed";
+            if (MarketStateHolder.isConnected()) {
+                status = "Connected to " + hostLabel;
+            }
         }, "market-connect").start();
     }
 
@@ -522,21 +885,6 @@ public class MarketScreen extends Screen {
         }
     }
 
-    private void onAddCredits() {
-        if (!requireConnected()) return;
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null) return;
-
-        UUID uid = MinecraftIds.userIdOf(mc.player);
-        Event.InjectCredits ic = new Event.InjectCredits();
-        ic.userId = uid;
-        ic.targetUserId = uid;
-        ic.amount = 1000;
-        ic.timestamp = System.currentTimeMillis();
-
-        report(MarketStateHolder.submit(ic), "Added 1000 credits", "Credits sent...");
-    }
-
     private void onCancel() {
         if (!requireConnected()) return;
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -589,6 +937,20 @@ public class MarketScreen extends Screen {
     public void render(MatrixStack matrices, int mouseX, int mouseY, float delta) {
         renderBackground(matrices);
 
+        // Whether you hold a market changes from the network thread — connecting adopts
+        // one, disconnecting or resetting can drop it. Recompute here rather than only
+        // in init(), or the buttons stay wrong until the screen is reopened.
+        // A dropped host is noticed on a network thread; fold it into the mode here so
+        // the rest of the UI isn't reading state from a connection that's gone.
+        MarketStateHolder.pollConnection();
+        refreshMarketButtons();
+
+        // Re-poll on a timer. Without this the host list only ever reflects the moment
+        // the screen was opened, so a host that has since stopped still looks live.
+        if (!polling && System.currentTimeMillis() - lastPollAt > POLL_INTERVAL_MS) {
+            startPoll();
+        }
+
         drawCenteredText(matrices, this.textRenderer, this.title, this.width / 2, 16, 0xFFFFFF);
 
         int listX = (int) (this.width * 0.08);
@@ -599,8 +961,23 @@ public class MarketScreen extends Screen {
         label(matrices, "Cancel order", rowX, cancelY - 11, 0xA0A0A0);
         label(matrices, "Order book:", listX, rowY - 11, 0xFFFFFF);
         label(matrices, "Port", rowX + 310, connY - 11, 0xA0A0A0);
+        label(matrices, "New market name", rowX + 140, connY + 37, 0xA0A0A0);
 
         renderConnectionStatus(matrices, listX, 30);
+
+        // Persistent, not a status-line message — this one doesn't get to scroll away.
+        if (MarketStateHolder.chainBrokenAt() != -1) {
+            String why = MarketStateHolder.damageReason();
+            label(matrices, "LOG UNUSABLE — " + (why == null ? "damaged" : why),
+                    listX, 42, 0xFF6666);
+            label(matrices, "Reset log to continue", listX, 54, 0xFF6666);
+        } else {
+            long behind = MarketStateHolder.eventsBehind();
+            if (behind > 0) {
+                label(matrices, behind + " events behind — connect to catch up before hosting",
+                        listX, 42, 0xFFAA55);
+            }
+        }
         renderBook(matrices, listX, rowY + 6);
         renderBalances(matrices, listX);
         renderDiscovery(matrices);
@@ -609,12 +986,23 @@ public class MarketScreen extends Screen {
             label(matrices, status, listX, this.height - 24, 0xFFDD66);
         }
 
+        // Your identity is a file, and it doesn't follow you to a new computer. Moving
+        // machines without it makes you a stranger to every market you were part of —
+        // same username, same UUID, unrecognised key. Cheaper to say so than to debug.
+        Path identity = MarketStateHolder.identityPath();
+        if (identity != null) {
+            label(matrices, "identity: config/" + identity.getFileName()
+                            + "  — copy this to move computers, never share it",
+                    listX, this.height - 12, 0x707070);
+        }
+
         this.amountField.render(matrices, mouseX, mouseY, delta);
         this.itemField.render(matrices, mouseX, mouseY, delta);
         this.priceField.render(matrices, mouseX, mouseY, delta);
         this.hostField.render(matrices, mouseX, mouseY, delta);
         this.cancelField.render(matrices, mouseX, mouseY, delta);
         this.hostPortField.render(matrices, mouseX, mouseY, delta);
+        this.marketNameField.render(matrices, mouseX, mouseY, delta);
 
         super.render(matrices, mouseX, mouseY, delta);
     }
