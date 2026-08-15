@@ -19,18 +19,22 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
- * Owns the active market for the current world, in one of two modes:
+ * Owns the active market for the current world, in one of three modes:
  *
  *  LOCAL     — this process owns the log. Events are appended and applied
  *              immediately. Single-player, no network.
  *  CONNECTED — a remote host owns the log. Events are proposed and only applied
  *              when the host broadcasts them back. Asynchronous.
+ *  HOSTING   — this process runs the HostServer AND connects to it as a client,
+ *              so the host's own trades take the same path as everyone else's.
  */
 public class MarketStateHolder {
 
     public enum Mode { LOCAL, CONNECTED, HOSTING }
 
-    private static Mode mode = Mode.LOCAL;
+    /** Written from market-connect and market-host-start, read every frame by the
+     *  screen's render — so it crosses threads in both directions. */
+    private static volatile Mode mode = Mode.LOCAL;
 
     // LOCAL mode
     private static MarketState localState;
@@ -583,7 +587,11 @@ public class MarketStateHolder {
                 System.err.println("[economiesmod] could not bind port " + port + ": " + bindErr);
                 hostServer = null;
                 loadLocal(worldDir);
-                onRejected.accept("port " + port + " already in use");
+                // Names the fix, because the overwhelmingly common cause is two clients
+                // on one machine both defaulting to 25555 — and "already in use" alone
+                // doesn't tell you the Port field is where you resolve it.
+                onRejected.accept("port " + port + " is already in use — set a different"
+                        + " one in the Port field (another host may be running here)");
                 return;
             }
 

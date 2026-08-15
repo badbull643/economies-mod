@@ -1094,21 +1094,17 @@ public class MarketScreen extends Screen {
         long price;
     }
 
-    /** Reads the port field, falling back to 25555 if it's not a valid number. */
-    private int hostPortFromField() {
-        try {
-            int p = Integer.parseInt(hostPortField.getText().trim());
-            return (p >= 1024 && p <= 65535) ? p : 25555;
-        } catch (NumberFormatException e) {
-            return 25555;
-        }
-    }
-
     @Override
     public void removed() {
+        // Every two-click confirm disarms on close, not just these two. A flag left
+        // armed means the next single click on that button acts immediately, with the
+        // "click again to confirm" prompt having scrolled away in a previous session —
+        // and three of the five guard something irreversible.
         resetArmed = false;
         hostArmed = false;
-        savedItemText = itemField.getText();
+        createArmed = false;
+        importArmed = false;
+        migrateArmed = false;
         savedItemText = itemField.getText();
         savedHostText = hostField.getText();
         savedPortText = hostPortField.getText();
