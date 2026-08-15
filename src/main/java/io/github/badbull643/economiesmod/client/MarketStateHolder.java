@@ -225,6 +225,13 @@ public class MarketStateHolder {
                 onRejected.accept("your history diverged from that host's — Reset log to"
                         + " rejoin them. You keep everything from before you diverged;"
                         + " only what you did afterwards is lost.");
+                // Logged, not just shown: without this a genuine fork is invisible in the
+                // console — the connect attempt simply stops, looking identical to a hang.
+                // The fast-forward case below announces itself, so the two outcomes have
+                // to be told apart from the log alone.
+                System.err.println("[economiesmod] diverged from host at seq "
+                        + refusal.hostSeq + " (ours " + ourHashAtTheirHead
+                        + ", theirs " + refusal.hostHash + ") — not a fast-forward");
                 return false;
             }
 
@@ -239,6 +246,8 @@ public class MarketStateHolder {
 
             if (!result.accepted) {
                 onRejected.accept("host would not catch up: " + result.reason);
+                System.err.println("[economiesmod] host refused the catch-up after "
+                        + result.applied + " events: " + result.reason);
                 return false;
             }
             System.out.println("[economiesmod] host accepted " + result.applied + " events");
@@ -742,6 +751,11 @@ public class MarketStateHolder {
 
             if (!result.accepted) {
                 onRejected.accept("migration refused: " + result.reason);
+                // A refusal here is a real outcome — the double-mint guards live behind
+                // it — so it belongs in the log next to the success and failure cases,
+                // not only on a status line that scrolls away.
+                System.err.println("[economiesmod] migration of '" + mine.marketName()
+                        + "' refused by " + host + ":" + port + ": " + result.reason);
                 return false;
             }
 
