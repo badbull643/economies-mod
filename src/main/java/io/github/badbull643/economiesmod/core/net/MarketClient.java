@@ -222,6 +222,11 @@ public class MarketClient {
         try (MessageChannel ch = new MessageChannel(socket)) {
             List<List<String>> chunks = MessageChannel.chunkByByteBudget(logLines);
 
+            if (chunks.size() > 1) {
+                System.out.println("[client] sending " + logLines.size()
+                        + " events to migrate in " + chunks.size() + " chunks");
+            }
+
             for (int i = 0; i < chunks.size(); i++) {
                 Message.MigrateRequest req = new Message.MigrateRequest();
                 req.userId = userId.toString();
@@ -250,6 +255,11 @@ public class MarketClient {
         socket.setSoTimeout(30_000);
         try (MessageChannel ch = new MessageChannel(socket)) {
             List<List<String>> chunks = MessageChannel.chunkByByteBudget(logLines);
+
+            if (chunks.size() > 1) {
+                System.out.println("[client] offering " + logLines.size()
+                        + " events to catch up in " + chunks.size() + " chunks");
+            }
 
             for (int i = 0; i < chunks.size(); i++) {
                 Message.CatchUp req = new Message.CatchUp();

@@ -227,6 +227,7 @@ public class HostServer {
         List<String> lines = new ArrayList<>();
         if (firstLines != null) lines.addAll(firstLines);
         boolean complete = firstComplete;
+        int frames = 1;
 
         while (!complete) {
             if (lines.size() > MAX_BULK_LINES) {
@@ -249,12 +250,17 @@ public class HostServer {
                 if (r.logLines != null) lines.addAll(r.logLines);
                 complete = r.complete;
             }
+            frames++;
         }
 
         if (lines.size() > MAX_BULK_LINES) {
             setReason(reply, "that history is too large to accept");
             channel.send(reply);
             return null;
+        }
+        if (frames > 1) {
+            System.out.println("[host] received " + lines.size() + " events for the "
+                    + what + " in " + frames + " chunks");
         }
         return lines;
     }
