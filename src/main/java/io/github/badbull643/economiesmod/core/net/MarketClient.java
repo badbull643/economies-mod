@@ -6,7 +6,6 @@ import io.github.badbull643.economiesmod.core.*;
 
 import java.io.IOException;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
@@ -137,6 +136,29 @@ public class MarketClient {
                     + sync.marketName + ") — cannot join");
         }
 
+        // A long history arrives across several frames. Identity rode on the first one;
+        // gather the rest of the lines before applying any, so a transfer that dies
+        // partway leaves our log untouched rather than half-advanced.
+        List<String> syncLines = new ArrayList<>();
+        if (sync.logLines != null) syncLines.addAll(sync.logLines);
+        boolean complete = sync.complete;
+        int frames = 1;
+        while (!complete) {
+            Message next = channel.receive();
+            if (!(next instanceof Message.Sync)) {
+                channel.close();
+                throw new IOException("host stopped partway through the sync");
+            }
+            Message.Sync more = (Message.Sync) next;
+            if (more.logLines != null) syncLines.addAll(more.logLines);
+            complete = more.complete;
+            frames++;
+        }
+        if (frames > 1) {
+            System.out.println("[client] received " + syncLines.size()
+                    + " events in " + frames + " chunks");
+        }
+
         if (peerCache != null && sync.hostUserId != null
                 && !sync.hostUserId.equals(userId.toString())
                 && peerCache.keyChanged(sync.hostUserId, sync.hostPublicKey)) {
@@ -147,7 +169,7 @@ public class MarketClient {
 
         boolean synced;
         try {
-            synced = applySyncLines(sync.logLines);
+            synced = applySyncLines(syncLines);
         } catch (IllegalStateException e) {
             channel.close();
             throw new IOException("cannot read host's events — mod version mismatch?");
@@ -192,19 +214,13 @@ public class MarketClient {
      * so there is no session to do this inside. On success the caller should reset and
      * connect normally; nothing about the local log is touched here.
      */
-    // Comfortably under MessageChannel's 1MB-per-line cap, leaving headroom for the
-    // JSON escaping each raw log line picks up when it's nested inside this message
-    // as a string. A long history is exactly the case migration exists to rescue, so
-    // it has to survive being bigger than one frame.
-    private static final int MIGRATE_CHUNK_BUDGET_BYTES = 700_000;
-
     public static Message.MigrateResult requestMigration(String host, int port,
                                                          UUID userId, List<String> logLines)
             throws IOException {
         Socket socket = new Socket(host, port);
         socket.setSoTimeout(30_000);   // verifying a whole branch is not instant
         try (MessageChannel ch = new MessageChannel(socket)) {
-            List<List<String>> chunks = chunkByByteBudget(logLines, MIGRATE_CHUNK_BUDGET_BYTES);
+            List<List<String>> chunks = MessageChannel.chunkByByteBudget(logLines);
 
             for (int i = 0; i < chunks.size(); i++) {
                 Message.MigrateRequest req = new Message.MigrateRequest();
@@ -225,43 +241,30 @@ public class MarketClient {
         }
     }
 
-    /** Splits lines into chunks that each stay under a byte budget. Always returns at
-     *  least one chunk (possibly empty), so an empty input still sends a complete=true
-     *  message rather than nothing. */
-    private static List<List<String>> chunkByByteBudget(List<String> lines, int budget) {
-        List<List<String>> chunks = new ArrayList<>();
-        List<String> current = new ArrayList<>();
-        long currentBytes = 0;
-
-        for (String line : lines) {
-            int lineBytes = line.getBytes(StandardCharsets.UTF_8).length;
-            if (!current.isEmpty() && currentBytes + lineBytes > budget) {
-                chunks.add(current);
-                current = new ArrayList<>();
-                currentBytes = 0;
-            }
-            current.add(line);
-            currentBytes += lineBytes;
-        }
-        chunks.add(current);
-        return chunks;
-    }
-
-    /** Offers a stale host the events it's missing from its own market. */
+    /** Offers a stale host the events it's missing from its own market. Chunked for the
+     *  same reason a migration is: how far a host has fallen behind is unbounded. */
     public static Message.CatchUpResult offerCatchUp(String host, int port,
                                                      UUID userId, List<String> logLines)
             throws IOException {
         Socket socket = new Socket(host, port);
         socket.setSoTimeout(30_000);
         try (MessageChannel ch = new MessageChannel(socket)) {
-            Message.CatchUp req = new Message.CatchUp();
-            req.userId = userId.toString();
-            req.logLines = logLines;
-            ch.send(req);
+            List<List<String>> chunks = MessageChannel.chunkByByteBudget(logLines);
+
+            for (int i = 0; i < chunks.size(); i++) {
+                Message.CatchUp req = new Message.CatchUp();
+                req.userId = userId.toString();
+                req.logLines = chunks.get(i);
+                req.complete = (i == chunks.size() - 1);
+                ch.send(req);
+            }
 
             Message reply = ch.receive();
             if (reply instanceof Message.CatchUpResult) {
                 return (Message.CatchUpResult) reply;
+            }
+            if (reply instanceof Message.Error) {
+                throw new IOException(((Message.Error) reply).reason);
             }
             throw new IOException("host did not answer the catch-up offer");
         }

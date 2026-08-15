@@ -36,9 +36,17 @@ public abstract class Message {
 
     // ─── Server → Client ───
 
+    /**
+     * The history the client is missing.
+     *
+     * Chunked: a fresh joiner syncs from seq 1 and so pulls the whole market, which
+     * outgrows one frame long before any other bulk path does. Only the first frame
+     * carries the host identity and peer fields; the rest carry logLines alone.
+     */
     public static class Sync extends Message {
         public List<String> logLines;
-        public boolean complete;
+        /** False on every chunk but the last. */
+        public boolean complete = true;
         public List<PeerCache.Peer> knownPeers;
         public String hostUserId;
         public String hostName;
@@ -119,6 +127,9 @@ public abstract class Message {
     public static class CatchUp extends Message {
         public String userId;
         public List<String> logLines;   // events after the host's current head
+        /** False on every chunk but the last, exactly as MigrateRequest does it —
+         *  the divergence being repaired here has no bound on its length either. */
+        public boolean complete = true;
         public CatchUp() { type = "CatchUp"; }
     }
 
