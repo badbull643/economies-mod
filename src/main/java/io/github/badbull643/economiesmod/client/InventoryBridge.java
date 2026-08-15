@@ -67,7 +67,19 @@ public class InventoryBridge {
         return remaining == 0;
     }
 
-    /** Gives items to the player, dropping any that don't fit. */
+    /**
+     * Gives items to the player, dropping at their feet anything that doesn't fit.
+     *
+     * giveItemStack is only inventory.insertStack — it returns whether everything went
+     * in and drops nothing itself. Ignoring that return value silently destroyed the
+     * items whenever a player withdrew into a full inventory: the ledger was already
+     * debited, so the value was simply gone, and the pending-op journal cleared because
+     * the hand-over had "completed".
+     *
+     * insertStack also mutates the stack as it fills what space there is, so a partly
+     * accepted stack leaves its remainder behind — that remainder is what gets dropped,
+     * not the whole stack again.
+     */
     public static void give(PlayerEntity player, Item item, int qty) {
         ServerPlayerEntity sp = serverPlayer(player);
         if (sp == null) return;
@@ -75,7 +87,12 @@ public class InventoryBridge {
         int maxStack = item.getMaxCount();
         while (qty > 0) {
             int stackSize = Math.min(qty, maxStack);
-            sp.giveItemStack(new ItemStack(item, stackSize));
+            ItemStack stack = new ItemStack(item, stackSize);
+            sp.giveItemStack(stack);
+            if (!stack.isEmpty()) {
+                // Same fallback vanilla's /give uses when the inventory is full.
+                sp.dropItem(stack, false);
+            }
             qty -= stackSize;
         }
 
