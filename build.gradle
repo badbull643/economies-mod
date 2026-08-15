@@ -118,3 +118,12 @@ loom {
         }
     }
 }
+
+// Networking smoke test: binds sockets and signs a few thousand events, so it is
+// kept out of coreTests, which stays pure and instant.
+tasks.register('chunkTest', JavaExec) {
+    group = 'verification'
+    description = 'End-to-end check that an over-sized history still syncs.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.ChunkTest'
+    classpath = sourceSets.main.runtimeClasspath
+}

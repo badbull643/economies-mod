@@ -20,7 +20,7 @@ import java.nio.file.Paths;
 public class HostServer {
 
     // 6: MigrateBalance event; MigrateRequest/MigrateResult messages.
-    public static final String PROTOCOL_VERSION = "6";
+    public static final String PROTOCOL_VERSION = "7";
     private static final int MAX_CONNECTIONS = 64;
 
     private final int port;
@@ -206,6 +206,66 @@ public class HostServer {
     // can make this host do RSA verification over an arbitrary supplied history before
     // any identity is established.
     private final RateLimiter preAuthLimiter = new RateLimiter(20, 10_000);
+
+    /**
+     * Ceiling on how much an unauthenticated sender can accumulate in memory here.
+     *
+     * preAuthLimiter above only ever sees a request's *first* frame — the follow-up
+     * chunks are read inside handleMigrate/handleCatchUp, past the gate. Without a
+     * ceiling, one admitted request could stream frames at us indefinitely before any
+     * verification runs. Generous enough that no real market approaches it.
+     */
+    private static final int MAX_BULK_LINES = 200_000;
+
+    /**
+     * Reads the rest of a chunked bulk transfer, bounded. Returns null and sends the
+     * caller's reply if the sender breaks the protocol or overruns the ceiling.
+     */
+    private List<String> accumulateChunks(MessageChannel channel, List<String> firstLines,
+                                          boolean firstComplete, Class<? extends Message> expected,
+                                          Message reply, String what) throws IOException {
+        List<String> lines = new ArrayList<>();
+        if (firstLines != null) lines.addAll(firstLines);
+        boolean complete = firstComplete;
+
+        while (!complete) {
+            if (lines.size() > MAX_BULK_LINES) {
+                setReason(reply, "that history is too large to accept");
+                channel.send(reply);
+                return null;
+            }
+            Message next = channel.receive();
+            if (!expected.isInstance(next)) {
+                setReason(reply, "expected the rest of the " + what);
+                channel.send(reply);
+                return null;
+            }
+            if (next instanceof Message.MigrateRequest) {
+                Message.MigrateRequest r = (Message.MigrateRequest) next;
+                if (r.logLines != null) lines.addAll(r.logLines);
+                complete = r.complete;
+            } else {
+                Message.CatchUp r = (Message.CatchUp) next;
+                if (r.logLines != null) lines.addAll(r.logLines);
+                complete = r.complete;
+            }
+        }
+
+        if (lines.size() > MAX_BULK_LINES) {
+            setReason(reply, "that history is too large to accept");
+            channel.send(reply);
+            return null;
+        }
+        return lines;
+    }
+
+    private static void setReason(Message reply, String reason) {
+        if (reply instanceof Message.MigrateResult) {
+            ((Message.MigrateResult) reply).reason = reason;
+        } else if (reply instanceof Message.CatchUpResult) {
+            ((Message.CatchUpResult) reply).reason = reason;
+        }
+    }
 
     private void handleClient(Socket socket) {
         MessageChannel channel = null;
@@ -425,16 +485,8 @@ public class HostServer {
                     addressOf(channel), hello.hostPort,hello.publicKey);
         }
 
-        List<SequencedEvent> missing = log.readFrom(hello.lastSeq + 1);
-        Message.Sync sync = new Message.Sync();
-        sync.logLines = log.rawLinesFrom(hello.lastSeq + 1);
-        sync.complete = true;
-        sync.hostUserId = hostUserId;
-        sync.hostName = hostName;
-        sync.hostPort = port;
-        sync.hostPublicKey = hostKeys.publicKeyString();
-        sync.marketId = ourMarket;
-        sync.marketName = state.marketName();
+        List<String> raw = log.rawLinesFrom(hello.lastSeq + 1);
+
         // Don't propagate loopback addresses — they're only valid on the machine
         // that recorded them.
         List<PeerCache.Peer> shareable = new ArrayList<>();
@@ -445,11 +497,30 @@ public class HostServer {
                 }
             }
         }
-        sync.knownPeers = shareable;
 
-        channel.send(sync);
-        System.out.println("[host] synced " + missing.size() + " events to "
-                + channel.remoteAddress());
+        // A fresh joiner syncs from seq 1, so this is the bulk path that outgrows one
+        // frame first. Identity and peers ride on the first chunk only; the client has
+        // everything it needs to set up before the history finishes arriving.
+        List<List<String>> chunks = MessageChannel.chunkByByteBudget(raw);
+        for (int i = 0; i < chunks.size(); i++) {
+            Message.Sync sync = new Message.Sync();
+            sync.logLines = chunks.get(i);
+            sync.complete = (i == chunks.size() - 1);
+            if (i == 0) {
+                sync.hostUserId = hostUserId;
+                sync.hostName = hostName;
+                sync.hostPort = port;
+                sync.hostPublicKey = hostKeys.publicKeyString();
+                sync.marketId = ourMarket;
+                sync.marketName = state.marketName();
+                sync.knownPeers = shareable;
+            }
+            channel.send(sync);
+        }
+
+        System.out.println("[host] synced " + raw.size() + " events to "
+                + channel.remoteAddress()
+                + (chunks.size() > 1 ? " in " + chunks.size() + " chunks" : ""));
         return true;
     }
 
@@ -464,25 +535,14 @@ public class HostServer {
     private void handleMigrate(MessageChannel channel, Message.MigrateRequest first) {
         Message.MigrateResult reply = new Message.MigrateResult();
         try {
-            // A whole history can arrive as several chunks — see requestMigration's
-            // MIGRATE_CHUNK_BUDGET_BYTES — so keep reading until the sender marks the
-            // last one, accumulating before the expensive verify runs once over all of it.
-            List<String> lines = new ArrayList<>();
-            if (first.logLines != null) lines.addAll(first.logLines);
-            Message.MigrateRequest req = first;
+            // A whole history can arrive as several chunks — see MessageChannel's
+            // CHUNK_BUDGET_BYTES — so keep reading until the sender marks the last one,
+            // accumulating before the expensive verify runs once over all of it.
+            List<String> lines = accumulateChunks(channel, first.logLines, first.complete,
+                    Message.MigrateRequest.class, reply, "migration request");
+            if (lines == null) return;
 
-            while (!req.complete) {
-                Message next = channel.receive();
-                if (!(next instanceof Message.MigrateRequest)) {
-                    reply.reason = "expected the rest of the migration request";
-                    channel.send(reply);
-                    return;
-                }
-                req = (Message.MigrateRequest) next;
-                if (req.logLines != null) lines.addAll(req.logLines);
-            }
-
-            UUID who = UUID.fromString(req.userId);
+            UUID who = UUID.fromString(first.userId);
 
             MarketArchive.Verified foreign = MarketArchive.verifyLines(lines);
 
@@ -604,7 +664,13 @@ public class HostServer {
     private void handleCatchUp(MessageChannel channel, Message.CatchUp req) {
         Message.CatchUpResult reply = new Message.CatchUpResult();
         try {
-            if (req.logLines == null || req.logLines.isEmpty()) {
+            // Chunked like a migration, and for the same reason: there is no bound on
+            // how far a host can have fallen behind its own market.
+            final List<String> offered = accumulateChunks(channel, req.logLines, req.complete,
+                    Message.CatchUp.class, reply, "catch-up offer");
+            if (offered == null) return;
+
+            if (offered.isEmpty()) {
                 reply.reason = "nothing offered";
                 channel.send(reply);
                 return;
@@ -616,7 +682,7 @@ public class HostServer {
 
             if (!queue.offer(new Proposal(() -> {
                 try {
-                    adoptLines(req.logLines, applied);
+                    adoptLines(offered, applied);
                 } catch (Exception e) {
                     failure[0] = e.getMessage();
                 } finally {
