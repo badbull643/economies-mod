@@ -1083,6 +1083,84 @@ public class MarketTests {
                     TradeHistory.MAX_PER_ITEM + 49);
         }
 
+        System.out.println("\nGROUP O — pending inventory operations");
+
+        section("O1: entries survive being written and re-read");
+        {
+            Path file = scratch("test-pending-o1.json");
+            Files.deleteIfExists(file);
+
+            PendingOps ops = new PendingOps(file);
+            check("starts empty", ops.isEmpty() ? 1 : 0, 1);
+
+            ops.recordDeposit(ALICE, "evt-1", IRON, 10);
+            ops.recordWithdraw(ALICE, 42, DIAMOND, 3);
+            check("two recorded", ops.size(), 2);
+
+            // The whole point is surviving a crash, so re-open rather than reuse.
+            PendingOps reloaded = new PendingOps(file);
+            check("both survived a reload", reloaded.size(), 2);
+
+            PendingOps.Op dep = null, wd = null;
+            for (PendingOps.Op op : reloaded.all()) {
+                if (op.isDeposit()) dep = op;
+                if (op.isWithdraw()) wd = op;
+            }
+            check("deposit survived", dep == null ? 0 : 1, 1);
+            check("withdraw survived", wd == null ? 0 : 1, 1);
+            check("deposit kept its event id",
+                    dep != null && "evt-1".equals(dep.clientEventId) ? 1 : 0, 1);
+            check("deposit kept its quantity", dep == null ? -1 : dep.quantity, 10);
+            check("withdraw kept its seq", wd == null ? -1 : wd.seq, 42);
+            check("withdraw kept its item",
+                    wd != null && DIAMOND.equals(wd.itemId) ? 1 : 0, 1);
+        }
+
+        section("O2: clearing removes only the entry named");
+        {
+            Path file = scratch("test-pending-o2.json");
+            Files.deleteIfExists(file);
+
+            PendingOps ops = new PendingOps(file);
+            ops.recordDeposit(ALICE, "evt-a", IRON, 1);
+            ops.recordDeposit(BOB, "evt-b", WOOD, 2);
+            ops.recordWithdraw(ALICE, 7, DIAMOND, 3);
+            ops.recordWithdraw(BOB, 8, IRON, 4);
+
+            ops.clearDeposit("evt-a");
+            check("one deposit gone", ops.size(), 3);
+
+            ops.clearWithdraw(7);
+            check("one withdraw gone", ops.size(), 2);
+
+            ops.clearDeposit("never-existed");
+            ops.clearWithdraw(999);
+            check("clearing an absent entry is harmless", ops.size(), 2);
+
+            check("survivors persisted", new PendingOps(file).size(), 2);
+
+            // A deposit id must not be matched by the withdraw clear, or vice versa.
+            ops.clearWithdraw(8);
+            check("the remaining deposit is untouched", ops.size(), 1);
+            check("and it is the right one",
+                    "evt-b".equals(ops.all().get(0).clientEventId) ? 1 : 0, 1);
+        }
+
+        section("O3: a damaged journal doesn't stop the world loading");
+        {
+            Path file = scratch("test-pending-o3.json");
+            Files.deleteIfExists(file);
+            Files.write(file, "{ this is not the json you are looking for".getBytes());
+
+            // Losing the record leaves us where we were before it existed; refusing to
+            // load the world would be a far worse trade.
+            PendingOps ops = new PendingOps(file);
+            check("damaged journal reads as empty", ops.isEmpty() ? 1 : 0, 1);
+
+            ops.recordDeposit(ALICE, "evt-x", IRON, 5);
+            check("and is still usable afterwards", new PendingOps(file).size(), 1);
+        }
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");

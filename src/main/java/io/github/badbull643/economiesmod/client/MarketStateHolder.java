@@ -14,8 +14,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -46,6 +48,16 @@ public class MarketStateHolder {
     private static Path currentWorldDir;
 
     private static MarketHighWater highWater;
+
+    private static PendingOps pendingOps;
+
+    /**
+     * The journal of half-finished inventory operations, or null before a world loads.
+     *
+     * Lives beside the log because it is scoped to the same world, and is meaningless
+     * against a different one.
+     */
+    public static PendingOps pendingOps() { return pendingOps; }
 
     /**
      * How far behind this world's log is from the furthest this market has been seen
@@ -154,6 +166,59 @@ public class MarketStateHolder {
         }
     }
 
+    /** What the journal turned out to mean, once checked against the log. */
+    public static class Recovery {
+        /** Deposits whose event never landed — these items must go back. */
+        public final List<PendingOps.Op> refunds = new ArrayList<>();
+        /** Withdrawals that may never have reached the player. Reported, never re-given:
+         *  nothing records whether the hand-over completed, so acting on these would
+         *  mint items every time the crash landed after the give rather than before. */
+        public final List<PendingOps.Op> unconfirmed = new ArrayList<>();
+
+        public boolean isEmpty() { return refunds.isEmpty() && unconfirmed.isEmpty(); }
+    }
+
+    /**
+     * Settles the journal against the log, and empties it.
+     *
+     * Deposits are decided exactly: the log either contains the event or it doesn't,
+     * and it will never contain it later — the proposal died with the process that
+     * made it. Withdrawals can't be decided at all, so they are only described.
+     *
+     * If the log can't be read, nothing is resolved and the journal is left intact.
+     * Guessing here would either duplicate items or destroy them, and the entry costs
+     * nothing to keep until a start that can read the log properly.
+     */
+    public static Recovery resolvePendingOps() {
+        Recovery out = new Recovery();
+        if (pendingOps == null || pendingOps.isEmpty() || currentWorldDir == null) return out;
+
+        Set<String> landed = new HashSet<>();
+        try {
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            for (SequencedEvent se : log.readFrom(1)) {
+                if (se.event != null && se.event.clientEventId != null) {
+                    landed.add(se.event.clientEventId);
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("[economiesmod] could not read the log to settle pending"
+                    + " inventory operations — leaving them for next time: " + e);
+            return out;
+        }
+
+        for (PendingOps.Op op : pendingOps.all()) {
+            if (op.isDeposit()) {
+                if (!landed.contains(op.clientEventId)) out.refunds.add(op);
+                pendingOps.clearDeposit(op.clientEventId);
+            } else if (op.isWithdraw()) {
+                out.unconfirmed.add(op);
+                pendingOps.clearWithdraw(op.seq);
+            }
+        }
+        return out;
+    }
+
     /** Seq of the first broken link in the local log, or -1 if the chain is sound. */
     private static long chainBrokenAt = -1;
     private static String damageReason;
@@ -198,9 +263,35 @@ public class MarketStateHolder {
 
     private static Consumer<SequencedEvent> onApplied = se -> {};
 
+    /**
+     * What actually gets wired to every apply path, in both modes.
+     *
+     * Bookkeeping that must happen whatever the UI does with the event goes here, so
+     * it can't be lost by a caller replacing the handler — and so LOCAL and CONNECTED
+     * cannot drift apart, which is where this class has been bitten before.
+     */
+    private static final Consumer<SequencedEvent> APPLIED = se -> {
+        noteApplied(se);
+        onApplied.accept(se);
+    };
+
     public static void setOnApplied(Consumer<SequencedEvent> handler) {
         onApplied = handler;
-        if (client != null) client.setOnApplied(handler);
+        if (client != null) client.setOnApplied(APPLIED);
+    }
+
+    /**
+     * An event we were waiting on has landed, so its journal entry can go.
+     *
+     * Keyed on clientEventId rather than the event's contents: it is the only thing
+     * that ties a line in the log back to the specific inventory operation that
+     * started it, which is what makes the deposit recovery exact.
+     */
+    private static void noteApplied(SequencedEvent se) {
+        if (pendingOps == null || se == null || se.event == null) return;
+        if (se.event.clientEventId != null) {
+            pendingOps.clearDeposit(se.event.clientEventId);
+        }
     }
 
     public static void setOnRejected(Consumer<String> handler) {
@@ -237,6 +328,8 @@ public class MarketStateHolder {
         // player can reach the Reset button that would fix it.
         highWater = new MarketHighWater(
                 logPathFor(worldDir).resolveSibling("high-water.json"));
+        pendingOps = new PendingOps(
+                logPathFor(worldDir).resolveSibling("pending-ops.json"));
 
         try {
             localLog = new EventLog(logPathFor(worldDir));
@@ -385,7 +478,7 @@ public class MarketStateHolder {
             MarketClient c = new MarketClient(userId, displayName, keys, log, persist,
                     peerCache, myHostPort);
             c.setOnRejected(onRejected);
-            c.setOnApplied(onApplied);
+            c.setOnApplied(APPLIED);
             c.connect(host, port);
 
             client = c;
@@ -557,7 +650,7 @@ public class MarketStateHolder {
             SequencedEvent se = localLog.append(event, signature);
             EventApplier.Result r = EventApplier.apply(get(), se);
             if (r.accepted) {
-                onApplied.accept(se);
+                APPLIED.accept(se);
             }
             return r.accepted ? Submission.accepted(r) : Submission.failed(r.reason);
         } catch (IOException e) {
