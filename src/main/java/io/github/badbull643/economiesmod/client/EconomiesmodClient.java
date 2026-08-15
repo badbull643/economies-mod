@@ -38,6 +38,10 @@ public class EconomiesmodClient implements ClientModInitializer {
 
             MarketStateHolder.loadKeys(configDir.resolve("economiesmod-identity-" + name + ".key"));
             MarketStateHolder.loadPeers(configDir.resolve("economiesmod-peers-" + name + ".json"));
+            // Per-username like the two above: the clientAlice/clientBob dev launches
+            // share a config directory and would otherwise overwrite each other.
+            MarketStateHolder.loadSettings(
+                    configDir.resolve("economiesmod-settings-" + name + ".json"));
 
             MarketStateHolder.ensureShareFolders();
 

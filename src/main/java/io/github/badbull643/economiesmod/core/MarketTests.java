@@ -1161,6 +1161,72 @@ public class MarketTests {
             check("and is still usable afterwards", new PendingOps(file).size(), 1);
         }
 
+        System.out.println("\nGROUP Q — persisted settings");
+
+        section("Q1: settings survive being written and re-read");
+        {
+            Path file = scratch("test-settings-q1.json");
+            Files.deleteIfExists(file);
+
+            Settings s = new Settings(file);
+            check("default port", s.hostPort(), 25555);
+            check("chat notifications default on", s.notifyChat() ? 1 : 0, 1);
+            check("action bar defaults off", s.notifyActionBar() ? 1 : 0, 0);
+
+            s.setHostPort(25600);
+            s.setLastHostAddress("example.net:25600");
+            s.setLastItem(DIAMOND);
+            s.setNotifyActionBar(true);
+            s.setNotifyMaxPerMinute(5);
+
+            Settings reloaded = new Settings(file);
+            check("port survived", reloaded.hostPort(), 25600);
+            check("address survived",
+                    "example.net:25600".equals(reloaded.lastHostAddress()) ? 1 : 0, 1);
+            check("item survived", DIAMOND.equals(reloaded.lastItem()) ? 1 : 0, 1);
+            check("action bar survived", reloaded.notifyActionBar() ? 1 : 0, 1);
+            check("rate limit survived", reloaded.notifyMaxPerMinute(), 5);
+        }
+
+        section("Q2: nonsense values are refused, not stored");
+        {
+            Path file = scratch("test-settings-q2.json");
+            Files.deleteIfExists(file);
+
+            Settings s = new Settings(file);
+            s.setHostPort(80);          // privileged
+            check("privileged port refused", s.hostPort(), 25555);
+            s.setHostPort(70000);       // out of range
+            check("out-of-range port refused", s.hostPort(), 25555);
+            s.setHostPort(25601);
+            check("valid port accepted", s.hostPort(), 25601);
+
+            s.setNotifyMaxPerMinute(-1);
+            check("negative rate limit refused", s.notifyMaxPerMinute(), 20);
+            s.setNotifyMaxPerMinute(0);
+            check("zero is allowed — it means always batch", s.notifyMaxPerMinute(), 0);
+        }
+
+        section("Q3: a damaged or partial file still loads");
+        {
+            Path broken = scratch("test-settings-q3a.json");
+            Files.deleteIfExists(broken);
+            Files.write(broken, "not json at all".getBytes());
+            Settings s = new Settings(broken);
+            check("damaged file falls back to defaults", s.hostPort(), 25555);
+
+            // A file written by an older build won't have every field. Gson leaves the
+            // missing ones at their initialiser, which is why Record defaults them.
+            Path partial = scratch("test-settings-q3b.json");
+            Files.deleteIfExists(partial);
+            Files.write(partial, "{\"hostPort\":25700}".getBytes());
+            Settings p = new Settings(partial);
+            check("known field read", p.hostPort(), 25700);
+            check("absent field keeps its default", p.notifyMaxPerMinute(), 20);
+            check("absent string keeps its default",
+                    "minecraft:iron_ingot".equals(p.lastItem()) ? 1 : 0, 1);
+        }
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");

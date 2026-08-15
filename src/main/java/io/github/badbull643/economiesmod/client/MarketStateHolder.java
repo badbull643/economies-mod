@@ -315,6 +315,21 @@ public class MarketStateHolder {
         peerCache = new PeerCache(peerFile);
     }
 
+    private static Settings settings;
+
+    public static void loadSettings(Path settingsFile) {
+        settings = new Settings(settingsFile);
+        myHostPort = settings.hostPort();
+    }
+
+    /**
+     * Persisted preferences, or null before they've been loaded.
+     *
+     * Callers must tolerate null — the screen can in principle be reached before
+     * SERVER_STARTED has run, and a missing settings file is not worth crashing over.
+     */
+    public static Settings settings() { return settings; }
+
 
     // ─────────── LOCAL mode ───────────
 

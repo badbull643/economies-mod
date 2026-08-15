@@ -80,10 +80,33 @@ public class MarketScreen extends Screen {
     private int cancelY;
     private int connY;
 
-    private static String savedHostText = "localhost:25555";
-    private static String savedPortText = "25555";
-    private static String savedItemText = "minecraft:iron_ingot";
-    private static String savedMarketName = "";
+    /**
+     * Field contents come from persisted settings rather than statics now, so they
+     * survive a restart instead of only a screen close. Falls back to the same
+     * defaults when settings haven't loaded (the screen is unreachable before
+     * SERVER_STARTED in practice, but null-tolerance costs nothing).
+     */
+    private static Settings settings() { return MarketStateHolder.settings(); }
+
+    private static String savedHost() {
+        Settings s = settings();
+        return s == null ? "localhost:25555" : s.lastHostAddress();
+    }
+
+    private static String savedPort() {
+        Settings s = settings();
+        return s == null ? "25555" : String.valueOf(s.hostPort());
+    }
+
+    private static String savedItem() {
+        Settings s = settings();
+        return s == null ? "minecraft:iron_ingot" : s.lastItem();
+    }
+
+    private static String savedMarketName() {
+        Settings s = settings();
+        return s == null ? "" : s.lastMarketName();
+    }
 
     private boolean createArmed = false;
     private boolean importArmed = false;
@@ -113,7 +136,7 @@ public class MarketScreen extends Screen {
                 rowX + PRICE_X_OFF, rowY, PRICE_W, FIELD_HEIGHT, new LiteralText("Price"));
 
         this.itemField.setMaxLength(64);
-        this.itemField.setText(savedItemText);
+        this.itemField.setText(savedItem());
 
         this.addChild(this.amountField);
         this.addChild(this.itemField);
@@ -150,7 +173,7 @@ public class MarketScreen extends Screen {
         this.hostField = new TextFieldWidget(this.textRenderer,
                 rowX, connY, 140, FIELD_HEIGHT, new LiteralText("Host"));
         this.hostField.setMaxLength(64);
-        this.hostField.setText(savedHostText);
+        this.hostField.setText(savedHost());
         this.addChild(this.hostField);
 
         this.addButton(new ButtonWidget(rowX + 150, connY, 70, FIELD_HEIGHT,
@@ -167,7 +190,7 @@ public class MarketScreen extends Screen {
 
         this.hostPortField = new TextFieldWidget(this.textRenderer,
                 rowX + 310, connY, 45, FIELD_HEIGHT, new LiteralText("Port"));
-        this.hostPortField.setText(savedPortText);
+        this.hostPortField.setText(savedPort());
         this.addChild(this.hostPortField);
 
         // ─── Row 5: disconnect / stop ───
@@ -191,7 +214,7 @@ public class MarketScreen extends Screen {
         this.marketNameField = new TextFieldWidget(this.textRenderer,
                 rowX + 140, connY + 48, 110, FIELD_HEIGHT, new LiteralText("Market name"));
         this.marketNameField.setMaxLength(32);
-        this.marketNameField.setText(savedMarketName);
+        this.marketNameField.setText(savedMarketName());
         this.addChild(this.marketNameField);
 
         this.createButton = new ButtonWidget(rowX + 255, connY + 48, 100, FIELD_HEIGHT,
@@ -331,7 +354,8 @@ public class MarketScreen extends Screen {
         }
         createArmed = false;
 
-        savedMarketName = name;
+        Settings s = settings();
+        if (s != null) s.setLastMarketName(name);
         Path worldDir = mc.getServer().getSavePath(WorldSavePath.ROOT);
         UUID me = MinecraftIds.userIdOf(mc.player);
 
@@ -1171,9 +1195,21 @@ public class MarketScreen extends Screen {
         createArmed = false;
         importArmed = false;
         migrateArmed = false;
-        savedItemText = itemField.getText();
-        savedHostText = hostField.getText();
-        savedPortText = hostPortField.getText();
+
+        // Persisted rather than parked in statics, so these survive quitting the game
+        // and not merely closing the screen. The market name is saved when a market is
+        // actually created, not here — a half-typed name is not a preference.
+        Settings s = settings();
+        if (s != null) {
+            s.setLastItem(itemField.getText().trim());
+            s.setLastHostAddress(hostField.getText().trim());
+            try {
+                s.setHostPort(Integer.parseInt(hostPortField.getText().trim()));
+            } catch (NumberFormatException ignored) {
+                // Not a number, so not worth remembering. setHostPort rejects
+                // out-of-range values on the same principle.
+            }
+        }
         super.removed();
     }
 
