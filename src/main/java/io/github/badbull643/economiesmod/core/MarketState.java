@@ -11,6 +11,10 @@ public class MarketState {
     private final Map<String, OrderBook> markets = new HashMap<>();
     private final WalletRegistry wallets = new WalletRegistry();
 
+    // What has actually traded. Derived from replay like everything else, never stored
+    // separately — a view with its own persistence could disagree with the log.
+    private final TradeHistory trades = new TradeHistory();
+
     // Set once, by the MarketCreated genesis event. Null means this state was built
     // from an empty log (or one predating market identity).
     // Set once, at genesis, then read from handshake threads and the render thread.
@@ -80,6 +84,20 @@ public class MarketState {
     }
 
     public WalletRegistry wallets() { return wallets; }
+
+    public TradeHistory trades() { return trades; }
+
+    /**
+     * Files fills into the trade history. Called only by EventApplier, which is the
+     * only place that knows both the fills and the event that caused them — the
+     * matching engine has no clock and no sequence number of its own.
+     */
+    void recordTrades(long seq, long timestamp, List<Fill> fills) {
+        if (fills == null) return;
+        for (Fill f : fills) {
+            trades.record(new Trade(seq, timestamp, f));
+        }
+    }
 
     // Get-or-create the order book for a given item
     public OrderBook bookFor(String itemId) {
