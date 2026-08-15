@@ -104,6 +104,23 @@ public class MarketState {
         return markets.computeIfAbsent(itemId, k -> new OrderBook());
     }
 
+    /**
+     * The order book for an item, or null if it has never had one.
+     *
+     * For readers. {@link #bookFor} creates on read, which is correct when an order is
+     * about to be placed and wrong everywhere else — a UI listing every item a player
+     * holds would quietly fill the map with empty books for items nobody has ever
+     * traded, and anything iterating {@link #activeItems()} afterwards would see them.
+     */
+    public OrderBook peekBook(String itemId) {
+        return markets.get(itemId);
+    }
+
+    /** Whether this item has a book at all, without creating one. */
+    public boolean hasBook(String itemId) {
+        return markets.containsKey(itemId);
+    }
+
     //item balance section
     ///////////////////////
     private final ItemBalanceRegistry itemBalances = new ItemBalanceRegistry();

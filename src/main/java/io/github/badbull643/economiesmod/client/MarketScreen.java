@@ -10,12 +10,15 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.text.LiteralText;
+import net.minecraft.text.OrderedText;
 import net.minecraft.util.WorldSavePath;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,7 +35,6 @@ public class MarketScreen extends Screen {
     private ButtonWidget createButton;
     private ButtonWidget importButton;
     private ButtonWidget migrateButton;
-    private boolean migrateArmed = false;
 
     /** Set from the game thread by button handlers, and from the network thread
      *  by callbacks — hence volatile. */
@@ -71,8 +73,6 @@ public class MarketScreen extends Screen {
     private static final int ROW_WIDTH = PRICE_X_OFF + PRICE_W;       // 280
     private static final long MAX_QTY = 100_000L;
 
-    private boolean resetArmed = false;
-    private boolean hostArmed = false;
     // Row positions, set in init() so render and hit-tests can't drift.
     private int rowX;
     private int rowY;
@@ -108,8 +108,6 @@ public class MarketScreen extends Screen {
         return s == null ? "" : s.lastMarketName();
     }
 
-    private boolean createArmed = false;
-    private boolean importArmed = false;
 
     public MarketScreen() {
         super(new LiteralText("Market"));
@@ -242,49 +240,50 @@ public class MarketScreen extends Screen {
         if (mc.player == null) return;
         UUID me = MinecraftIds.userIdOf(mc.player);
 
-        if (!resetArmed) {
-            resetArmed = true;
-            status = "DISCARD everything? You would lose: "
-                    + MarketStateHolder.describeLoss(me) + " — click again";
-            return;
-        }
-        resetArmed = false;
-        MarketStateHolder.resetLog();
-        status = "Local history discarded";
+        showDanger("Discard this world's market?",
+                "You would lose " + MarketStateHolder.describeLoss(me) + "."
+                        + " This cannot be undone. If you are rejoining a market you"
+                        + " diverged from, everything you did before the split is in"
+                        + " their copy too and comes back when you reconnect.",
+                "Discard", () -> {
+                    MarketStateHolder.resetLog();
+                    status = "Local history discarded";
+                });
     }
 
     // ─────────── connection ───────────
 
     private static long lastConnectAttempt = 0;
 
-    private void onConnect() {
-        long now = System.currentTimeMillis();
-        if (now - lastConnectAttempt < 3000) {
-            status = "Wait a moment before retrying";
-            return;
+    /** A parsed host address, or a reason it couldn't be. */
+    private static final class Address {
+        final String host;
+        final int port;
+        final String error;
+
+        private Address(String host, int port, String error) {
+            this.host = host; this.port = port; this.error = error;
         }
-        lastConnectAttempt = now;
+    }
 
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null) return;
-
-        String text = hostField.getText().trim();
+    /**
+     * Splits "host", "host:port", "[ipv6]", "[ipv6]:port" or a bare IPv6 address.
+     *
+     * Shared by Connect and Migrate. Migrate used to do its own naive split on the last
+     * colon, which silently mangled every IPv6 address — the two must agree, since they
+     * read the same field and the user cannot see which one is parsing it.
+     */
+    private static Address parseAddress(String text) {
         String host;
         int port = 25555;
-
         try {
             if (text.startsWith("[")) {
                 // IPv6 in brackets: [2001:db8::1] or [2001:db8::1]:25555
                 int close = text.indexOf(']');
-                if (close < 0) {
-                    status = "Bad address — missing closing bracket";
-                    return;
-                }
+                if (close < 0) return new Address(null, 0, "Bad address — missing closing bracket");
                 host = text.substring(1, close);
                 String rest = text.substring(close + 1);
-                if (rest.startsWith(":")) {
-                    port = Integer.parseInt(rest.substring(1));
-                }
+                if (rest.startsWith(":")) port = Integer.parseInt(rest.substring(1));
             } else if (text.indexOf(':') != text.lastIndexOf(':')) {
                 // More than one colon and no brackets — a bare IPv6 address.
                 host = text;
@@ -298,9 +297,29 @@ public class MarketScreen extends Screen {
                 }
             }
         } catch (NumberFormatException e) {
-            status = "Bad port — use host:port or [ipv6]:port";
+            return new Address(null, 0, "Bad port — use host:port or [ipv6]:port");
+        }
+        return new Address(host, port, null);
+    }
+
+    private void onConnect() {
+        long now = System.currentTimeMillis();
+        if (now - lastConnectAttempt < 3000) {
+            status = "Wait a moment before retrying";
             return;
         }
+        lastConnectAttempt = now;
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return;
+
+        Address parsed = parseAddress(hostField.getText().trim());
+        if (parsed.error != null) {
+            status = parsed.error;
+            return;
+        }
+        final String host = parsed.host;
+        final int port = parsed.port;
 
         // in onConnect, before spawning the thread
         try {
@@ -331,37 +350,35 @@ public class MarketScreen extends Screen {
     }
 
     /**
-     * Creates a new market. Two-click confirm, because the cost of doing this by
-     * mistake is not recoverable: a market created here shares no history with any
-     * market your friends are already using, and the two can never be merged.
+     * Creates a new market. Confirmed, because the cost of doing this by mistake is not
+     * recoverable: a market created here shares no history with any market your friends
+     * are already using, and the two can never be merged.
      */
     private void onCreateMarket() {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.getServer() == null) return;
 
-        String name = marketNameField.getText().trim();
+        final String name = marketNameField.getText().trim();
         if (name.isEmpty()) {
             status = "Give the market a name first";
             return;
         }
 
-        if (!createArmed) {
-            createArmed = true;
-            status = "This creates a SEPARATE market — anyone who joins it won't see "
-                    + "trades from any market your friends already use. To join theirs "
-                    + "instead, use Connect. Click again to create '" + name + "'";
-            return;
-        }
-        createArmed = false;
+        final Path worldDir = mc.getServer().getSavePath(WorldSavePath.ROOT);
+        final UUID me = MinecraftIds.userIdOf(mc.player);
 
-        Settings s = settings();
-        if (s != null) s.setLastMarketName(name);
-        Path worldDir = mc.getServer().getSavePath(WorldSavePath.ROOT);
-        UUID me = MinecraftIds.userIdOf(mc.player);
-
-        if (MarketStateHolder.createMarket(worldDir, me, name)) {
-            status = "Created '" + name + "' — click Host to start serving it";
-        }
+        showConfirm("Create '" + name + "'?",
+                "This starts a SEPARATE economy. Anyone who joins it will not see trades"
+                        + " from any market your friends already use, and the two can"
+                        + " never be merged afterwards. To join an existing one instead,"
+                        + " use Connect.",
+                "Create", () -> {
+                    Settings s = settings();
+                    if (s != null) s.setLastMarketName(name);
+                    if (MarketStateHolder.createMarket(worldDir, me, name)) {
+                        status = "Created '" + name + "' — click Host to start serving it";
+                    }
+                });
     }
 
     /** Host and Create are mutually exclusive: you either hold a market or you don't. */
@@ -384,17 +401,18 @@ public class MarketScreen extends Screen {
     }
 
     /**
-     * Two-click, like Create — importing replaces what this world holds, and the
+     * Confirmed, like Create — importing replaces what this world holds, and the
      * verification pass reads and checks every event, so it isn't instant.
      */
     private void onImport() {
-        if (!importArmed) {
-            importArmed = true;
-            status = "Import adopts someone else's market as this world's — click again";
-            return;
-        }
-        importArmed = false;
+        showConfirm("Import a market from file?",
+                "This world will adopt the market in your economiesmod-imports folder"
+                        + " as its own. Every event in it is verified before anything is"
+                        + " written, so a tampered file is refused rather than trusted.",
+                "Import", this::startImport);
+    }
 
+    private void startImport() {
         status = "Verifying archive...";
         new Thread(() -> {
             try {
@@ -410,9 +428,6 @@ public class MarketScreen extends Screen {
     private static long lastHostAttempt = 0;
 
     private void onHost() {
-
-
-        // Warn only about a genuine collision — someone else already serving the same
         // Behind the market — Raft's election restriction, with the high-water mark
         // standing in for a quorum. Serving a log that is short of where the market has
         // reached refuses everyone who is current, and forks it outright the moment
@@ -420,21 +435,22 @@ public class MarketScreen extends Screen {
         // whether or not anyone else is hosting right now, which is the case that
         // actually bites: you come back after a week and nobody is around to tell you.
         long behind = MarketStateHolder.eventsBehind();
-        if (!hostArmed && behind > 0) {
-            hostArmed = true;
-            status = "Your copy is " + behind + " events behind this market. Hosting now"
-                    + " would refuse everyone who is up to date, and split the market if"
-                    + " you trade — connect to someone first, or click Host again to"
-                    + " serve it anyway";
+        if (behind > 0) {
+            showDanger("You are " + behind + " events behind",
+                    "Hosting now would refuse everyone who is up to date, and split the"
+                            + " market the moment you trade. Connect to someone serving it"
+                            + " first and you will catch up automatically.",
+                    "Host anyway", this::startHosting);
             return;
         }
 
+        // Warn only about a genuine collision — someone else already serving the same
         // market. Another host on a different market is not our problem, and warning
         // about it trains people to click through the warning that matters.
-        // Only if we actually know what's out there. A warning derived from a minute-old
-        // poll is worse than none: it names a host that may have stopped since, and
-        // teaches people to click through the confirm without reading it.
-        if (!hostArmed && pollIsFresh()) {
+        // Only if we actually know what's out there: a warning derived from a minute-old
+        // poll names a host that may have stopped since, which teaches people to click
+        // through without reading.
+        if (pollIsFresh()) {
             MinecraftClient mcCheck = MinecraftClient.getInstance();
             String myUuid = mcCheck.player != null
                     ? MinecraftIds.userIdOf(mcCheck.player).toString() : null;
@@ -446,17 +462,21 @@ public class MarketScreen extends Screen {
                 boolean isOther = h.reply.userId != null && !h.reply.userId.equals(myUuid);
                 boolean sameMarket = myMarket != null && myMarket.equals(h.reply.marketId);
                 if (isOther && sameMarket) {
-                    hostArmed = true;
-                    status = h.reply.hostName + " is already hosting this market ("
-                            + h.reply.lastSeq + " events). Two hosts at once will split "
-                            + "it — connect to them instead, or click Host again to "
-                            + "take over anyway";
+                    showDanger(h.reply.hostName + " is already hosting this",
+                            h.reply.hostName + " is serving this market right now ("
+                                    + h.reply.lastSeq + " events). Two hosts at once will"
+                                    + " split it into two economies that cannot be"
+                                    + " merged. Connect to them instead.",
+                            "Take over", this::startHosting);
                     return;
                 }
             }
         }
-        hostArmed = false;
 
+        startHosting();
+    }
+
+    private void startHosting() {
         long now = System.currentTimeMillis();
         if (now - lastHostAttempt < 3000) {
             status = "Wait a moment before retrying";
@@ -507,32 +527,31 @@ public class MarketScreen extends Screen {
         }
 
         UUID me = MinecraftIds.userIdOf(mc.player);
-        if (!migrateArmed) {
-            migrateArmed = true;
-            status = "Migrate '" + mine.marketName() + "' to that host? It will credit "
-                    + MarketStateHolder.describeLoss(me) + " there, then this market is"
-                    + " discarded — click again to confirm";
-            return;
-        }
-        migrateArmed = false;
 
-        String text = hostField.getText().trim();
-        final String host;
-        final int port;
-        try {
-            int colon = text.lastIndexOf(':');
-            host = colon < 0 ? text : text.substring(0, colon);
-            port = colon < 0 ? 25555 : Integer.parseInt(text.substring(colon + 1));
-        } catch (NumberFormatException e) {
-            status = "Bad port — use host:port";
+        Address parsed = parseAddress(hostField.getText().trim());
+        if (parsed.error != null) {
+            status = parsed.error;
             return;
         }
+        final String host = parsed.host;
+        final int port = parsed.port;
 
         Path worldDir = mc.getServer() != null
                 ? mc.getServer().getSavePath(WorldSavePath.ROOT) : null;
         if (worldDir == null) return;
         String myName = mc.getSession().getUsername();
 
+        showDanger("Migrate to " + host + ":" + port + "?",
+                "Your position in '" + mine.marketName() + "' — "
+                        + MarketStateHolder.describeLoss(me) + " — is verified by that"
+                        + " host and credited to you there. This market is then"
+                        + " discarded. Only use this for a market with no history in"
+                        + " common with theirs; if you have diverged from the same"
+                        + " market, Reset is what you want instead.",
+                "Migrate", () -> startMigration(host, port, me, myName));
+    }
+
+    private void startMigration(String host, int port, UUID me, String myName) {
         status = "Verifying your market with " + host + "...";
         new Thread(() -> {
             if (!MarketStateHolder.migrateTo(host, port, me)) return;   // reports its own reason
@@ -761,6 +780,11 @@ public class MarketScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // An overlay is modal — nothing behind it is reachable until it's answered.
+        if (!overlays.isEmpty()) {
+            return button == 0 ? overlayClicked(mouseX, mouseY) : true;
+        }
+
         // Any click acknowledges the recovery note — it describes something already
         // done, so it does not need to keep occupying a line.
         recoveryNote = "";
@@ -788,7 +812,14 @@ public class MarketScreen extends Screen {
                 }
                 y += DISCOVERY_ROW_HEIGHT;
             }
-            return true;   // swallow stray clicks in this region
+
+            // Swallow only clicks that actually landed on the list. This used to
+            // return unconditionally, which meant that while any orders were waiting
+            // to be re-placed — i.e. immediately after every migration — no button or
+            // text field anywhere on the screen could be clicked at all.
+            if (mouseX >= x && mouseX <= x + 300 && mouseY >= headerY && mouseY < y) {
+                return true;
+            }
         }
 
         if (button == 0 && !polling) {
@@ -1095,6 +1126,10 @@ public class MarketScreen extends Screen {
         this.marketNameField.render(matrices, mouseX, mouseY, delta);
 
         super.render(matrices, mouseX, mouseY, delta);
+
+        // Last, so it sits above the buttons super.render just drew.
+        Overlay overlay = overlays.peekFirst();
+        if (overlay != null) renderOverlay(matrices, overlay, mouseX, mouseY);
     }
 
     private void renderConnectionStatus(MatrixStack matrices, int x, int y) {
@@ -1176,6 +1211,172 @@ public class MarketScreen extends Screen {
         drawTextWithShadow(m, this.textRenderer, new LiteralText(s), x, y, colour);
     }
 
+    // ─────────── overlays ───────────
+
+    /**
+     * A message that has to be dealt with before anything else.
+     *
+     * Replaces the "click the button again to confirm" flags this screen used to
+     * carry. Those had to be disarmed by hand on close, could not say what they were
+     * asking without hijacking the status line, and left the question visible for
+     * exactly as long as nothing else wrote a status — which on a busy market was not
+     * long. A modal asks once, blocks until answered, and cannot be half-armed.
+     *
+     * Deliberately NOT a separate Screen: opening one calls removed() on this screen
+     * and re-runs init() on the way back, which would clear the amount, price and
+     * order-id fields and re-fire a discovery poll every time anyone confirmed
+     * anything.
+     */
+    private static final class Overlay {
+        static final int NOTICE = 0;
+        static final int CONFIRM = 1;
+        static final int DANGER = 2;
+
+        final int kind;
+        final String title;
+        final String body;
+        final String confirmLabel;
+        final Runnable onConfirm;
+        final long shownAt = System.currentTimeMillis();
+
+        Overlay(int kind, String title, String body, String confirmLabel, Runnable onConfirm) {
+            this.kind = kind;
+            this.title = title;
+            this.body = body;
+            this.confirmLabel = confirmLabel;
+            this.onConfirm = onConfirm;
+        }
+
+        /** Destructive answers ignore clicks for a moment, so a double-click aimed at
+         *  the button underneath cannot carry through into confirming. */
+        boolean armed() {
+            return kind != DANGER || System.currentTimeMillis() - shownAt > 400;
+        }
+    }
+
+    /** Queued rather than replaced: a second warning must not erase the first unread one. */
+    private final Deque<Overlay> overlays = new ArrayDeque<>();
+
+    private void showNotice(String title, String body) {
+        overlays.addLast(new Overlay(Overlay.NOTICE, title, body, "OK", null));
+    }
+
+    private void showConfirm(String title, String body, String confirmLabel, Runnable action) {
+        overlays.addLast(new Overlay(Overlay.CONFIRM, title, body, confirmLabel, action));
+    }
+
+    private void showDanger(String title, String body, String confirmLabel, Runnable action) {
+        overlays.addLast(new Overlay(Overlay.DANGER, title, body, confirmLabel, action));
+    }
+
+    private static final int OVERLAY_W = 300;
+    private static final int OVERLAY_PAD = 10;
+    private static final int OVERLAY_BTN_H = 20;
+    private static final int OVERLAY_BTN_W = 90;
+
+    private List<OrderedText> overlayLines(Overlay o) {
+        return this.textRenderer.wrapLines(new LiteralText(o.body), OVERLAY_W - OVERLAY_PAD * 2);
+    }
+
+    /**
+     * Geometry for the current overlay: {left, top, width, height}.
+     *
+     * A pure function of the window and the message, so render and hit-testing derive
+     * the same rectangles from the same inputs rather than one trusting coordinates
+     * the other happened to leave in a field.
+     */
+    private int[] overlayBox(Overlay o) {
+        int lines = overlayLines(o).size();
+        int h = OVERLAY_PAD + 12                       // title
+                + lines * 10 + OVERLAY_PAD             // body
+                + OVERLAY_BTN_H + OVERLAY_PAD;         // buttons
+        int left = (this.width - OVERLAY_W) / 2;
+        int top = Math.max(20, (this.height - h) / 2);
+        return new int[]{left, top, OVERLAY_W, h};
+    }
+
+    /** {x, y, w, h} of the confirm button, or null when the overlay only says "OK". */
+    private int[] overlayConfirmRect(Overlay o) {
+        if (o.onConfirm == null) return null;
+        int[] box = overlayBox(o);
+        return new int[]{box[0] + OVERLAY_PAD, box[1] + box[3] - OVERLAY_PAD - OVERLAY_BTN_H,
+                OVERLAY_BTN_W, OVERLAY_BTN_H};
+    }
+
+    /** {x, y, w, h} of the dismiss button — "Cancel", or "OK" when there is nothing to confirm. */
+    private int[] overlayDismissRect(Overlay o) {
+        int[] box = overlayBox(o);
+        return new int[]{box[0] + box[2] - OVERLAY_PAD - OVERLAY_BTN_W,
+                box[1] + box[3] - OVERLAY_PAD - OVERLAY_BTN_H,
+                OVERLAY_BTN_W, OVERLAY_BTN_H};
+    }
+
+    private static boolean within(double mx, double my, int[] r) {
+        return r != null && mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3];
+    }
+
+    private void renderOverlay(MatrixStack m, Overlay o, int mouseX, int mouseY) {
+        // Dim everything behind it, so it reads as blocking rather than as another
+        // widget competing for attention with the rest of the screen.
+        fill(m, 0, 0, this.width, this.height, 0xC0101010);
+
+        int[] box = overlayBox(o);
+        int accent = o.kind == Overlay.DANGER ? 0xFFFF6655
+                : o.kind == Overlay.CONFIRM ? 0xFFFFCC66 : 0xFF88CCFF;
+
+        fill(m, box[0] - 1, box[1] - 1, box[0] + box[2] + 1, box[1] + box[3] + 1, accent);
+        fill(m, box[0], box[1], box[0] + box[2], box[1] + box[3], 0xFF202020);
+
+        int y = box[1] + OVERLAY_PAD;
+        label(m, o.title, box[0] + OVERLAY_PAD, y, accent);
+        y += 14;
+
+        for (OrderedText line : overlayLines(o)) {
+            this.textRenderer.drawWithShadow(m, line, box[0] + OVERLAY_PAD, y, 0xFFDDDDDD);
+            y += 10;
+        }
+
+        int[] confirm = overlayConfirmRect(o);
+        if (confirm != null) {
+            boolean armed = o.armed();
+            boolean hot = armed && within(mouseX, mouseY, confirm);
+            fill(m, confirm[0], confirm[1], confirm[0] + confirm[2], confirm[1] + confirm[3],
+                    armed ? (hot ? 0xFF505050 : 0xFF383838) : 0xFF262626);
+            drawCenteredText(m, this.textRenderer, new LiteralText(o.confirmLabel),
+                    confirm[0] + confirm[2] / 2, confirm[1] + 6,
+                    armed ? accent : 0xFF707070);
+        }
+
+        int[] dismiss = overlayDismissRect(o);
+        boolean dismissHot = within(mouseX, mouseY, dismiss);
+        fill(m, dismiss[0], dismiss[1], dismiss[0] + dismiss[2], dismiss[1] + dismiss[3],
+                dismissHot ? 0xFF505050 : 0xFF383838);
+        drawCenteredText(m, this.textRenderer,
+                new LiteralText(o.onConfirm == null ? "OK" : "Cancel"),
+                dismiss[0] + dismiss[2] / 2, dismiss[1] + 6, 0xFFDDDDDD);
+    }
+
+    /** Returns true if the click was the overlay's, which is any click at all while one is up. */
+    private boolean overlayClicked(double mouseX, double mouseY) {
+        Overlay o = overlays.peekFirst();
+        if (o == null) return false;
+
+        if (within(mouseX, mouseY, overlayDismissRect(o))) {
+            overlays.pollFirst();
+            return true;
+        }
+        int[] confirm = overlayConfirmRect(o);
+        if (confirm != null && o.armed() && within(mouseX, mouseY, confirm)) {
+            overlays.pollFirst();
+            if (o.onConfirm != null) o.onConfirm.run();
+            return true;
+        }
+        // Swallow everything else. Scoped to "an overlay is open" rather than leaking
+        // out to the whole screen, which is how the re-place list used to disable
+        // every button on it.
+        return true;
+    }
+
     private static class OrderRequest {
         Item item;
         String itemId;
@@ -1190,11 +1391,9 @@ public class MarketScreen extends Screen {
         // armed means the next single click on that button acts immediately, with the
         // "click again to confirm" prompt having scrolled away in a previous session —
         // and three of the five guard something irreversible.
-        resetArmed = false;
-        hostArmed = false;
-        createArmed = false;
-        importArmed = false;
-        migrateArmed = false;
+        // Nothing to disarm any more — confirmations are modal and answered in place,
+        // so none of them can survive a screen close half-armed.
+        overlays.clear();
 
         // Persisted rather than parked in statics, so these survive quitting the game
         // and not merely closing the screen. The market name is saved when a market is
@@ -1215,13 +1414,18 @@ public class MarketScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // Escape answers the overlay rather than closing the screen out from under it.
+        if (!overlays.isEmpty()) {
+            if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
+                overlays.pollFirst();
+            }
+            return true;
+        }
+
+        // Derived from focus rather than a list of fields: the old enumeration left out
+        // marketNameField, so typing "m" into it closed the screen.
         if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_M
-                && !amountField.isFocused()
-                && !itemField.isFocused()
-                && !priceField.isFocused()
-                && !hostField.isFocused()
-                && !hostPortField.isFocused()
-                && !cancelField.isFocused()) {
+                && !(this.getFocused() instanceof TextFieldWidget)) {
             this.onClose();
             return true;
         }
