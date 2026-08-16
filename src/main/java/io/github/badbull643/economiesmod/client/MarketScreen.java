@@ -68,12 +68,6 @@ public class MarketScreen extends Screen {
     }
 
     private static final int FIELD_HEIGHT = 20;
-    private static final int AMOUNT_W = 50;
-    private static final int ITEM_W = 160;
-    private static final int PRICE_W = 50;
-    private static final int ITEM_X_OFF = AMOUNT_W + 10;              // 60
-    private static final int PRICE_X_OFF = ITEM_X_OFF + ITEM_W + 10;  // 230
-    private static final int ROW_WIDTH = PRICE_X_OFF + PRICE_W;       // 280
     private static final long MAX_QTY = 100_000L;
 
     /** Left column, for whichever list the current tab shows. */
@@ -89,7 +83,6 @@ public class MarketScreen extends Screen {
     private int rowY;
     private int buttonsY;
     private int cancelY;
-    private int connY;
 
     /** Left column, where the lists live. */
     private int listX;
@@ -105,36 +98,42 @@ public class MarketScreen extends Screen {
     // hidden per tab rather than rebuilt, because ClickableWidget skips both rendering
     // and hit-testing when invisible, and rebuilding would clear what's typed.
 
-    private static final int TAB_TRADE = 0;
-    private static final int TAB_NETWORK = 1;
-    private static final int TAB_MARKET = 2;
-    private static final String[] TAB_NAMES = {"Trade", "Network", "Market"};
+    static final int SCREEN_HOME = 0;
+    static final int SCREEN_TRADING = 1;
+    static final int SCREEN_NETWORK = 2;
+    static final int SCREEN_MARKET = 3;
+    static final int SCREEN_SETTINGS = 4;
+    private static final String[] SCREEN_NAMES =
+            {"Home", "Trading", "Network", "Market", "Settings"};
 
-    /** Static so the tab you were on survives closing and reopening the screen. */
-    private static int activeTab = TAB_TRADE;
+    /** Static so the screen you were on survives closing and reopening. */
+    private static int activeScreen = SCREEN_HOME;
 
-    private final List<ClickableWidget> tradeWidgets = new ArrayList<>();
-    private final List<ClickableWidget> networkWidgets = new ArrayList<>();
-    private final List<ClickableWidget> marketWidgets = new ArrayList<>();
-    private final List<ButtonWidget> tabButtons = new ArrayList<>();
+    /** One widget list per destination, indexed by the SCREEN_ constants. */
+    private final List<List<ClickableWidget>> screenWidgets = new ArrayList<>();
 
-    private <T extends ClickableWidget> T onTab(List<ClickableWidget> tab, T widget) {
-        tab.add(widget);
+    /**
+     * Whether the nav panel is showing.
+     *
+     * Instance, not static: a menu left open is not a place you were, it is a gesture
+     * half-finished, and it should not be waiting for you next time you open the screen.
+     */
+    private boolean navOpen = false;
+
+    private <T extends ClickableWidget> T onScreen(int screen, T widget) {
+        screenWidgets.get(screen).add(widget);
         return this.addButton(widget);
     }
 
-    private void selectTab(int tab) {
-        activeTab = tab;
-        applyTabVisibility();
+    private void selectScreen(int screen) {
+        activeScreen = screen;
+        navOpen = false;
+        applyScreenVisibility();
     }
 
-    private void applyTabVisibility() {
-        setShown(tradeWidgets, activeTab == TAB_TRADE);
-        setShown(networkWidgets, activeTab == TAB_NETWORK);
-        setShown(marketWidgets, activeTab == TAB_MARKET);
-        for (int i = 0; i < tabButtons.size(); i++) {
-            // The current tab's own button is the one thing that shouldn't be clickable.
-            tabButtons.get(i).active = (i != activeTab);
+    private void applyScreenVisibility() {
+        for (int i = 0; i < screenWidgets.size(); i++) {
+            setShown(screenWidgets.get(i), i == activeScreen);
         }
     }
 
@@ -143,6 +142,27 @@ public class MarketScreen extends Screen {
             w.visible = shown;
             w.active = shown;
         }
+    }
+
+    // ─── nav panel geometry ───
+    //
+    // Drawn and hit-tested by hand rather than built from ButtonWidgets, because it has
+    // to sit above whatever screen is beneath it. Widgets are drawn by super.render at
+    // one fixed point in the pipeline, so a widget-based menu would end up underneath
+    // the content it is supposed to cover.
+
+    private static final int NAV_W = 96;
+    private static final int NAV_ROW_H = 16;
+    private static final int BURGER_SIZE = 14;
+
+    private int[] burgerRect() {
+        return new int[]{this.width - BURGER_SIZE - 8, 6, BURGER_SIZE, BURGER_SIZE};
+    }
+
+    private int[] navRowRect(int index) {
+        int[] burger = burgerRect();
+        int top = burger[1] + burger[3] + 4;
+        return new int[]{this.width - NAV_W - 8, top + index * NAV_ROW_H, NAV_W, NAV_ROW_H};
     }
 
     /**
@@ -184,10 +204,10 @@ public class MarketScreen extends Screen {
 
         MarketStateHolder.setOnRejected(reason -> status = "Rejected: " + reason);
 
-        tradeWidgets.clear();
-        networkWidgets.clear();
-        marketWidgets.clear();
-        tabButtons.clear();
+        screenWidgets.clear();
+        for (int i = 0; i < SCREEN_NAMES.length; i++) {
+            screenWidgets.add(new ArrayList<>());
+        }
 
         // A fixed box, centred and clamped, instead of origins derived from the window
         // size. The percentages this used to use put the bottom row off-screen at GUI
@@ -201,48 +221,37 @@ public class MarketScreen extends Screen {
         this.rowY = boxY + 22;
         this.buttonsY = rowY + ROW_STEP;
         this.cancelY = rowY + ROW_STEP * 2;
-        this.connY = rowY;
 
-        // ─── tab bar ───
-        int tabW = 62;
-        for (int i = 0; i < TAB_NAMES.length; i++) {
-            final int index = i;
-            ButtonWidget tab = new ButtonWidget(boxX + i * (tabW + 2), boxY - 4, tabW,
-                    FIELD_HEIGHT, new LiteralText(TAB_NAMES[i]), b -> selectTab(index));
-            tabButtons.add(tab);
-            this.addButton(tab);
-        }
-
-        // ─── TRADE ───
+        // ─── TRADING ───
         this.amountField = new TextFieldWidget(this.textRenderer,
                 rowX, rowY, 45, FIELD_HEIGHT, new LiteralText("Amount"));
         this.amountField.setSuggestion("qty");
-        onTab(tradeWidgets, this.amountField);
+        onScreen(SCREEN_TRADING, this.amountField);
 
         this.itemField = new TextFieldWidget(this.textRenderer,
                 rowX + 50, rowY, 130, FIELD_HEIGHT, new LiteralText("Item"));
         this.itemField.setMaxLength(64);
         this.itemField.setText(savedItem());
-        onTab(tradeWidgets, this.itemField);
+        onScreen(SCREEN_TRADING, this.itemField);
 
         this.priceField = new TextFieldWidget(this.textRenderer,
                 rowX + 185, rowY, 45, FIELD_HEIGHT, new LiteralText("Price"));
         this.priceField.setSuggestion("price");
-        onTab(tradeWidgets, this.priceField);
+        onScreen(SCREEN_TRADING, this.priceField);
 
-        onTab(tradeWidgets, new ButtonWidget(rowX, buttonsY, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, buttonsY, 110, FIELD_HEIGHT,
                 new LiteralText("Buy"), b -> onBuy()));
-        onTab(tradeWidgets, new ButtonWidget(rowX + 120, buttonsY, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + 120, buttonsY, 110, FIELD_HEIGHT,
                 new LiteralText("Sell"), b -> onSell()));
 
-        onTab(tradeWidgets, new ButtonWidget(rowX, cancelY, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, cancelY, 110, FIELD_HEIGHT,
                 new LiteralText("Withdraw"), b -> onWithdraw()));
 
         this.cancelField = new TextFieldWidget(this.textRenderer,
                 rowX + 120, cancelY, 45, FIELD_HEIGHT, new LiteralText("Order ID"));
         this.cancelField.setSuggestion("id");
-        onTab(tradeWidgets, this.cancelField);
-        onTab(tradeWidgets, new ButtonWidget(rowX + 170, cancelY, 60, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, this.cancelField);
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + 170, cancelY, 60, FIELD_HEIGHT,
                 new LiteralText("Cancel"), b -> onCancel()));
 
         // ─── NETWORK ───
@@ -250,14 +259,14 @@ public class MarketScreen extends Screen {
                 rowX, rowY, 175, FIELD_HEIGHT, new LiteralText("Host"));
         this.hostField.setMaxLength(64);
         this.hostField.setText(savedHost());
-        onTab(networkWidgets, this.hostField);
+        onScreen(SCREEN_NETWORK, this.hostField);
 
         this.hostPortField = new TextFieldWidget(this.textRenderer,
                 rowX + 185, rowY, 45, FIELD_HEIGHT, new LiteralText("Port"));
         this.hostPortField.setText(savedPort());
-        onTab(networkWidgets, this.hostPortField);
+        onScreen(SCREEN_NETWORK, this.hostPortField);
 
-        onTab(networkWidgets, new ButtonWidget(rowX, rowY + ROW_STEP, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP, 110, FIELD_HEIGHT,
                 new LiteralText("Connect"), b -> onConnect()));
 
         // Host serves the market this world already holds. With no market there is
@@ -266,14 +275,14 @@ public class MarketScreen extends Screen {
         // permanently incompatible economies.
         this.hostButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP, 110, FIELD_HEIGHT,
                 new LiteralText("Host"), b -> onHost());
-        onTab(networkWidgets, this.hostButton);
+        onScreen(SCREEN_NETWORK, this.hostButton);
 
-        onTab(networkWidgets, new ButtonWidget(rowX, rowY + ROW_STEP * 2, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 2, 110, FIELD_HEIGHT,
                 new LiteralText("Disconnect"), b -> onDisconnect()));
-        onTab(networkWidgets, new ButtonWidget(rowX + 120, rowY + ROW_STEP * 2, 110,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX + 120, rowY + ROW_STEP * 2, 110,
                 FIELD_HEIGHT, new LiteralText("Stop hosting"), b -> onStopHosting()));
 
-        onTab(networkWidgets, new ButtonWidget(rowX, rowY + ROW_STEP * 3, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 3, 110, FIELD_HEIGHT,
                 new LiteralText("Refresh hosts"), b -> startPoll()));
 
         // ─── MARKET ───
@@ -282,29 +291,29 @@ public class MarketScreen extends Screen {
         this.marketNameField.setMaxLength(32);
         this.marketNameField.setText(savedMarketName());
         this.marketNameField.setSuggestion("new market name");
-        onTab(marketWidgets, this.marketNameField);
+        onScreen(SCREEN_MARKET, this.marketNameField);
 
         this.createButton = new ButtonWidget(rowX, rowY + ROW_STEP, 110, FIELD_HEIGHT,
                 new LiteralText("Create market"), b -> onCreateMarket());
-        onTab(marketWidgets, this.createButton);
+        onScreen(SCREEN_MARKET, this.createButton);
 
         // Sharing a market by file is how someone joins who was never online at the
         // same time as anyone holding it.
         this.importButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP, 110, FIELD_HEIGHT,
                 new LiteralText("Import from file"), b -> onImport());
-        onTab(marketWidgets, this.importButton);
+        onScreen(SCREEN_MARKET, this.importButton);
 
-        onTab(marketWidgets, new ButtonWidget(rowX, rowY + ROW_STEP * 2, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_MARKET, new ButtonWidget(rowX, rowY + ROW_STEP * 2, 110, FIELD_HEIGHT,
                 new LiteralText("Export to file"), b -> onExport()));
 
         this.migrateButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP * 2, 110,
                 FIELD_HEIGHT, new LiteralText("Migrate to host"), b -> onMigrate());
-        onTab(marketWidgets, this.migrateButton);
+        onScreen(SCREEN_MARKET, this.migrateButton);
 
-        onTab(marketWidgets, new ButtonWidget(rowX, rowY + ROW_STEP * 3, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_MARKET, new ButtonWidget(rowX, rowY + ROW_STEP * 3, 110, FIELD_HEIGHT,
                 new LiteralText("Reset log"), b -> onReset()));
 
-        applyTabVisibility();
+        applyScreenVisibility();
         startPoll();
     }
 
@@ -736,7 +745,77 @@ public class MarketScreen extends Screen {
         return rowY + ROW_STEP * 4 + 6;
     }
 
-    /** What this world holds, on the Market tab's left column. */
+    // ─────────── home ───────────
+
+    /**
+     * The dashboard.
+     *
+     * Hosts is live because discovery already polls for it; the other three are drawn
+     * as empty panels rather than left out, so the layout is real and adding a panel
+     * later is filling one in rather than finding room for it.
+     */
+    private void renderHome(MatrixStack m) {
+        int top = rowY - 4;
+        int bottom = top + CONTENT_H - 10;
+        int gap = 6;
+        int leftW = LIST_W;
+        int midX = listX + leftW + gap;
+        int midW = 130;
+        int rightX = midX + midW + gap;
+        int rightW = Math.max(60, (listX + CONTENT_W) - rightX);
+        int half = (bottom - top - gap) / 2;
+
+        panel(m, listX, top, leftW, bottom - top, "Notice board");
+        panel(m, midX, top, midW, half, "Hosts");
+        renderHostsPanel(m, midX + 4, top + 14, midW - 8, half - 18);
+        panel(m, midX, top + half + gap, midW, half, "Widget");
+        panel(m, rightX, top, rightW, half, "Most traded");
+        panel(m, rightX, top + half + gap, rightW, half, "Widget");
+    }
+
+    /** A titled empty box. The border makes the layout legible before the content exists. */
+    private void panel(MatrixStack m, int x, int y, int w, int h, String title) {
+        fill(m, x, y, x + w, y + h, 0x40000000);
+        fill(m, x, y, x + w, y + 1, 0xFF404040);
+        fill(m, x, y + h - 1, x + w, y + h, 0xFF404040);
+        fill(m, x, y, x + 1, y + h, 0xFF404040);
+        fill(m, x + w - 1, y, x + w, y + h, 0xFF404040);
+        label(m, title, x + 4, y + 4, 0xFFDD66);
+    }
+
+    private void renderHostsPanel(MatrixStack m, int x, int y, int w, int h) {
+        if (polling && discovered.isEmpty()) {
+            label(m, "searching...", x, y, 0x808080);
+            return;
+        }
+        if (discovered.isEmpty()) {
+            label(m, "nobody hosting", x, y, 0x808080);
+            return;
+        }
+        int row = y;
+        for (PeerPoll.HostInfo host : discovered) {
+            if (row + 10 > y + h) break;
+            String name = host.reply.hostName == null ? "?" : host.reply.hostName;
+            label(m, name, x, row, 0x88CCFF);
+            row += 10;
+            if (row + 10 > y + h) break;
+            label(m, "  " + host.reply.lastSeq + " events, "
+                    + host.reply.clientCount + " online", x, row, 0x808080);
+            row += 12;
+        }
+    }
+
+    private void renderSettingsPlaceholder(MatrixStack m) {
+        panel(m, listX, rowY - 4, CONTENT_W, CONTENT_H - 10, "Settings");
+        label(m, "Port and notification options will live here.",
+                listX + 8, rowY + 14, 0x808080);
+        label(m, "They are already saved between sessions —",
+                listX + 8, rowY + 26, 0x808080);
+        label(m, "this screen just hasn't been built yet.",
+                listX + 8, rowY + 38, 0x808080);
+    }
+
+    /** What this world holds, on the Market screen's left column. */
     private void renderMarketSummary(MatrixStack matrices, int x) {
         MarketState market = MarketStateHolder.get();
         label(matrices, "This world", x, rowY - 11, 0xFFFFFF);
@@ -911,6 +990,9 @@ public class MarketScreen extends Screen {
             return button == 0 ? overlayClicked(mouseX, mouseY) : true;
         }
 
+        // The nav sits above everything else, so it gets first refusal on a click.
+        if (button == 0 && navClicked(mouseX, mouseY)) return true;
+
         // Any click acknowledges the recovery note — it describes something already
         // done, so it does not need to keep occupying a line.
         recoveryNote = "";
@@ -950,7 +1032,7 @@ public class MarketScreen extends Screen {
 
         // Only where the host list is actually drawn. Hit-testing it from another tab
         // would join a host from a row nobody can see.
-        if (button == 0 && !polling && activeTab == TAB_NETWORK) {
+        if (button == 0 && !polling && activeScreen == SCREEN_NETWORK) {
             MinecraftClient mc = MinecraftClient.getInstance();
             String myUuid = mc.player != null
                     ? MinecraftIds.userIdOf(mc.player).toString() : null;
@@ -1185,43 +1267,45 @@ public class MarketScreen extends Screen {
             startPoll();
         }
 
-        drawCenteredText(matrices, this.textRenderer, this.title, this.width / 2, 8, 0xFFFFFF);
+        renderHeader(matrices);
 
         int listX = this.listX;
 
-        renderConnectionStatus(matrices, listX, 20);
-
         // Persistent, not a status-line message — this one doesn't get to scroll away.
+        int warnY = 42;
         if (MarketStateHolder.chainBrokenAt() != -1) {
             String why = MarketStateHolder.damageReason();
             label(matrices, "LOG UNUSABLE — " + (why == null ? "damaged" : why),
-                    listX, 32, 0xFF6666);
+                    listX, warnY, 0xFF6666);
         } else {
             long behind = MarketStateHolder.eventsBehind();
             MarketStateHolder.Divergence split = MarketStateHolder.divergence();
             if (behind > 0) {
                 label(matrices, behind + " events behind — connect to catch up",
-                        listX, 32, 0xFFAA55);
+                        listX, warnY, 0xFFAA55);
             }
             // Below the behind-warning rather than instead of it: they're different
             // problems and both can be true at once. Found passively by discovery, so
             // it can be showing before anyone has tried to connect.
             if (split != null) {
                 label(matrices, "FORKED — " + split.describe(),
-                        listX, behind > 0 ? 42 : 32, 0xFF8844);
+                        listX, behind > 0 ? warnY + 10 : warnY, 0xFF8844);
             }
         }
 
-        // Only the current tab's left column. Sharing one surface between all three is
-        // what made this screen unreadable in the first place.
-        if (activeTab == TAB_TRADE) {
+        // Only the current destination's left column.
+        if (activeScreen == SCREEN_TRADING) {
             label(matrices, "Order book", listX, rowY - 11, 0xFFFFFF);
             renderBook(matrices, listX, rowY + 2);
             renderBalances(matrices, listX);
-        } else if (activeTab == TAB_NETWORK) {
+        } else if (activeScreen == SCREEN_NETWORK) {
             renderDiscovery(matrices);
-        } else {
+        } else if (activeScreen == SCREEN_MARKET) {
             renderMarketSummary(matrices, listX);
+        } else if (activeScreen == SCREEN_HOME) {
+            renderHome(matrices);
+        } else {
+            renderSettingsPlaceholder(matrices);
         }
 
         // The re-place checklist belongs to whichever tab you are on: it appears right
@@ -1256,7 +1340,10 @@ public class MarketScreen extends Screen {
         // hand-rolled render calls could not do.
         super.render(matrices, mouseX, mouseY, delta);
 
-        // Last, so it sits above the buttons super.render just drew.
+        // Above the widgets super.render just drew, and below an overlay, which is the
+        // only thing that outranks the menu.
+        renderNav(matrices, mouseX, mouseY);
+
         Overlay overlay = overlays.peekFirst();
         if (overlay != null) renderOverlay(matrices, overlay, mouseX, mouseY);
     }
@@ -1338,6 +1425,101 @@ public class MarketScreen extends Screen {
 
     private void label(MatrixStack m, String s, int x, int y, int colour) {
         drawTextWithShadow(m, this.textRenderer, new LiteralText(s), x, y, colour);
+    }
+
+    // ─────────── chrome ───────────
+
+    /**
+     * The one strip that is the same wherever you are: what this client is doing, what
+     * you're worth, the time, and the way out to everything else.
+     *
+     * Real-world clock rather than the world's. In-game time tells you whether it is
+     * night where you are standing; this market spans separate worlds, and the useful
+     * question is whether the people you trade with are plausibly awake.
+     */
+    private void renderHeader(MatrixStack m) {
+        drawCenteredText(m, this.textRenderer, this.title, this.width / 2, 8, 0xFFFFFF);
+
+        renderConnectionStatus(m, 8, 8);
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        MarketState market = MarketStateHolder.get();
+        if (mc.player != null && market != null) {
+            UUID me = MinecraftIds.userIdOf(mc.player);
+            label(m, "Credits: " + market.wallets().getBalance(me), 8, 20, 0xFFFF88);
+
+            // Only where an item is selected and the number means something.
+            if (activeScreen == SCREEN_TRADING) {
+                Item item = MinecraftIds.itemFromName(itemField.getText().trim());
+                if (item != Items.AIR) {
+                    long held = market.itemBalances()
+                            .getBalance(me, MinecraftIds.itemToId(item));
+                    label(m, item.getName().getString() + " market credit: " + held,
+                            8, 30, 0xFFFF88);
+                }
+            }
+        }
+
+        String clock = java.time.LocalTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        int clockW = this.textRenderer.getWidth(clock);
+        label(m, clock, burgerRect()[0] - clockW - 8, 9, 0xA0A0A0);
+
+        renderBurger(m);
+    }
+
+    private void renderBurger(MatrixStack m) {
+        int[] r = burgerRect();
+        int colour = navOpen ? 0xFFFFDD66 : 0xFFCCCCCC;
+        for (int i = 0; i < 3; i++) {
+            int y = r[1] + 3 + i * 4;
+            fill(m, r[0], y, r[0] + r[2], y + 2, colour);
+        }
+    }
+
+    private void renderNav(MatrixStack m, int mouseX, int mouseY) {
+        if (!navOpen) return;
+
+        int[] first = navRowRect(0);
+        int[] last = navRowRect(SCREEN_NAMES.length - 1);
+        int top = first[1] - 2;
+        int bottom = last[1] + last[3] + 2;
+
+        fill(m, first[0] - 2, top - 1, first[0] + NAV_W + 2, bottom + 1, 0xFFFFDD66);
+        fill(m, first[0] - 1, top, first[0] + NAV_W + 1, bottom, 0xF0181818);
+
+        for (int i = 0; i < SCREEN_NAMES.length; i++) {
+            int[] r = navRowRect(i);
+            boolean here = i == activeScreen;
+            boolean hot = within(mouseX, mouseY, r);
+            if (here) {
+                fill(m, r[0], r[1], r[0] + r[2], r[1] + r[3], 0xFF3A3A2A);
+            } else if (hot) {
+                fill(m, r[0], r[1], r[0] + r[2], r[1] + r[3], 0xFF303030);
+            }
+            label(m, SCREEN_NAMES[i], r[0] + 8, r[1] + 4,
+                    here ? 0xFFDD66 : (hot ? 0xFFFFFF : 0xC0C0C0));
+        }
+    }
+
+    /** Returns true if the click belonged to the nav, including opening or closing it. */
+    private boolean navClicked(double mouseX, double mouseY) {
+        if (within(mouseX, mouseY, burgerRect())) {
+            navOpen = !navOpen;
+            return true;
+        }
+        if (!navOpen) return false;
+
+        for (int i = 0; i < SCREEN_NAMES.length; i++) {
+            if (within(mouseX, mouseY, navRowRect(i))) {
+                selectScreen(i);
+                return true;
+            }
+        }
+        // Clicking anywhere else dismisses rather than falling through to whatever is
+        // underneath — a menu that closes AND presses the button behind it is a trap.
+        navOpen = false;
+        return true;
     }
 
     // ─────────── overlays ───────────
@@ -1548,6 +1730,13 @@ public class MarketScreen extends Screen {
             if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
                 overlays.pollFirst();
             }
+            return true;
+        }
+
+        // Then the menu, for the same reason: Escape should back out one step at a
+        // time rather than dropping straight to the game.
+        if (navOpen && keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
+            navOpen = false;
             return true;
         }
 
