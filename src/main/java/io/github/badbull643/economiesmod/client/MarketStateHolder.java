@@ -325,6 +325,41 @@ public class MarketStateHolder {
         }
     }
 
+    // ─────────── recovery note ───────────
+    //
+    // Result of settling interrupted inventory operations at world load.
+    //
+    // Held rather than shown immediately, because it is worked out before the player
+    // has any reason to open the market screen — and an item silently reappearing in
+    // your inventory with no explanation is worse than the original problem.
+    //
+    // Lives here rather than on MarketScreen because it is written at world load, when
+    // no screen exists, and read by whichever screen opens next. That is session state,
+    // not screen state, which is the reason the field on MarketScreen had to be static
+    // and could not simply be demoted to an instance field with the status line.
+
+    private static volatile String recoveryNote = "";
+
+    public static void reportRecovery(int returned, int unconfirmed) {
+        StringBuilder sb = new StringBuilder();
+        if (returned > 0) {
+            sb.append("Returned items from ").append(returned)
+              .append(returned == 1 ? " deposit that" : " deposits that")
+              .append(" never completed");
+        }
+        if (unconfirmed > 0) {
+            if (sb.length() > 0) sb.append(". ");
+            sb.append(unconfirmed).append(unconfirmed == 1 ? " withdrawal" : " withdrawals")
+              .append(" may not have reached you — see the log");
+        }
+        recoveryNote = sb.toString();
+    }
+
+    public static String recoveryNote() { return recoveryNote; }
+
+    /** Acknowledged: it describes something already done, so it is shown only once. */
+    public static void clearRecoveryNote() { recoveryNote = ""; }
+
     public static void setOnApplied(Consumer<AppliedEvent> handler) {
         onApplied = handler;
         if (client != null) client.setOnApplied(APPLIED);
