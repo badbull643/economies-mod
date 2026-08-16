@@ -591,6 +591,13 @@ public class MarketStateHolder {
             mode = targetMode;
             lastRefusal = null;
 
+            // Remembered so a dropped broadcast can be recovered by reconnecting to
+            // the same host without the player re-entering anything. See resync().
+            connectedHost = host;
+            connectedPort = port;
+            connectedAs = displayName;
+            connectedUserId = userId;
+
             System.out.println("[economiesmod] connected to " + host + ":" + port
                     + " at seq " + c.lastSeq());
         } catch (MarketClient.Refused e) {
@@ -682,9 +689,91 @@ public class MarketStateHolder {
      * showing the dead connection's replica, and the local log is never reopened.
      * Cheap enough to call every frame — it only does work on the transition.
      */
+    // ─────────── resync after a missed broadcast ───────────
+
+    private static String connectedHost;
+    private static int connectedPort;
+    private static String connectedAs;
+    private static UUID connectedUserId;
+
+    /**
+     * Consecutive resync attempts, and when the last one was.
+     *
+     * Bounded because the failure this recovers from can also be permanent. An event
+     * that fails to persist — a broken chain, a full disk — leaves appliedSeq parked,
+     * so the next broadcast looks exactly like a gap; without a cap that is an
+     * unbroken reconnect loop against a host that is doing nothing wrong. The window
+     * exists so that an occasional dropped packet over a long session does not
+     * eventually exhaust a counter that never resets.
+     */
+    private static final int MAX_RESYNC_ATTEMPTS = 3;
+    private static final long RESYNC_WINDOW_MS = 60_000;
+    private static int resyncAttempts = 0;
+    private static long lastResyncAt = 0;
+
+    /**
+     * Recovers a client that missed a broadcast, by reconnecting to the same host.
+     *
+     * There is no "send me events from N" message in the protocol — CatchUp is the
+     * opposite direction, a client offering events to a host that is behind. What does
+     * backfill is the handshake itself: Hello carries our lastSeq and the host replies
+     * with everything after it. So the recovery for a gap is the ordinary join path,
+     * which is already chunked for oversized histories and already marks replayed
+     * lines non-live. Reusing it costs no new message type and no protocol bump.
+     */
+    private static void resync() {
+        long now = System.currentTimeMillis();
+        if (now - lastResyncAt > RESYNC_WINDOW_MS) resyncAttempts = 0;
+        lastResyncAt = now;
+
+        if (++resyncAttempts > MAX_RESYNC_ATTEMPTS) {
+            System.err.println("[economiesmod] giving up after " + MAX_RESYNC_ATTEMPTS
+                    + " resync attempts");
+            disconnect();
+            onRejected.accept("lost events and could not catch up — disconnected");
+            return;
+        }
+
+        long gap = client.gapAt();
+        System.out.println("[economiesmod] missed events before " + gap
+                + " — reconnecting to " + connectedHost + ":" + connectedPort
+                + " (attempt " + resyncAttempts + ")");
+
+        // Straight to the private overload: the public connect() would stop hosting and
+        // re-check the damaged-log guard, neither of which applies to a peer we are
+        // already connected to. persist=true because this is only ever reached in
+        // CONNECTED mode, where our own log is the replica being repaired.
+        connect(connectedHost, connectedPort, connectedUserId, connectedAs,
+                Mode.CONNECTED, true);
+
+        if (isConnected()) {
+            System.out.println("[economiesmod] resynced to seq " + client.lastSeq());
+        }
+    }
+
     public static void pollConnection() {
         if (mode == Mode.LOCAL) return;
-        if (client == null || client.isConnected()) return;
+        if (client == null) return;
+
+        if (client.isConnected()) {
+            // A gapped client is still connected — it is receiving broadcasts and
+            // discarding every one of them — so this has to be checked before the
+            // healthy-connection early return, not after it.
+            if (client.needsResync()) {
+                if (mode == Mode.CONNECTED) {
+                    resync();
+                } else {
+                    // HOSTING's client is a loopback to our own HostServer, which owns
+                    // the log file. Reconnecting would open a second EventLog on it,
+                    // which is the duplicate-sequence corruption startHosting exists to
+                    // avoid. A gap against ourselves is a local defect, not a network
+                    // one, so it is reported rather than papered over.
+                    System.err.println("[economiesmod] sequence gap against our own host"
+                            + " at " + client.gapAt() + " — this is a bug, not a drop");
+                }
+            }
+            return;
+        }
 
         if (mode == Mode.HOSTING) {
             // A host that can't reach its own server can't sequence anything.

@@ -367,6 +367,21 @@ public class MarketClient {
     private volatile long appliedSeq = 0;
 
     /**
+     * The sequence number that arrived when we were expecting an earlier one, or -1.
+     *
+     * Set on the reader thread, read from the game thread by whoever owns this
+     * connection. Never cleared: a client that has missed events cannot catch up in
+     * place, so recovery replaces the whole client rather than resetting a flag.
+     */
+    private volatile long gapAt = -1;
+
+    /** True once a broadcast has arrived out of order — see gapAt. */
+    public boolean needsResync() { return gapAt != -1; }
+
+    /** Which sequence number exposed the gap. Meaningless unless needsResync(). */
+    public long gapAt() { return gapAt; }
+
+    /**
      * Applies one broadcast or sync line. Returns false if the host sent something
      * unverifiable, in which case the caller must tear the connection down.
      *
@@ -385,10 +400,38 @@ public class MarketClient {
             return false;
         }
 
+        // Already have it. Not a fault and not worth mentioning: a resync asks the host
+        // for everything after our lastSeq, so a broadcast that was already in flight
+        // when we reconnected lands a second time as a matter of course.
+        if (se.seq <= appliedSeq) {
+            return true;
+        }
+
         if (se.seq != appliedSeq + 1) {
+            // Events are missing. Nothing after this one can be applied either — the
+            // chain check in appendRaw would reject it and appliedSeq would never
+            // advance past the hole — so tolerating it silently is what turned one
+            // dropped broadcast into a client that stayed "connected" and applied
+            // nothing for the rest of the session.
+            if (replaying) {
+                // The hole is in the host's own sync stream, which it built from our
+                // lastSeq. Reconnecting would ask the same host the same question and
+                // get the same answer, so this is a refusal, not something to retry.
+                System.err.println("[client] host's sync skips from " + appliedSeq
+                        + " to " + se.seq + " — refusing");
+                return false;
+            }
+
+            // A live broadcast. Recovery is a reconnect: the handshake sends our
+            // lastSeq and the host replies with everything after it, which is the
+            // same path that already backfills a client joining late. Performed by
+            // the owner of the connection, not here — this runs on the reader thread
+            // and during sync on the connecting thread, and tearing the channel down
+            // from either would strand the other.
             System.err.println("[client] sequence gap: expected " + (appliedSeq + 1)
-                    + " got " + se.seq + " (persist=" + persist + ")");
-            return true;   // a gap is not grounds to distrust the host
+                    + " got " + se.seq + " — resync needed");
+            gapAt = se.seq;
+            return true;
         }
 
         // Check the signature before this event goes anywhere near our log or state.

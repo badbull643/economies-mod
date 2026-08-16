@@ -134,3 +134,10 @@ tasks.register('replayGuardTest', JavaExec) {
     mainClass = 'io.github.badbull643.economiesmod.core.net.ReplayGuardTest'
     classpath = sourceSets.main.runtimeClasspath
 }
+
+tasks.register('gapRecoveryTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks a missed broadcast is noticed and can be recovered from.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.GapRecoveryTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
