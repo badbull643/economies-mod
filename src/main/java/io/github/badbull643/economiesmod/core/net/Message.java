@@ -1,6 +1,7 @@
 package io.github.badbull643.economiesmod.core.net;
 
 import io.github.badbull643.economiesmod.core.PeerCache;
+import io.github.badbull643.economiesmod.core.WorldAttestation;
 
 import java.util.List;
 
@@ -19,6 +20,15 @@ public abstract class Message {
         public String protocolVersion;
         public String marketId;      // null means "no history yet" — free to adopt any market
         public String marketName;    // so a refusal can name both markets, not just their UUIDs
+        /**
+         * What this client says about the world it trades from, or null.
+         *
+         * Unsigned, and deliberately not part of the handshake's trust. Signing it would
+         * only prove who made the claim, which nobody doubts — the claim itself is
+         * unverifiable either way, and dressing it in a signature would suggest
+         * otherwise. See WorldAttestation for what it is actually good for.
+         */
+        public WorldAttestation attestation;
         public Hello() { type = "Hello"; }
     }
 

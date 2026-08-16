@@ -91,6 +91,17 @@ public class MarketClient {
      */
     private volatile boolean hostDedicated = false;
     public boolean hostIsDedicated() { return hostDedicated; }
+
+    /**
+     * What to tell a host about the world we are trading from, or null to say nothing.
+     *
+     * Set from outside rather than read here: describing a Minecraft world means
+     * touching Minecraft, and core does not. The client package fills this in before
+     * connecting.
+     */
+    private volatile WorldAttestation attestation;
+
+    public void setAttestation(WorldAttestation a) { this.attestation = a; }
     public EventLog log() { return log; }
     public long lastSeq() { return appliedSeq; }
 
@@ -128,6 +139,7 @@ public class MarketClient {
         UUID myMarket = log.marketId();
         hello.marketId = myMarket != null ? myMarket.toString() : null;
         hello.marketName = log.marketName();
+        hello.attestation = attestation;
 
         System.out.println("[client] hello: lastSeq=" + hello.lastSeq
                 + " appliedSeq=" + appliedSeq + " persist=" + persist);
