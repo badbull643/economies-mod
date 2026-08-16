@@ -1472,6 +1472,61 @@ public class MarketTests {
             check("only the later trade is taxed", m.wallets().getBalance(ALICE), 950);
         }
 
+        section("V1: a deposit cap counts a window, on the host's clock");
+        {
+            // Time is passed in rather than read, so this tests the rule instead of
+            // testing whether the suite can outrun a wall clock.
+            long minute = 60_000L;
+            DepositLimiter lim = new DepositLimiter(100, 10 * minute);
+            long t = 1_000_000L;
+
+            check("under the cap is allowed", lim.allows(ALICE, 60, t) ? 1 : 0, 1);
+            lim.record(ALICE, 60, t);
+            check("and is counted", lim.usedBy(ALICE, t), 60);
+            check("what is left", lim.remainingFor(ALICE, t), 40);
+
+            check("exactly reaching the cap is allowed", lim.allows(ALICE, 40, t) ? 1 : 0, 1);
+            check("one past it is not", lim.allows(ALICE, 41, t) ? 1 : 0, 0);
+
+            // One identity's spending is not another's.
+            check("a different identity is unaffected", lim.usedBy(BOB, t), 0);
+            check("and has its whole allowance", lim.remainingFor(BOB, t), 100);
+
+            // The window slides rather than resetting on a boundary.
+            check("still counted just inside the window",
+                    lim.usedBy(ALICE, t + 9 * minute), 60);
+            check("gone once it has passed", lim.usedBy(ALICE, t + 11 * minute), 0);
+            check("and the allowance is whole again",
+                    lim.allows(ALICE, 100, t + 11 * minute) ? 1 : 0, 1);
+        }
+
+        section("V2: an unconfigured cap refuses nothing");
+        {
+            // Off by default: a friend group has no cheating problem worth a ceiling,
+            // and a limit that surprises people mid-session is worse than none.
+            DepositLimiter off = new DepositLimiter(0, 60_000L);
+            check("disabled", off.enabled() ? 1 : 0, 0);
+            check("allows an absurd deposit",
+                    off.allows(ALICE, 1_000_000_000L, 1L) ? 1 : 0, 1);
+            off.record(ALICE, 1_000_000_000L, 1L);
+            check("and records nothing", off.usedBy(ALICE, 1L), 0);
+
+            check("a default config has no cap",
+                    ServerConfig.friendGroup(25555).maxDepositUnitsPerWindow, 0);
+
+            // A cap with no window would refuse everything forever, since nothing could
+            // ever age out of it.
+            ServerConfig bad = ServerConfig.friendGroup(25555);
+            bad.maxDepositUnitsPerWindow = 500;
+            bad.depositWindowMinutes = 0;
+            check("a cap with no window is refused", bad.problem() != null ? 1 : 0, 1);
+
+            ServerConfig fine = ServerConfig.friendGroup(25555);
+            fine.maxDepositUnitsPerWindow = 500;
+            check("a cap with the default window is fine",
+                    fine.problem() == null ? 1 : 0, 1);
+        }
+
         section("U1: a welcome grant must be the amount this market publishes");
         {
             // Nothing checks who authors a grant, and nothing can: hosting rotates, so a

@@ -58,6 +58,25 @@ public class ServerConfig {
      */
     public int outboundQueueDepth = 256;
 
+    // ─────────── deposit limits ───────────
+
+    /**
+     * Items one identity may deposit per window. Zero disables the cap.
+     *
+     * Off by default. A friend group's market has no cheating problem worth a ceiling,
+     * and a limit that surprises people mid-session is worse than no limit at all. This
+     * is for hosts admitting people they do not know.
+     *
+     * Host policy, not market policy, and it cannot be otherwise: the answer depends on
+     * when the question is asked, so a replica replaying the log later would evaluate a
+     * window long since passed and refuse events the market legitimately contains. See
+     * DepositLimiter.
+     */
+    public long maxDepositUnitsPerWindow = 0;
+
+    /** How far back the deposit cap counts. */
+    public int depositWindowMinutes = 60;
+
     // ─────────── admission ───────────
 
     /**
@@ -240,6 +259,15 @@ public class ServerConfig {
         }
         if (outboundQueueDepth < 1) {
             return "outboundQueueDepth must be at least 1, not " + outboundQueueDepth;
+        }
+        if (maxDepositUnitsPerWindow < 0) {
+            return "maxDepositUnitsPerWindow cannot be negative, not "
+                    + maxDepositUnitsPerWindow;
+        }
+        // A window of zero with a cap set would refuse every deposit forever, since
+        // nothing would ever age out of it.
+        if (maxDepositUnitsPerWindow > 0 && depositWindowMinutes < 1) {
+            return "depositWindowMinutes must be at least 1 when a deposit cap is set";
         }
         // A misspelt mode must not quietly read as "open". An operator who typed
         // "allowlist " or "allow-list" and got an open server would have no way to tell
