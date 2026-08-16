@@ -1157,8 +1157,10 @@ public class MarketScreen extends Screen {
         int row = y;
         for (PeerPoll.HostInfo host : discovered) {
             if (row + 10 > y + h) break;
+            // A player-chosen name in a third-width panel; nothing bounds its length
+            // but this.
             String name = host.reply.hostName == null ? "?" : host.reply.hostName;
-            label(m, name, x, row, 0x88CCFF);
+            label(m, trim(name, w), x, row, 0x88CCFF);
             row += 10;
             if (row + 10 > y + h) break;
             label(m, "  " + host.reply.lastSeq + " events, "
@@ -1366,27 +1368,43 @@ public class MarketScreen extends Screen {
         label(m, "About this market", x, y, 0xFFDD66);
         y += 12;
 
-        label(m, trim("Name: " + market.marketName(), listW - 8), x, y, 0xAAAAAA);
-        y += 10;
+        y = wrapped(m, "Name: " + market.marketName(), x, y, 0xAAAAAA);
 
         // Rotating or dedicated. Only known while connected — a Sync is where it is
         // told — so the offline case says nothing rather than guessing "rotating".
         if (MarketStateHolder.isConnected()) {
-            label(m, MarketStateHolder.hostIsDedicated()
+            y = wrapped(m, MarketStateHolder.hostIsDedicated()
                             ? "Host: dedicated server — always up, nobody takes turns"
                             : "Host: another player's game — up while they are",
                     x, y, 0xAAAAAA);
-            y += 10;
         }
 
         int bps = market.taxBps();
         if (bps <= 0) {
-            label(m, "Trading fee: none", x, y, 0xAAAAAA);
+            wrapped(m, "Trading fee: none", x, y, 0xAAAAAA);
         } else {
             // Both forms, because the rate is set in basis points and felt in credits.
-            label(m, "Trading fee: " + formatBps(bps) + " of each sale, taken from the"
-                    + " seller and destroyed", x, y, 0xFFAA55);
+            wrapped(m, "Trading fee: " + formatBps(bps) + " of each sale, taken from"
+                    + " the seller and destroyed", x, y, 0xFFAA55);
         }
+    }
+
+    /**
+     * Draws text across as many lines as the panel needs, returning the next free y.
+     *
+     * These are sentences, not row labels — trimming one leaves it saying something
+     * other than what it means, and "Trading fee: 2.5% of each sale, taken from…" is
+     * exactly the half that must not be cut. Rows in a clickable list stay trimmed
+     * instead, because wrapping those changes their height and their hit test with it.
+     */
+    private int wrapped(MatrixStack m, String text, int x, int y, int colour) {
+        for (OrderedText line : this.textRenderer.wrapLines(
+                new LiteralText(text), listW - 12)) {
+            if (y > panelBottom() - 10) return y;    // ran out of panel
+            this.textRenderer.drawWithShadow(m, line, x, y, colour);
+            y += 10;
+        }
+        return y;
     }
 
     /** 250 reads as "2.5%", 100 as "1%". Trailing ".0" is noise on a fee. */
@@ -1601,10 +1619,15 @@ public class MarketScreen extends Screen {
                     + "  (" + h.reply.lastSeq + " events, "
                     + h.reply.clientCount + " online)";
 
-            // Trimmed to the panel. A host name, a market name and a badge is more text
-            // than the column holds, and it ran off the edge into the controls beside it.
+            // Trimmed to the panel, with the remainder on hover. Rows stay one line
+            // each so the click test keeps measuring in fixed steps — wrapping them
+            // would make row heights variable, which is what every drifted hit test in
+            // this file has had in common.
             int colour = isSelf ? 0xAAAAAA : (joinable ? 0x88CCFF : 0x996666);
-            label(matrices, trim(line, listW - 12), x, y, colour);
+            String shown = trim(line, listW - 12);
+            label(matrices, shown, x, y, colour);
+            tipIfHovered(line.trim(), shown, x, y, listW - 8, DISCOVERY_ROW_HEIGHT,
+                    (int) mouseX, (int) mouseY);
             y += DISCOVERY_ROW_HEIGHT;
         }
     }
@@ -1986,13 +2009,17 @@ public class MarketScreen extends Screen {
         // Shown the first time the screen is opened after a recovery, then dismissed by
         // any click — it explains something that already happened, so it only has to be
         // seen once.
+        // Both are sentences and both are bounded only by the window — a refusal reason
+        // carries its remedy, which is the longest text this screen produces.
+        int footerW = this.width - listX - 8;
+
         String note = MarketStateHolder.recoveryNote();
         if (!note.isEmpty()) {
-            label(matrices, note, listX, this.height - 36, 0x88CCFF);
+            label(matrices, trim(note, footerW), listX, this.height - 36, 0x88CCFF);
         }
 
         if (!status.isEmpty()) {
-            label(matrices, status, listX, this.height - 24, 0xFFDD66);
+            label(matrices, trim(status, footerW), listX, this.height - 24, 0xFFDD66);
         }
 
         // Your identity is a file, and it doesn't follow you to a new computer. Moving
@@ -2000,8 +2027,8 @@ public class MarketScreen extends Screen {
         // same username, same UUID, unrecognised key. Cheaper to say so than to debug.
         Path identity = MarketStateHolder.identityPath();
         if (identity != null) {
-            label(matrices, "identity: config/" + identity.getFileName()
-                            + "  — copy this to move computers, never share it",
+            label(matrices, trim("identity: config/" + identity.getFileName()
+                            + "  — copy this to move computers, never share it", footerW),
                     listX, this.height - 12, 0x707070);
         }
 
@@ -2009,6 +2036,14 @@ public class MarketScreen extends Screen {
         // them — and skips the ones belonging to a tab that isn't showing, which
         // hand-rolled render calls could not do.
         super.render(matrices, mouseX, mouseY, delta);
+
+        // Dead last, after super.render and every panel. A tooltip drawn where it was
+        // requested would be painted over by whatever came next, which is the whole
+        // reason it is queued rather than drawn in place.
+        if (hoverTip != null) {
+            this.renderTooltip(matrices, new LiteralText(hoverTip), mouseX, mouseY);
+            hoverTip = null;
+        }
 
         renderPicker(matrices, mouseX, mouseY);
 
@@ -2054,6 +2089,31 @@ public class MarketScreen extends Screen {
      * follows it, which is the same class of bug as discoveryStartY's.
      */
     private List<Alert> frameAlerts = new ArrayList<>();
+
+    /**
+     * Full text for a row the cursor is over, drawn at the very end of the frame.
+     *
+     * Queued rather than drawn where it is discovered: a tooltip painted mid-render is
+     * covered by every panel that comes after it. Cleared each time it is drawn, so a
+     * row that stops being hovered stops claiming the tip.
+     */
+    private String hoverTip;
+
+    /**
+     * Records the full text of a trimmed row when the cursor is on it.
+     *
+     * The alternative to trimming is wrapping, which for a list of one-line rows means
+     * variable row heights — and every hit test in this file that has drifted from what
+     * was drawn has drifted over exactly that. Keeping rows one line and putting the
+     * remainder in a tooltip leaves the geometry fixed.
+     */
+    private void tipIfHovered(String full, String shown, int x, int y, int w, int h,
+                              int mouseX, int mouseY) {
+        if (full.equals(shown)) return;              // nothing was cut, nothing to say
+        if (mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h) {
+            hoverTip = full;
+        }
+    }
 
     /** Something wrong with the market, and where the answer to it lives. */
     private static final class Alert {
