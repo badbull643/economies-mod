@@ -27,7 +27,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.UUID;
 
-
+//idea was too make the whole control panel weve built be a craftable block instead so this whole marketscreen is teid too a block
 
 public class MarketScreen extends Screen {
 
@@ -1420,6 +1420,181 @@ public class MarketScreen extends Screen {
         } else {
             label(matrices, "● market closed — not connected", x, y, 0xAAAAAA);
         }
+    }
+
+    // ─────────── the left panel ───────────
+    //
+    // One column, several things worth looking at while trading. Which one is showing
+    // is its own choice, separate from where you are in the app — you stay on Trading
+    // either way, you are just looking at a different aspect of it.
+
+    private static final int LEFT_BOOK = 0;
+    private static final int LEFT_MARKETS = 1;
+    private static final int LEFT_CHART = 2;
+    private static final String[] LEFT_VIEW_NAMES = {"Order book", "Markets", "Price"};
+
+    /** Static, like the destination: the view you chose is a preference, not a mode. */
+    private static int leftView = LEFT_BOOK;
+
+    private int[] leftSwitcherRect() {
+        return new int[]{listX, rowY + 6, LIST_W, 12};
+    }
+
+    private void renderLeftSwitcher(MatrixStack m, int mouseX, int mouseY) {
+        int[] r = leftSwitcherRect();
+        boolean hot = within(mouseX, mouseY, r);
+
+        // The three-line glyph, as on the mockup — the same affordance as the main nav,
+        // meaning the same thing one level down.
+        for (int i = 0; i < 3; i++) {
+            int y = r[1] + 2 + i * 3;
+            fill(m, r[0], y, r[0] + 8, y + 1, hot ? 0xFFFFFFFF : 0xFFAAAAAA);
+        }
+        label(m, LEFT_VIEW_NAMES[leftView], r[0] + 12, r[1] + 2,
+                hot ? 0xFFFFFF : 0xFFDD66);
+    }
+
+    private boolean leftSwitcherClicked(double mouseX, double mouseY) {
+        if (activeScreen != SCREEN_TRADING) return false;
+        if (!within(mouseX, mouseY, leftSwitcherRect())) return false;
+        leftView = (leftView + 1) % LEFT_VIEW_NAMES.length;
+        return true;
+    }
+
+    /** Every item worth listing: traded here, currently on the book, or in your ledger. */
+    private List<String> marketItems() {
+        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+        MarketState market = MarketStateHolder.get();
+        if (market == null) return new ArrayList<>(ids);
+
+        ids.addAll(market.activeItems());
+        ids.addAll(market.trades().tradedItems());
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player != null) {
+            ids.addAll(market.itemBalances().heldBy(MinecraftIds.userIdOf(mc.player)).keySet());
+        }
+        return new ArrayList<>(ids);
+    }
+
+    private static final int MARKET_ROW_H = 20;
+
+    /**
+     * Every item at once, rather than one book at a time.
+     *
+     * The screen could only ever answer "what is happening with this one item I already
+     * thought to ask about". This answers "what is happening", which is the question you
+     * actually have when you sit down.
+     */
+    private void renderMarkets(MatrixStack m, int x, int y, double mouseX, double mouseY) {
+        MarketState market = MarketStateHolder.get();
+        List<String> ids = marketItems();
+        if (market == null || ids.isEmpty()) {
+            label(m, "(nothing trading yet)", x, y, 0x808080);
+            return;
+        }
+
+        int viewH = CONTENT_H - 34;
+        noteScrollable("markets", x, y, LIST_W, viewH,
+                ids.size() * MARKET_ROW_H, mouseX, mouseY);
+        int rowTop = y - scrollOf("markets");
+
+        beginClip(x, y, LIST_W, viewH);
+        for (String id : ids) {
+            Item item = MinecraftIds.idToItem(id);
+            boolean hot = mouseX >= x && mouseX < x + LIST_W
+                    && mouseY >= rowTop && mouseY < rowTop + MARKET_ROW_H
+                    && mouseY >= y && mouseY < y + viewH;
+
+            drawItemCell(m, item == Items.AIR ? ItemStack.EMPTY : new ItemStack(item),
+                    x, rowTop, null, hot);
+
+            String name = this.textRenderer.trimToWidth(
+                    item == Items.AIR ? id : item.getName().getString(), LIST_W - 24);
+            label(m, name, x + 21, rowTop + 1, hot ? 0xFFFFFF : 0xC0C0C0);
+
+            // peekBook: this runs per item per frame, and bookFor would create a book
+            // for every item anyone merely holds.
+            OrderBook book = market.peekBook(id);
+            List<Order> bids = book == null ? Collections.emptyList() : book.restingBids();
+            List<Order> asks = book == null ? Collections.emptyList() : book.restingAsks();
+            long last = market.trades().lastPrice(id);
+
+            StringBuilder line = new StringBuilder();
+            line.append("bid ").append(bids.isEmpty() ? "-" : bids.get(0).value());
+            line.append("  ask ").append(asks.isEmpty() ? "-" : asks.get(0).value());
+            // What it last actually changed hands for — the honest number, as opposed to
+            // what someone is currently hoping for.
+            if (last >= 0) line.append("  last ").append(last);
+            label(m, line.toString(), x + 21, rowTop + 11, 0x909090);
+
+            rowTop += MARKET_ROW_H;
+        }
+        endClip();
+    }
+
+    private String marketRowAt(double mouseX, double mouseY) {
+        if (activeScreen != SCREEN_TRADING || leftView != LEFT_MARKETS) return null;
+        int y = rowY + 20;
+        int viewH = CONTENT_H - 34;
+        if (mouseX < listX || mouseX >= listX + LIST_W
+                || mouseY < y || mouseY >= y + viewH) {
+            return null;
+        }
+        List<String> ids = marketItems();
+        int index = (int) ((mouseY - y + scrollOf("markets")) / MARKET_ROW_H);
+        return index >= 0 && index < ids.size() ? ids.get(index) : null;
+    }
+
+    /**
+     * Recent trade prices for the selected item.
+     *
+     * Deliberately a plain shape rather than a chart with axes — at this size the only
+     * questions it can honestly answer are "which way" and "how volatile", and gridlines
+     * would imply a precision the data does not have.
+     */
+    private void renderPriceChart(MatrixStack m, int x, int y) {
+        Item item = MinecraftIds.itemFromName(itemField.getText().trim());
+        if (item == Items.AIR) {
+            label(m, "(pick an item)", x, y, 0x808080);
+            return;
+        }
+
+        MarketState market = MarketStateHolder.get();
+        List<Trade> recent = market == null
+                ? Collections.emptyList()
+                : market.trades().recentFor(MinecraftIds.itemToId(item), 60);
+
+        if (recent.size() < 2) {
+            label(m, "(not enough trades yet)", x, y, 0x808080);
+            if (recent.size() == 1) {
+                label(m, "one trade, at " + recent.get(0).price, x, y + 12, 0x909090);
+            }
+            return;
+        }
+
+        long min = Long.MAX_VALUE, max = Long.MIN_VALUE;
+        for (Trade t : recent) {
+            min = Math.min(min, t.price);
+            max = Math.max(max, t.price);
+        }
+        long span = Math.max(1, max - min);
+
+        int h = CONTENT_H - 50;
+        int w = LIST_W;
+        int barW = Math.max(1, w / recent.size());
+
+        fill(m, x, y, x + w, y + h, 0x40000000);
+        for (int i = 0; i < recent.size(); i++) {
+            long p = recent.get(i).price;
+            int barH = (int) ((p - min) * (h - 2) / span) + 1;
+            int bx = x + i * barW;
+            fill(m, bx, y + h - barH, bx + Math.max(1, barW - 1), y + h, 0xFF88CCFF);
+        }
+
+        label(m, "high " + max, x, y + h + 2, 0x909090);
+        label(m, "low " + min + "   last " + recent.get(recent.size() - 1).price,
+                x, y + h + 12, 0x909090);
     }
 
     private void renderBook(MatrixStack matrices, int x, int startY,
