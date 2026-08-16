@@ -1352,7 +1352,26 @@ public class HostServer {
             System.out.println("[host] --creator-key ignored: this log already holds a market");
         }
 
-        new HostServer(cfg, logFile, keys, peers).start();
+        try {
+            new HostServer(cfg, logFile, keys, peers).start();
+        } catch (java.net.BindException e) {
+            // The in-game path has named this fix since the two-client dev setup made it
+            // routine; the launcher was still dumping a stack trace at an operator who
+            // has no Port field to look at. Same cause, overwhelmingly: something else
+            // is already on the port, usually a client still hosting from inside a game.
+            System.err.println("[host] port " + cfg.port + " is already in use.");
+            System.err.println("[host] Something else is listening there — commonly a"
+                    + " Minecraft client still hosting from the Network tab, or an"
+                    + " earlier server that did not exit.");
+            System.err.println("[host] Either stop that one, or start this server on a"
+                    + " different port: --port " + (cfg.port + 1));
+            System.exit(2);
+        } catch (IOException e) {
+            // Anything else that stops it listening: a bind address that is not on this
+            // machine, a permission problem on a low port, an unreadable log.
+            System.err.println("[host] could not start: " + e.getMessage());
+            System.exit(2);
+        }
     }
 
     /**
