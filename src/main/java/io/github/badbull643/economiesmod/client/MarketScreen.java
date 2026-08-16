@@ -1785,7 +1785,13 @@ public class MarketScreen extends Screen {
     private void renderPicker(MatrixStack m, int mouseX, int mouseY) {
         if (!pickerOpen) return;
 
-        fill(m, 0, 0, this.width, this.height, 0xC0101010);
+        // Depth testing off for the panel itself. Item icons leave it enabled — both
+        // renderInGui and drawItemCell turn it on — so a fill drawn afterwards gets
+        // depth-rejected against text already on screen, and the buttons underneath
+        // show straight through the panel covering them.
+        RenderSystem.disableDepthTest();
+
+        fill(m, 0, 0, this.width, this.height, 0xE0101010);
 
         int[] box = pickerBox();
         fill(m, box[0] - 1, box[1] - 1, box[0] + box[2] + 1, box[1] + box[3] + 1, 0xFF88CCFF);
@@ -1793,12 +1799,23 @@ public class MarketScreen extends Screen {
 
         label(m, "Pick an item", box[0] + 8, box[1] + 8, 0x88CCFF);
 
-        // Search box, drawn rather than widgeted.
+        // Search box, drawn rather than widgeted. It always has focus — the picker is
+        // modal and there is nothing else here to type into — so it shows a caret from
+        // the moment it opens rather than waiting for a click that does nothing.
         int searchY = box[1] + 20;
+        fill(m, box[0] + 7, searchY - 1, box[0] + box[2] - 7, searchY + 13, 0xFF88CCFF);
         fill(m, box[0] + 8, searchY, box[0] + box[2] - 8, searchY + 12, 0xFF101010);
-        String shown = pickerQuery.isEmpty() ? "type to search by name..." : pickerQuery;
-        label(m, shown, box[0] + 11, searchY + 2,
-                pickerQuery.isEmpty() ? 0x606060 : 0xFFFFFF);
+        if (pickerQuery.isEmpty()) {
+            label(m, "type to search by name...", box[0] + 11, searchY + 2, 0x606060);
+        } else {
+            label(m, pickerQuery, box[0] + 11, searchY + 2, 0xFFFFFF);
+        }
+        if ((System.currentTimeMillis() / 500) % 2 == 0) {
+            int caretX = box[0] + 11 + this.textRenderer.getWidth(pickerQuery);
+            fill(m, caretX, searchY + 2, caretX + 1, searchY + 11, 0xFFFFFFFF);
+        }
+
+        RenderSystem.enableDepthTest();
 
         List<Item> items = pickerItems();
         int[] grid = pickerGridRect();
@@ -1822,12 +1839,15 @@ public class MarketScreen extends Screen {
         endClip();
 
         // Name of whatever is under the cursor, so the grid is readable without
-        // clicking things to find out what they are.
+        // clicking things to find out what they are. Depth off again — the icons above
+        // left it on, and this sits over the panel.
+        RenderSystem.disableDepthTest();
         Item hovered = pickerItemAt(mouseX, mouseY);
         String footer = hovered != null ? hovered.getName().getString()
                 : items.size() + " item(s) — Esc to cancel";
         label(m, footer, box[0] + 8, box[1] + box[3] - 14,
                 hovered != null ? 0xFFFFFF : 0x808080);
+        RenderSystem.enableDepthTest();
     }
 
     private Item pickerItemAt(double mouseX, double mouseY) {
@@ -2056,9 +2076,14 @@ public class MarketScreen extends Screen {
     }
 
     private void renderOverlay(MatrixStack m, Overlay o, int mouseX, int mouseY) {
+        // Depth off for the same reason the picker turns it off: item icons leave depth
+        // testing enabled, and a panel filled afterwards is otherwise rejected against
+        // text already drawn, letting the buttons underneath show through.
+        RenderSystem.disableDepthTest();
+
         // Dim everything behind it, so it reads as blocking rather than as another
         // widget competing for attention with the rest of the screen.
-        fill(m, 0, 0, this.width, this.height, 0xC0101010);
+        fill(m, 0, 0, this.width, this.height, 0xE0101010);
 
         int[] box = overlayBox(o);
         int accent = o.kind == Overlay.DANGER ? 0xFFFF6655
@@ -2094,6 +2119,8 @@ public class MarketScreen extends Screen {
         drawCenteredText(m, this.textRenderer,
                 new LiteralText(o.onConfirm == null ? "OK" : "Cancel"),
                 dismiss[0] + dismiss[2] / 2, dismiss[1] + 6, 0xFFDDDDDD);
+
+        RenderSystem.enableDepthTest();
     }
 
     /** Returns true if the click was the overlay's, which is any click at all while one is up. */
