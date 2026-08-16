@@ -36,6 +36,8 @@ public class EconomiesmodClient implements ClientModInitializer {
         MarketKeybinds.register();
         // A second way in, for players who have no reason to know about the keybind.
         InventoryMarketButton.register();
+        // A third, for reading the market without leaving what you were doing.
+        TradeCommands.register();
 
 
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
