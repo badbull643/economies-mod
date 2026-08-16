@@ -1382,16 +1382,57 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        String body = bps == 0
-                ? "Selling will cost nothing from the next trade onward. Trades already"
-                        + " made keep the fee they settled at — this is not backdated."
-                : "From the next trade onward, " + formatBps(bps) + " of every sale is"
-                        + " taken from the seller and destroyed. Trades already made keep"
-                        + " the fee they settled at, and everyone connected sees this"
-                        + " change as soon as it is sequenced.";
+        String body;
+        if (bps == 0) {
+            body = "Selling will cost nothing from the next trade onward. Trades already"
+                    + " made keep the fee they settled at — this is not backdated.";
+        } else {
+            body = "From the next trade onward, " + formatBps(bps) + " of every sale is"
+                    + " taken from the seller and destroyed. Trades already made keep"
+                    + " the fee they settled at, and everyone connected sees this"
+                    + " change as soon as it is sequenced.";
+
+            // What the rate is worth at the prices this market actually trades at. A
+            // percentage of a small sale rounds to nothing, and finding that out by
+            // watching a fee take zero is a bad way to learn it.
+            long floor = MarketState.smallestTaxableSale(bps);
+            long typical = typicalSaleValue();
+            body += " Because it rounds down, it takes nothing from a sale under "
+                    + floor + " credits";
+            if (typical > 0) {
+                body += typical < floor
+                        ? " — and sales here have been worth about " + typical
+                                + ", so at this rate most would be untaxed."
+                        : ", which recent sales here clear comfortably.";
+            } else {
+                body += ".";
+            }
+        }
 
         showConfirm(bps == 0 ? "Remove the trading fee?" : "Set the trading fee to "
                 + formatBps(bps) + "?", body, "Set fee", () -> submitFee(bps));
+    }
+
+    /**
+     * Roughly what a sale is worth in this market, or 0 when nothing has traded.
+     *
+     * The median rather than the mean, because one large trade should not make a market
+     * of one-credit sales look like it clears a fee comfortably. Only used to warn
+     * somebody that a rate would round to nothing here, so approximate is fine.
+     */
+    private long typicalSaleValue() {
+        MarketState market = MarketStateHolder.get();
+        if (market == null) return 0;
+
+        List<Long> values = new ArrayList<>();
+        for (String itemId : market.activeItems()) {
+            for (Trade t : market.trades().recentFor(itemId, 20)) {
+                values.add(t.price * t.quantity);
+            }
+        }
+        if (values.isEmpty()) return 0;
+        Collections.sort(values);
+        return values.get(values.size() / 2);
     }
 
     private void submitFee(int bps) {
@@ -1540,6 +1581,11 @@ public class MarketScreen extends Screen {
             // Both forms, because the rate is set in basis points and felt in credits.
             y = wrapped(m, "Trading fee: " + formatBps(bps) + " of each sale, taken from"
                     + " the seller and destroyed", x, y, 0xFFAA55);
+            // The fee rounds down, so below this it comes to nothing. Said plainly,
+            // because a rate that quietly takes zero looks like a rate that is broken.
+            y = wrapped(m, "Takes nothing from sales under "
+                    + MarketState.smallestTaxableSale(bps) + " credits.",
+                    x, y, 0x909090);
         }
 
         // Says who can change it, to whoever cannot. Without this the fee reads as a
