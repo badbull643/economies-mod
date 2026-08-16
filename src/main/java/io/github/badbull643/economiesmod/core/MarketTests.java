@@ -1337,6 +1337,72 @@ public class MarketTests {
             check("absent field keeps its default", p.maxConnections, 64);
         }
 
+        section("S1: an open server admits anyone");
+        {
+            ServerConfig open = ServerConfig.friendGroup(25555);
+            check("a stranger is admitted", open.refuses(ALICE.toString()) == null ? 1 : 0, 1);
+            check("but not a missing identity", open.refuses(null) != null ? 1 : 0, 1);
+            check("nor an empty one", open.refuses("  ") != null ? 1 : 0, 1);
+        }
+
+        section("S2: an allowlist admits only who is on it");
+        {
+            ServerConfig cfg = ServerConfig.friendGroup(25555);
+            cfg.admission = ServerConfig.ALLOWLIST;
+            cfg.allow.add(ALICE.toString());
+
+            check("a listed identity is admitted",
+                    cfg.refuses(ALICE.toString()) == null ? 1 : 0, 1);
+            check("an unlisted one is not",
+                    cfg.refuses(BOB.toString()) != null ? 1 : 0, 1);
+
+            // A UUID reaches the config by being typed or pasted, so case is not a
+            // meaningful difference and must not decide who gets in.
+            check("case does not decide admission",
+                    cfg.refuses(ALICE.toString().toUpperCase()) == null ? 1 : 0, 1);
+            check("nor does stray whitespace",
+                    cfg.refuses("  " + ALICE.toString() + " ") == null ? 1 : 0, 1);
+        }
+
+        section("S3: deny beats allow");
+        {
+            // An identity on both lists is one somebody is arguing about. Refusing is
+            // the reading that can be undone.
+            ServerConfig cfg = ServerConfig.friendGroup(25555);
+            cfg.admission = ServerConfig.ALLOWLIST;
+            cfg.allow.add(ALICE.toString());
+            cfg.deny.add(ALICE.toString());
+            check("denied even though allowed",
+                    cfg.refuses(ALICE.toString()) != null ? 1 : 0, 1);
+
+            ServerConfig openCfg = ServerConfig.friendGroup(25555);
+            openCfg.deny.add(BOB.toString());
+            check("deny applies on an open server too",
+                    openCfg.refuses(BOB.toString()) != null ? 1 : 0, 1);
+            check("and leaves everyone else alone",
+                    openCfg.refuses(ALICE.toString()) == null ? 1 : 0, 1);
+        }
+
+        section("S4: an admission policy that locks everyone out is refused");
+        {
+            // Including the operator. This is a config that cannot be what was meant,
+            // and finding out by being unable to connect is a bad way to learn it.
+            ServerConfig empty = ServerConfig.friendGroup(25555);
+            empty.admission = ServerConfig.ALLOWLIST;
+            check("allowlist with nobody on it is refused",
+                    empty.problem() != null ? 1 : 0, 1);
+
+            ServerConfig typo = ServerConfig.friendGroup(25555);
+            typo.admission = "allow-list";
+            check("a misspelt mode does not silently mean open",
+                    typo.problem() != null ? 1 : 0, 1);
+
+            ServerConfig fine = ServerConfig.friendGroup(25555);
+            fine.admission = ServerConfig.ALLOWLIST;
+            fine.allow.add(ALICE.toString());
+            check("a usable allowlist is accepted", fine.problem() == null ? 1 : 0, 1);
+        }
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");
