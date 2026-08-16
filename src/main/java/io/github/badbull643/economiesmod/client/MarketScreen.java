@@ -43,6 +43,8 @@ public class MarketScreen extends Screen {
     private ButtonWidget importButton;
     private ButtonWidget migrateButton;
     private ButtonWidget itemButton;
+    private ButtonWidget exportButton;
+    private ButtonWidget resetButton;
 
     /** Set from the game thread by button handlers, and from the network thread
      *  by callbacks — hence volatile. */
@@ -325,25 +327,30 @@ public class MarketScreen extends Screen {
         this.marketNameField.setSuggestion("new market name");
         onScreen(SCREEN_MARKET, this.marketNameField);
 
-        this.createButton = new ButtonWidget(rowX, rowY + ROW_STEP, 110, FIELD_HEIGHT,
-                new LiteralText("Create market"), b -> onCreateMarket());
-        onScreen(SCREEN_MARKET, this.createButton);
+        // Positions are assigned per frame by refreshMarketActions, since which of
+        // these apply depends on the situation and gaps where a hidden button used to
+        // be would read as something missing.
+        this.createButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                        new LiteralText("Create a new market"), b -> onCreateMarket()));
 
         // Sharing a market by file is how someone joins who was never online at the
         // same time as anyone holding it.
-        this.importButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP, 110, FIELD_HEIGHT,
-                new LiteralText("Import from file"), b -> onImport());
-        onScreen(SCREEN_MARKET, this.importButton);
+        this.importButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                        new LiteralText("Import one from a file"), b -> onImport()));
 
-        onScreen(SCREEN_MARKET, new ButtonWidget(rowX, rowY + ROW_STEP * 2, 110, FIELD_HEIGHT,
-                new LiteralText("Export to file"), b -> onExport()));
+        this.exportButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                        new LiteralText("Export to a file"), b -> onExport()));
 
-        this.migrateButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP * 2, 110,
-                FIELD_HEIGHT, new LiteralText("Migrate to host"), b -> onMigrate());
-        onScreen(SCREEN_MARKET, this.migrateButton);
+        this.migrateButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                        new LiteralText("Migrate my position"), b -> onMigrate()));
 
-        onScreen(SCREEN_MARKET, new ButtonWidget(rowX, rowY + ROW_STEP * 3, 110, FIELD_HEIGHT,
-                new LiteralText("Reset log"), b -> onReset()));
+        this.resetButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                        new LiteralText("Discard and start over"), b -> onReset()));
 
         applyScreenVisibility();
         startPoll();
@@ -527,9 +534,10 @@ public class MarketScreen extends Screen {
 
         boolean has = MarketStateHolder.hasMarket();
         if (hostButton != null) hostButton.active = hostButton.visible && has;
-        if (createButton != null) createButton.active = createButton.visible && !has;
-        // Import adopts a market, so it needs the same empty slate Create does.
-        if (importButton != null) importButton.active = importButton.visible && !has;
+
+        // Create and Import are governed by the Market screen's situation now, which
+        // already only offers them where there is no market to displace.
+        refreshMarketActions();
     }
 
     private void onExport() {
@@ -856,32 +864,163 @@ public class MarketScreen extends Screen {
                 listX + 8, rowY + 38, 0x808080);
     }
 
-    /** What this world holds, on the Market screen's left column. */
-    private void renderMarketSummary(MatrixStack matrices, int x) {
-        MarketState market = MarketStateHolder.get();
-        label(matrices, "This world", x, rowY - 11, 0xFFFFFF);
+    // ─────────── the Market screen ───────────
+    //
+    // Five buttons that were always all visible, with nothing saying which one applied.
+    // During testing that produced Connect clicked when Migrate was meant, twice — the
+    // buttons were equally available and equally unexplained, and two of them are
+    // irreversible.
+    //
+    // The situation is derived instead, and only what applies is offered.
 
-        if (market == null || market.marketId() == null) {
-            label(matrices, "No market yet.", x, rowY + 2, 0x808080);
-            label(matrices, "Create one, import a", x, rowY + 14, 0x808080);
-            label(matrices, "file, or connect to", x, rowY + 26, 0x808080);
-            label(matrices, "someone hosting one.", x, rowY + 38, 0x808080);
-            return;
+    private static final int MS_DAMAGED = 0;
+    private static final int MS_NO_MARKET = 1;
+    private static final int MS_FORKED = 2;
+    private static final int MS_BEHIND = 3;
+    private static final int MS_CONNECTED = 4;
+    private static final int MS_OFFLINE = 5;
+
+    /** Ordered by how much it matters: a damaged log makes everything else moot. */
+    private int marketSituation() {
+        if (MarketStateHolder.chainBrokenAt() != -1) return MS_DAMAGED;
+        if (!MarketStateHolder.hasMarket()) return MS_NO_MARKET;
+        if (MarketStateHolder.divergence() != null) return MS_FORKED;
+        if (MarketStateHolder.eventsBehind() > 0) return MS_BEHIND;
+        if (MarketStateHolder.isConnected()) return MS_CONNECTED;
+        return MS_OFFLINE;
+    }
+
+    /**
+     * A host serving a market that isn't ours, if discovery has seen one.
+     *
+     * This is what makes Migrate meaningful — it is only ever the right answer when
+     * somewhere else is running a genuinely different economy. Offering it otherwise
+     * is what let it be confused with Reset.
+     */
+    private PeerPoll.HostInfo foreignHost() {
+        MarketState mine = MarketStateHolder.get();
+        if (mine == null || mine.marketId() == null) return null;
+        String myMarket = mine.marketId().toString();
+        for (PeerPoll.HostInfo h : discovered) {
+            if (h.reply.marketId != null && !myMarket.equals(h.reply.marketId)) return h;
+        }
+        return null;
+    }
+
+    /** Lays out only the applicable actions, top to bottom with no gaps. */
+    private void refreshMarketActions() {
+        if (activeScreen != SCREEN_MARKET) return;
+
+        int situation = marketSituation();
+        boolean foreign = foreignHost() != null;
+
+        boolean create = situation == MS_NO_MARKET;
+        boolean importFile = situation == MS_NO_MARKET;
+        boolean export = situation == MS_CONNECTED || situation == MS_OFFLINE
+                || situation == MS_BEHIND;
+        // Only where there is somewhere to migrate TO, and never as an answer to a
+        // fork — the host refuses that, because our position already includes the
+        // history their copy has and crediting it again would pay us twice.
+        boolean migrate = foreign && situation != MS_NO_MARKET && situation != MS_FORKED
+                && situation != MS_DAMAGED;
+        boolean reset = situation != MS_NO_MARKET;
+
+        marketNameField.visible = create;
+        marketNameField.active = create;
+
+        int y = rowY + 4;
+        y = place(createButton, create, y);
+        y = place(importButton, importFile, y);
+        y = place(exportButton, export, y);
+        y = place(migrateButton, migrate, y);
+        place(resetButton, reset, y);
+
+        if (create) {
+            // The name field sits above the button that consumes it.
+            marketNameField.y = rowY + 4;
+            createButton.y = rowY + 4 + ROW_STEP;
+            importButton.y = rowY + 4 + ROW_STEP * 2;
+        }
+    }
+
+    private int place(ButtonWidget button, boolean shown, int y) {
+        if (button == null) return y;
+        button.visible = shown;
+        button.active = shown;
+        if (!shown) return y;
+        button.y = y;
+        return y + ROW_STEP;
+    }
+
+    /** What is going on, in words, beside the actions that answer it. */
+    private void renderMarketGuidance(MatrixStack m, int x) {
+        MarketState market = MarketStateHolder.get();
+        int situation = marketSituation();
+        PeerPoll.HostInfo foreign = foreignHost();
+
+        String heading;
+        String body;
+
+        switch (situation) {
+            case MS_DAMAGED:
+                heading = "This world's market log is unreadable";
+                body = (MarketStateHolder.damageReason() == null
+                        ? "The file is damaged." : MarketStateHolder.damageReason())
+                        + " Nothing can be done with it until it is discarded. If"
+                        + " someone else still has this market, you get everything back"
+                        + " when you reconnect to them.";
+                break;
+            case MS_NO_MARKET:
+                heading = "This world has no market";
+                body = "Create one to start an economy of your own, or import a file"
+                        + " someone exported. To join a market your friends already use,"
+                        + " go to Network and connect to whoever is hosting it — do NOT"
+                        + " create one, since two markets can never be merged.";
+                break;
+            case MS_FORKED:
+                heading = "You have diverged from this market";
+                body = MarketStateHolder.divergence().describe()
+                        + ". Discarding and reconnecting is the way back, and it costs"
+                        + " only what you did after the split — everything before it is"
+                        + " in their copy too. Migrating is the wrong tool here and the"
+                        + " host will refuse it.";
+                break;
+            case MS_BEHIND:
+                heading = "Your copy is behind";
+                body = MarketStateHolder.eventsBehind() + " events have happened that you"
+                        + " do not have. Connect to someone serving this market from the"
+                        + " Network screen and you will catch up automatically. Do not"
+                        + " host until you have.";
+                break;
+            case MS_CONNECTED:
+                heading = "Connected to '" + (market == null ? "?" : market.marketName()) + "'";
+                body = "Everything is in order. You can export a copy of this market to"
+                        + " a file for someone who cannot be online at the same time as"
+                        + " anyone holding it.";
+                break;
+            default:
+                heading = "You hold '" + (market == null ? "?" : market.marketName()) + "'";
+                body = "Nobody is serving it. Host it from the Network screen so others"
+                        + " can trade, or connect to someone who already is.";
+                break;
         }
 
-        label(matrices, "'" + market.marketName() + "'", x, rowY + 2, 0xFFDD66);
-        label(matrices, market.registeredCount() + " participant(s)", x, rowY + 16, 0xA0A0A0);
+        label(m, heading, x, rowY - 11, 0xFFDD66);
 
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player != null) {
-            label(matrices, "You hold:", x, rowY + 34, 0xA0A0A0);
-            // describeLoss is the same net-position calculation migration credits from,
-            // so what this says is exactly what a migration would carry.
-            String held = MarketStateHolder.describeLoss(MinecraftIds.userIdOf(mc.player));
-            for (OrderedText line : this.textRenderer.wrapLines(
-                    new LiteralText(held), LIST_W)) {
-                this.textRenderer.drawWithShadow(matrices, line, x, rowY + 46, 0xFFFF88);
-                break;   // one line is enough here; the Trade tab has the detail
+        int y = rowY + 4;
+        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), LIST_W)) {
+            this.textRenderer.drawWithShadow(m, line, x, y, 0xC0C0C0);
+            y += 10;
+        }
+
+        if (foreign != null && situation != MS_NO_MARKET && situation != MS_FORKED) {
+            y += 6;
+            for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(
+                    foreign.reply.hostName + " is running a separate market ('"
+                            + foreign.reply.marketName + "'). Migrating carries your"
+                            + " whole position there and abandons this one."), LIST_W)) {
+                this.textRenderer.drawWithShadow(m, line, x, y, 0x88CCFF);
+                y += 10;
             }
         }
     }
@@ -1362,7 +1501,7 @@ public class MarketScreen extends Screen {
         } else if (activeScreen == SCREEN_NETWORK) {
             renderDiscovery(matrices);
         } else if (activeScreen == SCREEN_MARKET) {
-            renderMarketSummary(matrices, listX);
+            renderMarketGuidance(matrices, listX);
         } else if (activeScreen == SCREEN_HOME) {
             renderHome(matrices);
         } else {
