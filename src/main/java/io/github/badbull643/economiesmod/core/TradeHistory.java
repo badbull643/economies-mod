@@ -68,6 +68,24 @@ public class TradeHistory {
         return q == null ? 0 : q.size();
     }
 
+    /**
+     * How many units of an item have changed hands, across the trades still held.
+     *
+     * Bounded by {@link #MAX_PER_ITEM} like everything else here, so this is "recently"
+     * rather than "ever" — which is the useful question for ranking what a market is
+     * actually busy with, and the only one this class can answer without growing.
+     *
+     * Sums in place rather than through {@link #recentFor}, which copies: this is read
+     * once per item per frame by a UI that lists every traded item at once.
+     */
+    public long volumeFor(String itemId) {
+        Deque<Trade> q = byItem.get(itemId);
+        if (q == null) return 0;
+        long total = 0;
+        for (Trade t : q) total += t.quantity;
+        return total;
+    }
+
     /** Items that have traded at least once. */
     public Set<String> tradedItems() {
         return Collections.unmodifiableSet(byItem.keySet());
