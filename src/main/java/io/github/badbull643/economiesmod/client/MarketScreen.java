@@ -1452,20 +1452,24 @@ public class MarketScreen extends Screen {
 
     private int replaceBoxW() { return replaceInSideColumn() ? invW : listW; }
 
-    private int replaceBoxTop() { return panelTop(); }
+    /**
+     * Flush with the other columns, not inset and sized to its contents.
+     *
+     * It sat at panelTop with a height derived from the row count, which made it a
+     * short box floating inside the frame line the panels beside it share. Matching
+     * frameTop/frameH is what makes it read as the third column rather than as
+     * something dropped on top of one.
+     */
+    private int replaceBoxTop() { return frameTop(); }
 
-    private int replaceBoxH() {
-        int rows = MarketStateHolder.pendingReplace().size();
-        int needed = 8 + DISCOVERY_ROW_HEIGHT + 4 + rows * REPLACE_ROW_H + 6;
-        return Math.min(needed, panelBottom() - replaceBoxTop());
-    }
+    private int replaceBoxH() { return frameH(); }
 
     /** Top of one row. The single source for drawing it and for hit-testing it. */
     private int replaceRowY(int index) {
         return replaceBoxTop() + 8 + DISCOVERY_ROW_HEIGHT + 4 + index * REPLACE_ROW_H;
     }
 
-    private void renderReplaceList(MatrixStack matrices) {
+    private void renderReplaceList(MatrixStack matrices, int mouseX, int mouseY) {
         List<MarketStateHolder.OldOrder> old = MarketStateHolder.pendingReplace();
         if (old.isEmpty()) return;
 
@@ -1478,9 +1482,14 @@ public class MarketScreen extends Screen {
 
         // The title row doubles as dismiss, so it carries a close mark rather than
         // spelling that out — the column is too narrow for the sentence it replaced.
-        label(matrices, trim("Old orders — click to re-place", boxW - 24),
-                boxX + 6, replaceBoxTop() + 8, 0xFFDD66);
+        // Narrow enough that even the short form is cut, hence the hover: "click to
+        // re-…" does not tell you what clicking does.
+        String title = "Old orders — click to re-place, or this row to dismiss";
+        String titleShown = trim("Old orders — click to re-place", boxW - 24);
+        label(matrices, titleShown, boxX + 6, replaceBoxTop() + 8, 0xFFDD66);
         label(matrices, "x", boxX + boxW - 12, replaceBoxTop() + 8, 0xFFDD66);
+        tipIfHovered(title, titleShown, boxX, replaceBoxTop() + 4, boxW,
+                DISCOVERY_ROW_HEIGHT + 4, mouseX, mouseY);
 
         MarketState s = MarketStateHolder.get();
         List<MarketOldRow> rows = replaceRows();
@@ -1492,9 +1501,14 @@ public class MarketScreen extends Screen {
             drawIcon(matrices, new ItemStack(MinecraftIds.idToItem(o.itemId)),
                     boxX + 6, y, "");
 
-            label(matrices, trim((o.isBid ? "Buy " : "Sell ") + o.volume + " "
-                    + shortItem(o.itemId) + " @ " + o.price, textW),
-                    textX, y + 1, 0x88CCFF);
+            // Trimmed with the rest on hover, like the host rows: an item name is as
+            // long as its name and the column is as wide as the column, and re-placing
+            // the wrong order because the name was cut is not a recoverable mistake.
+            String full = (o.isBid ? "Buy " : "Sell ") + o.volume + " "
+                    + shortItem(o.itemId) + " @ " + o.price;
+            String shown = trim(full, textW);
+            label(matrices, shown, textX, y + 1, 0x88CCFF);
+            tipIfHovered(full, shown, boxX, y, boxW, REPLACE_ROW_H, mouseX, mouseY);
 
             // What the same order would meet here, so re-placing at the old price is a
             // decision rather than a guess.
@@ -1993,7 +2007,7 @@ public class MarketScreen extends Screen {
         // The re-place checklist belongs to whichever tab you are on: it appears right
         // after a migration and is the only thing you should be doing next.
         if (!MarketStateHolder.pendingReplace().isEmpty()) {
-            renderReplaceList(matrices);
+            renderReplaceList(matrices, mouseX, mouseY);
         }
 
         // After every panel on every destination, including Home's, so the current tab
