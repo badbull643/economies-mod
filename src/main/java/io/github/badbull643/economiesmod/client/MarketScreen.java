@@ -49,6 +49,7 @@ public class MarketScreen extends Screen {
     private ButtonWidget resetButton;
     private TextFieldWidget feeField;
     private ButtonWidget feeButton;
+    private ButtonWidget addMarketButton;
 
     /**
      * The status line.
@@ -425,6 +426,10 @@ public class MarketScreen extends Screen {
         this.feeButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Set trading fee"), b -> onSetFee()));
+
+        this.addMarketButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
+                        new LiteralText("Add another market"), b -> onAddMarket()));
 
         // ─── SETTINGS ───
         // Every control writes straight through to the persisted settings, which have
@@ -1293,10 +1298,15 @@ public class MarketScreen extends Screen {
         feeField.active = canSetFee;
         if (canSetFee) {
             feeField.y = y + 6;
-            place(feeButton, true, y + 6 + ROW_STEP);
+            y = place(feeButton, true, y + 6 + ROW_STEP);
         } else {
-            place(feeButton, false, y);
+            y = place(feeButton, false, y);
         }
+
+        // Offered wherever there is a world to put one in — including a world with no
+        // market at all, since "another" is only ever one more than however many there
+        // are. Not offered on a damaged log, where the answer is to fix that first.
+        place(addMarketButton, situation != MS_DAMAGED, y + 6);
 
         if (create) {
             // The name field sits above the button that consumes it.
@@ -1480,7 +1490,8 @@ public class MarketScreen extends Screen {
             }
         }
 
-        renderMarketFacts(m, x, y + 10);
+        y = renderMarketFacts(m, x, y + 10);
+        renderMarketSlots(m, x, y + 10);
     }
 
     /**
@@ -1491,10 +1502,10 @@ public class MarketScreen extends Screen {
      * guidance rather than above it: when something is wrong, the thing that is wrong
      * outranks the reference card.
      */
-    private void renderMarketFacts(MatrixStack m, int x, int y) {
+    private int renderMarketFacts(MatrixStack m, int x, int y) {
         MarketState market = MarketStateHolder.get();
-        if (market == null || market.marketId() == null) return;
-        if (y > panelBottom() - 40) return;      // no room; guidance took the panel
+        if (market == null || market.marketId() == null) return y;
+        if (y > panelBottom() - 40) return y;    // no room; guidance took the panel
 
         label(m, "About this market", x, y, 0xFFDD66);
         y += 12;
@@ -1523,8 +1534,101 @@ public class MarketScreen extends Screen {
         // property of the software rather than a decision somebody made, and the
         // absence of any control to change it looks like an omission.
         if (!amCreator()) {
-            wrapped(m, "Set by whoever created this market.", x, y, 0x707070);
+            y = wrapped(m, "Set by whoever created this market.", x, y, 0x707070);
         }
+        return y;
+    }
+
+    /**
+     * Adds a market to this world and moves to it.
+     *
+     * Confirmed, but lightly: nothing is destroyed and the market being left keeps
+     * everything, which is the whole point. What is worth saying is where you end up,
+     * because landing on an empty Market screen having pressed a button labelled "add"
+     * would otherwise look like it had failed.
+     */
+    private void onAddMarket() {
+        showConfirm("Add another market to this world?",
+                "This world can hold several markets and use one at a time. The one you"
+                        + " are in now keeps everything — its history, balances and"
+                        + " orders — and you can switch back whenever you like. The new"
+                        + " one starts empty, so the next step is to create it, import"
+                        + " one, or connect to somebody hosting.",
+                "Add", () -> {
+                    if (MarketStateHolder.addMarketSlot()) {
+                        status = "Now using '" + MarketStateHolder.activeSlot()
+                                + "' — empty until you create or join a market";
+                        refreshMarketButtons();
+                    }
+                });
+    }
+
+    private static final int SLOT_ROW_H = 11;
+
+    /** Top of one market row. The single source for drawing and for hit-testing it. */
+    private int slotRowY(int index, int top) {
+        return top + 12 + index * SLOT_ROW_H;
+    }
+
+    /** Where the slot list starts, remembered from the last frame for the hit test. */
+    private int slotListTop = -1;
+
+    /**
+     * The other markets this world holds, and which one is in use.
+     *
+     * Shown only when there is more than one, because a world with a single market has
+     * nothing to choose between and a list of one reads as a setting somebody forgot to
+     * finish. Switching is not destructive — the market being left keeps its own log,
+     * its own high-water mark and its own everything — which is the point of the
+     * feature: leaving a market no longer has to mean destroying it.
+     */
+    private void renderMarketSlots(MatrixStack m, int x, int y) {
+        List<String> slots = MarketStateHolder.availableSlots();
+        if (slots.size() < 2) { slotListTop = -1; return; }
+        if (y > panelBottom() - 24) { slotListTop = -1; return; }
+
+        slotListTop = y;
+        label(m, "Markets in this world — click to switch", x, y, 0xFFDD66);
+
+        String active = MarketStateHolder.activeSlot();
+        for (int i = 0; i < slots.size(); i++) {
+            int rowY = slotRowY(i, y);
+            if (rowY + SLOT_ROW_H > panelBottom()) break;
+
+            String slot = slots.get(i);
+            boolean here = slot.equalsIgnoreCase(active);
+
+            // What the market calls itself, not the folder it happens to sit in — a
+            // list of "market-2" and "market-3" says nothing about which is which.
+            String name = MarketStateHolder.slotMarketName(slot);
+            String shown = name != null ? name : slot + " (empty)";
+
+            label(m, trim((here ? "> " : "  ") + shown, listW - 12), x, rowY,
+                    here ? 0xFFFFFF : 0x88CCFF);
+        }
+    }
+
+    /** True when the click landed on a market row and was acted on. */
+    private boolean slotClicked(double mouseX, double mouseY) {
+        if (slotListTop < 0 || activeScreen != SCREEN_MARKET) return false;
+
+        List<String> slots = MarketStateHolder.availableSlots();
+        if (slots.size() < 2) return false;
+
+        for (int i = 0; i < slots.size(); i++) {
+            int rowY = slotRowY(i, slotListTop);
+            if (mouseX >= listX && mouseX < listX + listW
+                    && mouseY >= rowY && mouseY < rowY + SLOT_ROW_H) {
+                String slot = slots.get(i);
+                if (slot.equalsIgnoreCase(MarketStateHolder.activeSlot())) return true;
+                if (MarketStateHolder.switchTo(slot)) {
+                    status = "Now using '" + slot + "'";
+                    refreshMarketButtons();
+                }
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1855,6 +1959,10 @@ public class MarketScreen extends Screen {
             // text field anywhere on the screen could be clicked at all.
             if (inBox) return true;
         }
+
+        // Before the host list, and guarded to the Market tab: the two lists both live
+        // in the left panel and only one of them is ever drawn.
+        if (button == 0 && slotClicked(mouseX, mouseY)) return true;
 
         // Only where the host list is actually drawn. Hit-testing it from another tab
         // would join a host from a row nobody can see.
