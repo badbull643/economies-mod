@@ -83,6 +83,45 @@ public class MarketState {
         this.creator = creator;
     }
 
+    // ─────────── economic policy ───────────
+
+    /**
+     * Transaction tax on fills, in basis points. Zero until a MarketPolicy event says
+     * otherwise, so every market created before policy existed behaves exactly as it did.
+     */
+    private volatile int taxBps = 0;
+
+    public int taxBps() { return taxBps; }
+
+    /** Called only by EventApplier, which has already checked the bounds and the author. */
+    void setTaxBps(int bps) { this.taxBps = bps; }
+
+    /** Basis points are per ten thousand. Named so the 10000 is never a loose literal. */
+    public static final int BPS_DIVISOR = 10_000;
+
+    /** The highest rate a market may set, in basis points. */
+    public static final int MAX_TAX_BPS = 5_000;
+
+    /**
+     * The tax on one fill.
+     *
+     * Every replica computes this independently and must agree to the credit, so the
+     * rule is fixed here rather than left to whoever calls it: multiply in long, divide
+     * once, truncate. Amounts are always positive, so integer division is a floor —
+     * true by accident of the inputs rather than by construction, which is why there is
+     * a test pinning it rather than a comment hoping for it.
+     *
+     * Rounding down also means the tax can be zero on a small fill. That is deliberate:
+     * the alternative, rounding up, takes a credit from a one-credit trade and makes the
+     * effective rate on small trades wildly higher than the number the market advertises.
+     */
+    public static long taxOn(long amount, int bps) {
+        if (bps <= 0 || amount <= 0) return 0;
+        long tax = Math.multiplyExact(amount, (long) bps) / BPS_DIVISOR;
+        // Cannot exceed the trade it is levied on, whatever the rate.
+        return Math.min(tax, amount);
+    }
+
     public WalletRegistry wallets() { return wallets; }
 
     public TradeHistory trades() { return trades; }
@@ -156,7 +195,19 @@ public class MarketState {
 
         for (Fill f : fills) {
             itemBalances.adjust(f.buyerId(), f.itemId(), +f.quantity());
-            wallets.adjust(f.sellerId(), +f.amount());
+
+            // Levied on the seller's proceeds, not the buyer's outlay. The buyer's side
+            // already reserves at their limit price and refunds the difference below,
+            // and threading a deduction through that is how refund arithmetic acquires
+            // the double-spend bugs this project has already rejected once. Taking it
+            // here changes one credit and leaves the reservation untouched.
+            //
+            // Burned, not paid to anyone. The welcome grant is currently an unbounded
+            // source of money with no sink; a tax that credited the operator would just
+            // move the unboundedness to them, and a treasury needs a way to spend that
+            // does not exist. Destroying it is the only option that closes the loop.
+            long tax = taxOn(f.amount(), taxBps);
+            wallets.adjust(f.sellerId(), +(f.amount() - tax));
 
             long reservedForThisFill = f.quantity() * buyerOrderPrice(order, f);
             long actuallySpent = f.amount();

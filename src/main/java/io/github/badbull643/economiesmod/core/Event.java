@@ -57,6 +57,29 @@ public abstract class Event {
     }
 
     /**
+     * The market's economic policy. Currently one number: the transaction tax.
+     *
+     * An event rather than a host setting, and that is not a stylistic choice. Every
+     * client replays the log independently and must reach the same balances; a rate
+     * that lived in a host's config would be invisible to replayers, so the moment a
+     * host applied it the market would fork. Policy that changes settlement has to be
+     * ordered in the log alongside the trades it changes.
+     *
+     * Basis points, not a percentage. A double would be one decimal-representation
+     * difference away from two replicas computing different balances, which is the
+     * cheapest imaginable way to fork a market. 100 bps = 1%.
+     *
+     * Non-retroactive for free: replay applies events in order, so fills sequenced
+     * before this event settle at whatever rate was in force then. That falls out of
+     * the design rather than being implemented, which is exactly why it is worth a
+     * test — nothing in the code says it, so nothing protects it.
+     */
+    public static class MarketPolicy extends Event {
+        /** Transaction tax on fills, in basis points. 0 means no tax. */
+        public int taxBps;
+    }
+
+    /**
      * Carries a player's holdings across from a market they're abandoning.
      *
      * Authored by the host, which verified the incoming branch and recomputed the
