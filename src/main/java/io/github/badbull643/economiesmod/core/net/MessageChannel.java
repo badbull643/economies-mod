@@ -35,6 +35,18 @@ public class MessageChannel implements AutoCloseable {
         out.println(gson.toJson(msg));
     }
 
+    /**
+     * Whether a write has failed on this channel.
+     *
+     * PrintWriter never throws — it catches IOException internally and raises a flag —
+     * so a send to a socket whose peer has gone returns normally and silently does
+     * nothing. Callers that wrap send in a try/catch are catching something that cannot
+     * happen; this is the only way to notice.
+     */
+    public boolean failed() {
+        return out.checkError();
+    }
+
     static final int MAX_LINE_LENGTH = 1_000_000;   // 1 MB — generous for a Sync batch
 
     public Message receive() throws IOException {

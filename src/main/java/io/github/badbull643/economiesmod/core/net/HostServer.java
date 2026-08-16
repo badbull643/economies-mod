@@ -39,7 +39,69 @@ public class HostServer {
     private Thread sequencerThread;
     private final PeerCache peerCache;
 
-    private final List<MessageChannel> clients = new CopyOnWriteArrayList<>();
+    private final List<ClientLink> clients = new CopyOnWriteArrayList<>();
+
+    /**
+     * One live client, with its own outbound queue and the thread that drains it.
+     *
+     * Fan-out used to be a loop of blocking writes on the sequencer thread. A socket
+     * write blocks once the peer's receive window fills, so a single client that had
+     * stopped reading — suspended laptop, saturated uplink, debugger breakpoint —
+     * stopped the sequencer, and with it every other client's trades. That cost scales
+     * with maxConnections, which is now something an operator sets.
+     *
+     * Each client gets a thread and a bounded queue instead. Order is preserved per
+     * client because exactly one thread writes to each socket, which matters more than
+     * it used to: a client that sees a sequence gap now tears down and resyncs.
+     */
+    private static final class ClientLink {
+        final MessageChannel channel;
+        private final BlockingQueue<Message> outbound;
+        private final Thread writer;
+        private volatile boolean open = true;
+
+        ClientLink(MessageChannel channel, int queueDepth) {
+            this.channel = channel;
+            this.outbound = new ArrayBlockingQueue<>(queueDepth);
+            this.writer = new Thread(this::drain, "market-writer");
+            this.writer.setDaemon(true);
+            this.writer.start();
+        }
+
+        /**
+         * Queues one message. False means this client is beyond saving — either its
+         * queue is full, so it is further behind than we are willing to buffer, or the
+         * socket has already failed underneath it.
+         */
+        boolean enqueue(Message msg) {
+            return open && outbound.offer(msg);
+        }
+
+        private void drain() {
+            try {
+                while (open) {
+                    Message msg = outbound.take();
+                    channel.send(msg);
+                    // PrintWriter swallows IOException, so a dead socket is only
+                    // visible as a flag. Without this the thread would spin happily
+                    // writing into a closed connection for as long as it was queued.
+                    if (channel.failed()) {
+                        open = false;
+                        return;
+                    }
+                }
+            } catch (InterruptedException e) {
+                // Closing. Nothing left to deliver that anyone is waiting for.
+            }
+        }
+
+        /** Idempotent: both the broadcast path and the reader's finally may call it. */
+        void close() {
+            open = false;
+            writer.interrupt();
+            try { channel.close(); } catch (IOException ignored) {}
+        }
+    }
     private final BlockingQueue<Proposal> queue = new LinkedBlockingQueue<>(1000);
     private static final int DEDUP_CACHE_SIZE = 10_000;
 
@@ -55,13 +117,16 @@ public class HostServer {
 
     /** A proposal waiting to be sequenced, paired with who sent it. */
     private static class Proposal {
-        final MessageChannel from;
+        /** The link rather than the channel: rejections are written by the sequencer,
+         *  so they have to go through the same queue broadcasts do or a blocked client
+         *  stalls it on the way out. Null for host-authored work. */
+        final ClientLink from;
         final Message.Propose msg;
         /** Set instead of msg for work the host authors itself, so it still goes
          *  through the one thread that owns the log. */
         final Runnable hostAction;
 
-        Proposal(MessageChannel from, Message.Propose msg) {
+        Proposal(ClientLink from, Message.Propose msg) {
             this.from = from;
             this.msg = msg;
             this.hostAction = null;
@@ -233,8 +298,8 @@ public class HostServer {
         } catch (IOException e) {
             if (running) throw e;
         } finally {
-            for (MessageChannel ch : clients) {
-                try { ch.close(); } catch (IOException ignored) {}
+            for (ClientLink link : clients) {
+                link.close();
             }
             clients.clear();
         }
@@ -324,6 +389,9 @@ public class HostServer {
 
     private void handleClient(Socket socket) {
         MessageChannel channel = null;
+        // Only set once this connection becomes a live client. Probes and pre-handshake
+        // exchanges never get one, which is what distinguishes them on the way out.
+        ClientLink link = null;
         RateLimiter limiter = new RateLimiter(30, 10_000);   // 30 proposals per 10s
 
         try {
@@ -393,7 +461,8 @@ public class HostServer {
             // Synced clients may sit idle indefinitely.
             socket.setSoTimeout(0);
 
-            clients.add(channel);
+            link = new ClientLink(channel, config.outboundQueueDepth);
+            clients.add(link);
             System.out.println("[host] " + channel.remoteAddress() + " synced and live ("
                     + clients.size() + " connected)");
 
@@ -410,7 +479,7 @@ public class HostServer {
                         continue;
                     }
 
-                    if (!queue.offer(new Proposal(channel, prop))) {
+                    if (!queue.offer(new Proposal(link, prop))) {
                         Message.Rejected r = new Message.Rejected();
                         r.clientEventId = prop.clientEventId;
                         r.reason = "server busy";
@@ -432,8 +501,12 @@ public class HostServer {
                 // Only announce a disconnect for something that was actually a live
                 // client — a probe was never in the set, and reporting it as a
                 // departure made the count jump around for no reason.
-                boolean wasLive = clients.remove(channel);
-                try { channel.close(); } catch (IOException ignored) {}
+                boolean wasLive = link != null && clients.remove(link);
+                if (link != null) {
+                    link.close();       // stops the writer thread and closes the socket
+                } else {
+                    try { channel.close(); } catch (IOException ignored) {}
+                }
                 if (wasLive) {
                     System.out.println("[host] client disconnected ("
                             + clients.size() + " remain)");
@@ -1040,20 +1113,34 @@ public class HostServer {
     }
 
     private void broadcast(Message msg) {
-        for (MessageChannel ch : clients) {
-            try {
-                ch.send(msg);
-            } catch (Exception e) {
-                System.out.println("[host] broadcast failed to " + ch.remoteAddress());
+        // Hands off to each client's writer thread and returns. Nothing here can block
+        // on a socket, so one unresponsive client no longer holds up sequencing for
+        // everyone else — it just falls behind in its own queue until it is dropped.
+        for (ClientLink link : clients) {
+            if (!link.enqueue(msg)) {
+                System.out.println("[host] dropping " + link.channel.remoteAddress()
+                        + " — too far behind to keep up");
+                clients.remove(link);
+                link.close();
             }
         }
     }
 
-    private void reject(MessageChannel to, String clientEventId, String reason) {
+    /**
+     * Queued rather than written, because this runs on the sequencer.
+     *
+     * A direct send here would block that thread against a client whose socket has
+     * filled — the same stall the broadcast fan-out was just moved off, reachable by
+     * any client that submits something invalid. A rejection that cannot be queued is
+     * dropped: the client is already beyond its backlog and about to be disconnected,
+     * and there is no one left to tell.
+     */
+    private void reject(ClientLink to, String clientEventId, String reason) {
+        if (to == null) return;      // host-authored work has no one to answer to
         Message.Rejected r = new Message.Rejected();
         r.clientEventId = clientEventId;
         r.reason = reason;
-        to.send(r);
+        to.enqueue(r);
     }
 
     /**
@@ -1124,7 +1211,16 @@ public class HostServer {
             if ("--config".equals(args[i])) configFile = Paths.get(args[i + 1]);
         }
 
-        ServerConfig cfg = ServerConfig.load(configFile);
+        ServerConfig cfg;
+        try {
+            cfg = ServerConfig.load(configFile);
+        } catch (IOException e) {
+            // Existing-but-unreadable. Defaults would be a guess at policy that mints
+            // money, so this stops instead — see ServerConfig.load.
+            System.err.println("[host] " + e.getMessage());
+            System.exit(2);
+            return;
+        }
 
         try {
             for (int i = 0; i < args.length; i++) {
