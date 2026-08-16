@@ -85,11 +85,6 @@ public abstract class Message {
         public Pong() { type = "Pong"; }
     }
 
-    public static class SteppingDown extends Message {
-        public long finalSeq;
-        public SteppingDown() { type = "SteppingDown"; }
-    }
-
     /**
      * "Here is the market I'm abandoning — work out what I'm owed."
      *
