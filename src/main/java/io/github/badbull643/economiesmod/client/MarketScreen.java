@@ -125,8 +125,16 @@ public class MarketScreen extends Screen {
 
     private int frameTop() { return rowY - 6; }
     private int frameH() { return contentH - 18; }
-    /** First usable row inside a panel. */
-    private int panelTop() { return frameTop() + 5; }
+    /**
+     * First usable row inside a panel, below the alert band.
+     *
+     * The alerts used to be drawn straight over whatever the panel had already put
+     * here. That was deliberate — a damaged log outranks the first line of an order
+     * book — but "outranks" was implemented as painting on top of it, so both were
+     * unreadable rather than one. They get reserved space instead, and because every
+     * panel's contents already measure from here, they all move down together.
+     */
+    private int panelTop() { return frameTop() + 5 + alertBandH(); }
     /** One past the last usable row inside a panel. */
     private int panelBottom() { return frameTop() + frameH() - 5; }
 
@@ -884,9 +892,10 @@ public class MarketScreen extends Screen {
     private void renderHome(MatrixStack m) {
         int gap = COL_GAP;
         // Same frame line the other screens use, so switching between them does not
-        // shift everything by a few pixels.
-        int top = rowY - 6;
-        int height = contentH - 18;
+        // shift everything by a few pixels — via the helpers rather than repeating
+        // their arithmetic, which is what left Home's titles under the alert band.
+        int top = frameTop() + alertBandH();
+        int height = frameH() - alertBandH();
         int total = contentW;
 
         int sideW = (total - gap * 2) / 3;
@@ -1336,36 +1345,74 @@ public class MarketScreen extends Screen {
      * a dead economy mean nothing here, and the difference is usually invisible until
      * after you've clicked — so it goes on the row.
      */
+    /**
+     * The carried-over orders, in a box of their own.
+     *
+     * Previously drawn as bare labels at the left panel's first row, which is where the
+     * active tab had already put its own content — on the Market tab, the one you are
+     * necessarily looking at right after a migration, it landed directly on top of the
+     * guidance text. The rows also ran their full untrimmed width, so a long item name
+     * plus a "best bid here" suffix spilled clear across the middle and right columns.
+     *
+     * A framed box fixes both: it owns its area rather than sharing it, and its width
+     * is what the rows are trimmed to. Icons because an item is quicker to recognise
+     * by its sprite than by the tail of a registry id.
+     */
+    private static final int REPLACE_ROW_H = 20;
+
+    private int replaceBoxTop() { return panelTop(); }
+
+    private int replaceBoxH() {
+        int rows = MarketStateHolder.pendingReplace().size();
+        int needed = 8 + DISCOVERY_ROW_HEIGHT + 4 + rows * REPLACE_ROW_H + 6;
+        return Math.min(needed, panelBottom() - replaceBoxTop());
+    }
+
+    /** Top of one row. The single source for drawing it and for hit-testing it. */
+    private int replaceRowY(int index) {
+        return replaceBoxTop() + 8 + DISCOVERY_ROW_HEIGHT + 4 + index * REPLACE_ROW_H;
+    }
+
     private void renderReplaceList(MatrixStack matrices) {
         List<MarketStateHolder.OldOrder> old = MarketStateHolder.pendingReplace();
         if (old.isEmpty()) return;
 
-        // In the left panel, where the lists live. At rowX it drew over the control
-        // buttons, which have a frame around them now.
-        int x = listX + 4;
-        int y = discoveryStartY();
+        vanillaPanel(matrices, listX, replaceBoxTop(), listW, replaceBoxH());
 
-        label(matrices, "Old orders — click to re-place, [X] to dismiss:",
-                x, y, 0xFFDD66);
-        y += DISCOVERY_ROW_HEIGHT + 2;
+        int textX = listX + 26;
+        int textW = listW - 32;
+
+        label(matrices, "Old orders — click to re-place, header to dismiss",
+                listX + 6, replaceBoxTop() + 8, 0xFFDD66);
 
         MarketState s = MarketStateHolder.get();
-        for (MarketOldRow row : replaceRows()) {
-            MarketStateHolder.OldOrder o = row.order;
+        List<MarketOldRow> rows = replaceRows();
+        for (int i = 0; i < rows.size(); i++) {
+            MarketStateHolder.OldOrder o = rows.get(i).order;
+            int y = replaceRowY(i);
+            if (y + REPLACE_ROW_H > panelBottom()) break;
+
+            drawIcon(matrices, new ItemStack(MinecraftIds.idToItem(o.itemId)),
+                    listX + 6, y, "");
+
+            label(matrices, trim((o.isBid ? "Buy " : "Sell ") + o.volume + " "
+                    + shortItem(o.itemId) + " @ " + o.price, textW),
+                    textX, y + 1, 0x88CCFF);
+
+            // What the same order would meet here, so re-placing at the old price is a
+            // decision rather than a guess.
             String here = "";
             if (s != null) {
                 List<Order> book = o.isBid
                         ? s.bookFor(o.itemId).restingAsks()
                         : s.bookFor(o.itemId).restingBids();
                 if (!book.isEmpty()) {
-                    here = o.isBid
-                            ? "   (best ask here: " + book.get(0).value() + ")"
-                            : "   (best bid here: " + book.get(0).value() + ")";
+                    here = (o.isBid ? "best ask " : "best bid ") + book.get(0).value();
                 }
             }
-            label(matrices, "  " + (o.isBid ? "Buy  " : "Sell ") + o.volume + " "
-                    + shortItem(o.itemId) + " @ " + o.price + here, x, y, 0x88CCFF);
-            y += DISCOVERY_ROW_HEIGHT;
+            if (!here.isEmpty()) {
+                label(matrices, trim(here, textW), textX, y + 11, 0x808080);
+            }
         }
     }
 
@@ -1518,34 +1565,33 @@ public class MarketScreen extends Screen {
         // The re-place list occupies the discovery area while it exists, so it claims
         // clicks there first.
         if (button == 0 && !MarketStateHolder.pendingReplace().isEmpty()) {
-            int x = listX + 4;
-            int headerY = discoveryStartY();
+            int boxTop = replaceBoxTop();
+            int boxBottom = boxTop + replaceBoxH();
+            boolean inBox = mouseX >= listX && mouseX < listX + listW
+                    && mouseY >= boxTop && mouseY < boxBottom;
 
             // Header doubles as dismiss — the list is a convenience, not an obligation.
-            if (mouseX >= x && mouseX <= x + listW - 8
-                    && mouseY >= headerY && mouseY < headerY + DISCOVERY_ROW_HEIGHT) {
+            if (inBox && mouseY < boxTop + 8 + DISCOVERY_ROW_HEIGHT) {
                 MarketStateHolder.clearPendingReplace();
                 status = "Dismissed — your balance is unaffected";
                 return true;
             }
 
-            int y = headerY + DISCOVERY_ROW_HEIGHT + 2;
-            for (MarketOldRow row : replaceRows()) {
-                if (mouseX >= x && mouseX <= x + listW - 8
-                        && mouseY >= y && mouseY < y + DISCOVERY_ROW_HEIGHT) {
-                    replaceOrder(row.order);
+            List<MarketOldRow> rows = replaceRows();
+            for (int i = 0; i < rows.size(); i++) {
+                int y = replaceRowY(i);
+                if (y + REPLACE_ROW_H > panelBottom()) break;
+                if (inBox && mouseY >= y && mouseY < y + REPLACE_ROW_H) {
+                    replaceOrder(rows.get(i).order);
                     return true;
                 }
-                y += DISCOVERY_ROW_HEIGHT;
             }
 
-            // Swallow only clicks that actually landed on the list. This used to
+            // Swallow only clicks that actually landed on the box. This used to
             // return unconditionally, which meant that while any orders were waiting
             // to be re-placed — i.e. immediately after every migration — no button or
             // text field anywhere on the screen could be clicked at all.
-            if (mouseX >= x && mouseX <= x + listW - 8 && mouseY >= headerY && mouseY < y) {
-                return true;
-            }
+            if (inBox) return true;
         }
 
         // Only where the host list is actually drawn. Hit-testing it from another tab
@@ -1789,6 +1835,10 @@ public class MarketScreen extends Screen {
         // keeps eating the scroll wheel.
         hoveredScrollKey = null;
 
+        // Before anything measures from panelTop, which reserves room for these. Held
+        // for the rest of the frame and for the clicks that follow it.
+        frameAlerts = alerts();
+
         renderHeader(matrices);
 
         int listX = this.listX;
@@ -1890,14 +1940,32 @@ public class MarketScreen extends Screen {
     private static final int ALERT_ROW_H = 12;
 
     /**
-     * Just inside the panel, below the tab row.
+     * A band just inside the top of the panel, below the tab row.
      *
-     * These deliberately sit over the top of the panel's content rather than in the
-     * header: the header is full, the tab row is where the space above the panel went,
-     * and a state bad enough to raise one of these outranks the first line of an order
-     * book. Measured from frameTop so it follows the box when the window resizes.
+     * The header is full and the tab row took the space above the panel, so these live
+     * inside it — but in space reserved for them via panelTop rather than painted over
+     * the content that was already there. Measured from frameTop so the band follows
+     * the box when the window resizes.
      */
     private int alertTop() { return frameTop() + 8; }
+
+    /**
+     * Height reserved at the top of every panel for the alerts, or 0 when there are
+     * none. Read from the cached list rather than rebuilding it: panelTop is called
+     * many times per frame and alerts() walks the holder's state to answer.
+     */
+    private int alertBandH() {
+        return frameAlerts.isEmpty() ? 0 : frameAlerts.size() * ALERT_ROW_H + 6;
+    }
+
+    /**
+     * This frame's alerts, refreshed once at the top of render().
+     *
+     * Cached so that layout, drawing and hit-testing all describe the same band — a
+     * list rebuilt per call could change size between the render and the click that
+     * follows it, which is the same class of bug as discoveryStartY's.
+     */
+    private List<Alert> frameAlerts = new ArrayList<>();
 
     /** Something wrong with the market, and where the answer to it lives. */
     private static final class Alert {
@@ -1964,7 +2032,7 @@ public class MarketScreen extends Screen {
     }
 
     private void renderAlerts(MatrixStack m, int mouseX, int mouseY) {
-        List<Alert> list = alerts();
+        List<Alert> list = frameAlerts;
         for (int i = 0; i < list.size(); i++) {
             Alert a = list.get(i);
             String text = alertText(a);
@@ -1982,7 +2050,7 @@ public class MarketScreen extends Screen {
     }
 
     private boolean alertClicked(double mouseX, double mouseY) {
-        List<Alert> list = alerts();
+        List<Alert> list = frameAlerts;
         for (int i = 0; i < list.size(); i++) {
             Alert a = list.get(i);
             if (!alertLeadsSomewhere(a)) continue;
