@@ -1178,12 +1178,19 @@ public class MarketScreen extends Screen {
         // The nav sits above everything else, so it gets first refusal on a click.
         if (button == 0 && navClicked(mouseX, mouseY)) return true;
 
+        if (button == 0 && leftSwitcherClicked(mouseX, mouseY)) return true;
+
         // Picking from what you're carrying is the fastest way to choose what to sell,
         // and it never involves knowing an item's registry id.
         if (button == 0) {
             InventoryBridge.Holding held = inventoryRowAt(mouseX, mouseY);
             if (held != null) {
                 selectItem(held.item);
+                return true;
+            }
+            String row = marketRowAt(mouseX, mouseY);
+            if (row != null) {
+                selectItem(MinecraftIds.idToItem(row));
                 return true;
             }
         }
@@ -1495,8 +1502,14 @@ public class MarketScreen extends Screen {
         // Only the current destination's left column.
         if (activeScreen == SCREEN_TRADING) {
             renderSelectedItem(matrices, listX, rowY - 14, mouseX, mouseY);
-            label(matrices, "Order book", listX, rowY + 8, 0xFFFFFF);
-            renderBook(matrices, listX, rowY + 20, mouseX, mouseY);
+            renderLeftSwitcher(matrices, mouseX, mouseY);
+            if (leftView == LEFT_MARKETS) {
+                renderMarkets(matrices, listX, rowY + 20, mouseX, mouseY);
+            } else if (leftView == LEFT_CHART) {
+                renderPriceChart(matrices, listX, rowY + 20);
+            } else {
+                renderBook(matrices, listX, rowY + 20, mouseX, mouseY);
+            }
             if (invX >= 0) renderInventory(matrices, invX, rowY + 6, mouseX, mouseY);
         } else if (activeScreen == SCREEN_NETWORK) {
             renderDiscovery(matrices);
