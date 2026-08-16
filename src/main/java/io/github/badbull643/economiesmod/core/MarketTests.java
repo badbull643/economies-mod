@@ -1428,6 +1428,29 @@ public class MarketTests {
                     MarketState.taxOn(1_000_000_000L, 100), 10_000_000L);
         }
 
+        section("T1b: where a rate stops being worth anything");
+        {
+            // Reported from a live market: a 2.5% fee appeared to take nothing. It was
+            // working — the sales were worth 10 to 20 credits, and 2.5% of 20 floors to
+            // zero. The arithmetic was right and the screen said nothing about it.
+            check("2.5% needs a 40-credit sale",
+                    MarketState.smallestTaxableSale(250), 40);
+            check("10% needs only 10", MarketState.smallestTaxableSale(1000), 10);
+            check("3.7% rounds up to 28", MarketState.smallestTaxableSale(370), 28);
+            check("50% bites at 2", MarketState.smallestTaxableSale(5000), 2);
+            check("no rate, no threshold", MarketState.smallestTaxableSale(0), 0);
+
+            // The threshold must agree with the tax itself, or the screen would promise
+            // something the settlement does not do.
+            for (int bps : new int[]{100, 250, 370, 1000, 5000}) {
+                long floor = MarketState.smallestTaxableSale(bps);
+                check("at " + bps + " bps, one under the threshold is free",
+                        MarketState.taxOn(floor - 1, bps), 0);
+                check("at " + bps + " bps, the threshold itself is not",
+                        MarketState.taxOn(floor, bps) > 0 ? 1 : 0, 1);
+            }
+        }
+
         section("T2: the tax comes off the seller, and is burned");
         {
             MarketState m = new MarketState();
