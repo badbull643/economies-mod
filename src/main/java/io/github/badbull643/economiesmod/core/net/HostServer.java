@@ -19,7 +19,8 @@ import java.nio.file.Paths;
 
 public class HostServer {
 
-    public static final String PROTOCOL_VERSION = "2";
+    // 6: MigrateBalance event; MigrateRequest/MigrateResult messages.
+    public static final String PROTOCOL_VERSION = "7";
     private static final int MAX_CONNECTIONS = 64;
 
     private final int port;
@@ -52,9 +53,20 @@ public class HostServer {
     private static class Proposal {
         final MessageChannel from;
         final Message.Propose msg;
+        /** Set instead of msg for work the host authors itself, so it still goes
+         *  through the one thread that owns the log. */
+        final Runnable hostAction;
+
         Proposal(MessageChannel from, Message.Propose msg) {
             this.from = from;
             this.msg = msg;
+            this.hostAction = null;
+        }
+
+        Proposal(Runnable hostAction) {
+            this.from = null;
+            this.msg = null;
+            this.hostAction = hostAction;
         }
     }
 
@@ -86,8 +98,20 @@ public class HostServer {
 
     private final PlayerKeys hostKeys;
 
+
+
+    //change too about 50
+    public static final long DEFAULT_WELCOME_GRANT = 1000L;
+
     public HostServer(int port, Path logFile, String hostName, String hostUserId,
                       PlayerKeys hostKeys, PeerCache peerCache) throws IOException {
+        this(port, logFile, hostName, hostUserId, hostKeys, peerCache, DEFAULT_WELCOME_GRANT);
+    }
+
+    public HostServer(int port, Path logFile, String hostName, String hostUserId,
+                      PlayerKeys hostKeys, PeerCache peerCache,
+                      long welcomeGrantAmount) throws IOException {
+        this.welcomeGrantAmount = welcomeGrantAmount;
         this.port = port;
         this.hostName = hostName;
         this.hostUserId = hostUserId;
@@ -102,13 +126,32 @@ public class HostServer {
         }
 
         this.state = EventApplier.replay(log);
-        System.out.println("[host] replayed " + log.lastSeq() + " events");
+
+        // A host with no genesis event has no market to serve. Refusing here is what
+        // stops a market being created silently, as a side effect of clicking Host.
+        if (state.marketId() == null) {
+            throw new IOException("this log holds no market — create one before hosting");
+        }
+
+        System.out.println("[host] serving '" + state.marketName() + "' ("
+                + state.marketId() + ") — replayed " + log.lastSeq() + " events");
     }
 
     private final CountDownLatch bound = new CountDownLatch(1);
     private volatile IOException bindError;
 
     public void start() throws IOException {
+        // Both of these exist because MarketBootstrap writes MarketCreated straight to
+        // the log, bypassing processProposal — so the KeyRegistered path that normally
+        // registers a player and issues their grant never runs for whoever is hosting.
+        try {
+            ensureHostRegistered();
+            issueWelcomeGrant(creatorUserId());
+            issueWelcomeGrant(hostUserIdAsUuid());
+        } catch (Exception e) {
+            System.err.println("[host] startup grants failed: " + e.getMessage());
+        }
+
         sequencerThread = new Thread(this::sequencerLoop, "market-sequencer");
         sequencerThread.setDaemon(true);
         sequencerThread.start();
@@ -160,6 +203,79 @@ public class HostServer {
 
     // ─────────── per-connection reader thread ───────────
 
+    // Host-wide, unlike the per-connection limiter below: Query/MigrateRequest/CatchUp
+    // are one-shot and pre-handshake, so a fresh socket resets a per-connection budget
+    // to zero — the thing that actually needs bounding is how often anyone reachable
+    // can make this host do RSA verification over an arbitrary supplied history before
+    // any identity is established.
+    private final RateLimiter preAuthLimiter = new RateLimiter(20, 10_000);
+
+    /**
+     * Ceiling on how much an unauthenticated sender can accumulate in memory here.
+     *
+     * preAuthLimiter above only ever sees a request's *first* frame — the follow-up
+     * chunks are read inside handleMigrate/handleCatchUp, past the gate. Without a
+     * ceiling, one admitted request could stream frames at us indefinitely before any
+     * verification runs. Generous enough that no real market approaches it.
+     */
+    private static final int MAX_BULK_LINES = 200_000;
+
+    /**
+     * Reads the rest of a chunked bulk transfer, bounded. Returns null and sends the
+     * caller's reply if the sender breaks the protocol or overruns the ceiling.
+     */
+    private List<String> accumulateChunks(MessageChannel channel, List<String> firstLines,
+                                          boolean firstComplete, Class<? extends Message> expected,
+                                          Message reply, String what) throws IOException {
+        List<String> lines = new ArrayList<>();
+        if (firstLines != null) lines.addAll(firstLines);
+        boolean complete = firstComplete;
+        int frames = 1;
+
+        while (!complete) {
+            if (lines.size() > MAX_BULK_LINES) {
+                setReason(reply, "that history is too large to accept");
+                channel.send(reply);
+                return null;
+            }
+            Message next = channel.receive();
+            if (!expected.isInstance(next)) {
+                setReason(reply, "expected the rest of the " + what);
+                channel.send(reply);
+                return null;
+            }
+            if (next instanceof Message.MigrateRequest) {
+                Message.MigrateRequest r = (Message.MigrateRequest) next;
+                if (r.logLines != null) lines.addAll(r.logLines);
+                complete = r.complete;
+            } else {
+                Message.CatchUp r = (Message.CatchUp) next;
+                if (r.logLines != null) lines.addAll(r.logLines);
+                complete = r.complete;
+            }
+            frames++;
+        }
+
+        if (lines.size() > MAX_BULK_LINES) {
+            setReason(reply, "that history is too large to accept");
+            channel.send(reply);
+            return null;
+        }
+        if (frames > 1) {
+            System.out.println("[host] received " + lines.size() + " events for the "
+                    + what + " in " + frames + " chunks");
+        }
+        return lines;
+    }
+
+    private static void setReason(Message reply, String reason) {
+        if (reply instanceof Message.MigrateResult) {
+            ((Message.MigrateResult) reply).reason = reason;
+        } else if (reply instanceof Message.CatchUpResult) {
+            ((Message.CatchUpResult) reply).reason = reason;
+        }
+    }
+
     private void handleClient(Socket socket) {
         MessageChannel channel = null;
         RateLimiter limiter = new RateLimiter(30, 10_000);   // 30 proposals per 10s
@@ -169,9 +285,17 @@ public class HostServer {
             socket.setSoTimeout(10_000);
 
             channel = new MessageChannel(socket);
-            System.out.println("[host] connection from " + channel.remoteAddress());
 
             Message first = channel.receive();
+
+            if (first instanceof Message.Query
+                    || first instanceof Message.MigrateRequest
+                    || first instanceof Message.CatchUp) {
+                if (!preAuthLimiter.allow()) {
+                    sendError(channel, "rate limited");
+                    return;
+                }
+            }
 
             if (first instanceof Message.Query) {
                 Message.Query q = (Message.Query) first;
@@ -184,6 +308,9 @@ public class HostServer {
                 reply.clientCount = clients.size();
                 reply.protocolVersion = PROTOCOL_VERSION;
                 reply.publicKey = hostKeys.publicKeyString();
+                reply.marketId = state.marketId() != null
+                        ? state.marketId().toString() : null;
+                reply.marketName = state.marketName();
                 try {
                     reply.signature = hostKeys.sign(Probe.queryPayload(reply, q.nonce));
                 } catch (GeneralSecurityException e) {
@@ -193,10 +320,25 @@ public class HostServer {
                 return;   // probe done, close the connection
             }
 
+            if (first instanceof Message.MigrateRequest) {
+                handleMigrate(channel, (Message.MigrateRequest) first);
+                return;   // one-shot, like a probe
+            }
+
+            if (first instanceof Message.CatchUp) {
+                handleCatchUp(channel, (Message.CatchUp) first);
+                return;
+            }
+
             if (!(first instanceof Message.Hello)) {
                 sendError(channel, "expected Hello as first message");
                 return;
             }
+
+            // Logged here rather than on accept: discovery polls open a connection every
+            // few seconds and close it again, and printing those as connects/disconnects
+            // buried the real ones.
+            System.out.println("[host] connection from " + channel.remoteAddress());
 
             if (!handshake(channel, (Message.Hello) first)) {
                 return;   // handshake sent its own Error
@@ -241,10 +383,15 @@ public class HostServer {
             }
         } finally {
             if (channel != null) {
-                clients.remove(channel);
-                int remaining = clients.size();
+                // Only announce a disconnect for something that was actually a live
+                // client — a probe was never in the set, and reporting it as a
+                // departure made the count jump around for no reason.
+                boolean wasLive = clients.remove(channel);
                 try { channel.close(); } catch (IOException ignored) {}
-                System.out.println("[host] client disconnected (" + remaining + " remain)");
+                if (wasLive) {
+                    System.out.println("[host] client disconnected ("
+                            + clients.size() + " remain)");
+                }
             }
         }
     }
@@ -252,6 +399,8 @@ public class HostServer {
     /** Returns true if the client is caught up and should join the live set. */
     private boolean handshake(MessageChannel channel, Message.Hello hello) throws IOException {
         if (!PROTOCOL_VERSION.equals(hello.protocolVersion)) {
+            System.out.println("[host] refused " + hello.displayName + " — their protocol "
+                    + hello.protocolVersion + ", ours " + PROTOCOL_VERSION);
             sendError(channel, "protocol version mismatch — server is " + PROTOCOL_VERSION);
             return false;
         }
@@ -269,19 +418,64 @@ public class HostServer {
             return false;
         }
 
-        if (!keyRegistry.register(claimedUser, hello.publicKey)) {
+        // Admission is decided by the log, not by known-keys.json. Two TOFU registries
+        // that can disagree is the same hazard D1 removed from event verification: here
+        // it locked a player out of their own market whenever the side file went stale,
+        // with no in-game way back. The log is authoritative for who owns an identity;
+        // if it has no key for them yet, KeyRegistered will settle it, self-certified.
+        String knownKey = state.publicKeyOf(claimedUser);
+        if (knownKey != null && !knownKey.equals(hello.publicKey)) {
             System.err.println("[host] REFUSED " + claimedUser
-                    + " — presented a key that doesn't match the one on record");
-            sendError(channel, "public key does not match registered identity");
+                    + " — key does not match the one registered in this market");
+            sendError(channel, Refusal.KEY_MISMATCH,
+                    "your signing key doesn't match the one this market has for you"
+                            + " — if you moved computers, copy your identity file across");
+            return false;
+        }
+
+        // Still recorded, for peer display and so a changed key is visible in the logs,
+        // but it no longer decides anything.
+        keyRegistry.register(claimedUser, hello.publicKey);
+
+        // Market identity is checked before sequence numbers, because "you are on a
+        // different market" and "you have diverged from this market" are different
+        // problems with different fixes, and the seq/hash check cannot tell them apart.
+        String ourMarket = state.marketId() != null ? state.marketId().toString() : null;
+
+        if (hello.marketId == null) {
+            // No history at all — free to adopt this market. This is the bootstrap
+            // path, and it must keep working: it is how anyone ever joins.
+            if (hello.lastSeq != 0) {
+                sendError(channel, Refusal.NO_IDENTITY, "your log has " + hello.lastSeq
+                        + " events but belongs to no market — it predates market identity");
+                return false;
+            }
+        } else if (!hello.marketId.equals(ourMarket)) {
+            System.err.println("[host] REFUSED " + claimedUser + " — different market ("
+                    + hello.marketId + " vs " + ourMarket + ")");
+            String theirs = hello.marketName != null ? hello.marketName : "another market";
+            sendError(channel, Refusal.DIFFERENT_MARKET,
+                    "you hold '" + theirs + "', this host serves '" + state.marketName()
+                            + "' — separate economies, which cannot be merged");
             return false;
         }
 
         // Client ahead of us: we're stale, or they're on a different history.
         if (hello.lastSeq > log.lastSeq()) {
-            System.err.println("[host] REFUSED: client at seq " + hello.lastSeq
-                    + " is ahead of server at " + log.lastSeq());
-            sendError(channel, "client is ahead of server (client " + hello.lastSeq
-                    + ", server " + log.lastSeq() + ")");
+            // Not a terminal refusal, unlike the two above: we're telling them where our
+            // head is so they can work out whether they merely extend us — which we can't
+            // tell from here — and offer the tail back. Reads as a failure on stderr when
+            // it is usually the first half of a successful fast-forward.
+            System.out.println("[host] behind: client at seq " + hello.lastSeq
+                    + ", we're at " + log.lastSeq()
+                    + " — sent our head so they can offer a catch-up");
+            Message.Error err = new Message.Error();
+            err.code = Refusal.AHEAD;
+            err.reason = "you have events this host doesn't (you " + hello.lastSeq
+                    + ", host " + log.lastSeq() + ")";
+            err.hostSeq = log.lastSeq();
+            err.hostHash = log.lastHash();
+            channel.send(err);
             return false;
         }
 
@@ -290,7 +484,8 @@ public class HostServer {
         if (ourHash == null || !ourHash.equals(hello.lastHash)) {
             System.err.println("[host] FORK DETECTED at seq " + hello.lastSeq
                     + " — client hash " + hello.lastHash + ", server hash " + ourHash);
-            sendError(channel, "fork detected at seq " + hello.lastSeq);
+            sendError(channel, Refusal.FORK, "your history diverged from this market at"
+                    + " event " + hello.lastSeq);
             return false;
         }
 
@@ -306,14 +501,8 @@ public class HostServer {
                     addressOf(channel), hello.hostPort,hello.publicKey);
         }
 
-        List<SequencedEvent> missing = log.readFrom(hello.lastSeq + 1);
-        Message.Sync sync = new Message.Sync();
-        sync.logLines = log.rawLinesFrom(hello.lastSeq + 1);
-        sync.complete = true;
-        sync.hostUserId = hostUserId;
-        sync.hostName = hostName;
-        sync.hostPort = port;
-        sync.hostPublicKey = hostKeys.publicKeyString();
+        List<String> raw = log.rawLinesFrom(hello.lastSeq + 1);
+
         // Don't propagate loopback addresses — they're only valid on the machine
         // that recorded them.
         List<PeerCache.Peer> shareable = new ArrayList<>();
@@ -324,12 +513,272 @@ public class HostServer {
                 }
             }
         }
-        sync.knownPeers = shareable;
 
-        channel.send(sync);
-        System.out.println("[host] synced " + missing.size() + " events to "
-                + channel.remoteAddress());
+        // A fresh joiner syncs from seq 1, so this is the bulk path that outgrows one
+        // frame first. Identity and peers ride on the first chunk only; the client has
+        // everything it needs to set up before the history finishes arriving.
+        List<List<String>> chunks = MessageChannel.chunkByByteBudget(raw);
+        for (int i = 0; i < chunks.size(); i++) {
+            Message.Sync sync = new Message.Sync();
+            sync.logLines = chunks.get(i);
+            sync.complete = (i == chunks.size() - 1);
+            if (i == 0) {
+                sync.hostUserId = hostUserId;
+                sync.hostName = hostName;
+                sync.hostPort = port;
+                sync.hostPublicKey = hostKeys.publicKeyString();
+                sync.marketId = ourMarket;
+                sync.marketName = state.marketName();
+                sync.knownPeers = shareable;
+            }
+            channel.send(sync);
+        }
+
+        System.out.println("[host] synced " + raw.size() + " events to "
+                + channel.remoteAddress()
+                + (chunks.size() > 1 ? " in " + chunks.size() + " chunks" : ""));
         return true;
+    }
+
+    /**
+     * Honours a migration from a market this player is abandoning.
+     *
+     * The branch is verified here, on the connection thread, because checking an RSA
+     * signature per event over a whole history is far too slow to run on the sequencer
+     * — but the resulting write is queued, so the log still only ever has one writer.
+     * The claim is recomputed from the verified branch, never taken from the request.
+     */
+    private void handleMigrate(MessageChannel channel, Message.MigrateRequest first) {
+        Message.MigrateResult reply = new Message.MigrateResult();
+        try {
+            // A whole history can arrive as several chunks — see MessageChannel's
+            // CHUNK_BUDGET_BYTES — so keep reading until the sender marks the last one,
+            // accumulating before the expensive verify runs once over all of it.
+            List<String> lines = accumulateChunks(channel, first.logLines, first.complete,
+                    Message.MigrateRequest.class, reply, "migration request");
+            if (lines == null) return;
+
+            UUID who = UUID.fromString(first.userId);
+
+            MarketArchive.Verified foreign = MarketArchive.verifyLines(lines);
+
+            if (foreign.state.marketId().equals(state.marketId())) {
+                reply.reason = "that is this market, not a different one";
+                channel.send(reply);
+                return;
+            }
+            if (!foreign.state.isRegistered(who)) {
+                reply.reason = "you have no identity in that market";
+                channel.send(reply);
+                return;
+            }
+
+            NetPosition position = NetPosition.of(foreign.state, who);
+            if (position.isEmpty()) {
+                reply.reason = "you hold nothing in that market";
+                channel.send(reply);
+                return;
+            }
+
+            Event.MigrateBalance mb = new Event.MigrateBalance();
+            mb.userId = hostUserIdAsUuid();
+            mb.marketId = state.marketId();
+            mb.fromMarketId = foreign.state.marketId();
+            mb.fromMarketName = foreign.state.marketName();
+            mb.fromHeadSeq = foreign.headSeq;
+            mb.fromHeadHash = foreign.headHash;
+            mb.beneficiary = who;
+            mb.credits = position.credits;
+            mb.items = position.items;
+            mb.foreignParticipants = new ArrayList<>(foreign.state.registeredUsers());
+            mb.clientEventId = UUID.randomUUID().toString();
+            mb.timestamp = System.currentTimeMillis();
+
+            // Hand the write to the sequencer and wait for its verdict, so the client
+            // learns whether it actually landed before it resets its own log.
+            final CountDownLatch done = new CountDownLatch(1);
+            final String[] failure = new String[1];
+
+            if (!queue.offer(new Proposal(() -> {
+                try {
+                    failure[0] = appendHostEvent(mb);
+                } catch (Exception e) {
+                    failure[0] = "host error: " + e.getMessage();
+                } finally {
+                    done.countDown();
+                }
+            }))) {
+                reply.reason = "server busy";
+                channel.send(reply);
+                return;
+            }
+
+            if (!done.await(10, TimeUnit.SECONDS)) {
+                reply.reason = "timed out waiting for the host to record it";
+                channel.send(reply);
+                return;
+            }
+
+            if (failure[0] != null) {
+                reply.reason = failure[0];
+            } else {
+                reply.accepted = true;
+                reply.credits = position.credits;
+                reply.summary = position.describe();
+                System.out.println("[host] migrated " + position.describe() + " for " + who
+                        + " from '" + mb.fromMarketName + "'");
+            }
+            channel.send(reply);
+
+        } catch (MarketArchive.InvalidArchive e) {
+            reply.reason = "that history failed verification: " + e.getMessage();
+            channel.send(reply);
+        } catch (Exception e) {
+            reply.reason = "could not process migration: " + e.getMessage();
+            channel.send(reply);
+        }
+    }
+
+    /** Validates, signs, appends and broadcasts an event the host authored. Returns
+     *  null on success, or why it was refused. Sequencer thread only. */
+    private String appendHostEvent(Event event) throws IOException {
+        SequencedEvent probe = new SequencedEvent();
+        probe.seq = log.lastSeq() + 1;
+        probe.event = event;
+
+        EventApplier.Result check = EventApplier.validate(state, probe);
+        if (!check.accepted) return check.reason;
+
+        String signature;
+        try {
+            signature = hostKeys.sign(EventCanonical.canonicalPayload(event));
+        } catch (GeneralSecurityException e) {
+            return "could not sign: " + e.getMessage();
+        }
+
+        SequencedEvent se = log.append(event, signature);
+        EventApplier.Result result = EventApplier.apply(state, se);
+        if (!result.accepted) return result.reason;
+
+        System.out.println("[host] seq " + se.seq + " "
+                + event.getClass().getSimpleName());
+        Message.Accepted acc = new Message.Accepted();
+        acc.logLine = log.rawLineFor(se.seq);
+        broadcast(acc);
+        return null;
+    }
+
+    /**
+     * Fast-forwards this host onto a longer branch of the market it already serves.
+     *
+     * Safe precisely because it is a fast-forward and nothing else: the offered events
+     * must chain onto our current head, carry valid signatures, and validate against
+     * cumulative state — the same three tests they'd have faced arriving live. If our
+     * head isn't an ancestor of theirs the chain check fails and this is a fork, which
+     * is a different problem with a different answer.
+     */
+    private void handleCatchUp(MessageChannel channel, Message.CatchUp req) {
+        Message.CatchUpResult reply = new Message.CatchUpResult();
+        try {
+            // Chunked like a migration, and for the same reason: there is no bound on
+            // how far a host can have fallen behind its own market.
+            final List<String> offered = accumulateChunks(channel, req.logLines, req.complete,
+                    Message.CatchUp.class, reply, "catch-up offer");
+            if (offered == null) return;
+
+            if (offered.isEmpty()) {
+                reply.reason = "nothing offered";
+                channel.send(reply);
+                return;
+            }
+
+            final CountDownLatch done = new CountDownLatch(1);
+            final String[] failure = new String[1];
+            final int[] applied = new int[1];
+
+            if (!queue.offer(new Proposal(() -> {
+                try {
+                    adoptLines(offered, applied);
+                } catch (Exception e) {
+                    failure[0] = e.getMessage();
+                } finally {
+                    done.countDown();
+                }
+            }))) {
+                reply.reason = "server busy";
+                channel.send(reply);
+                return;
+            }
+
+            if (!done.await(30, TimeUnit.SECONDS)) {
+                reply.reason = "timed out";
+                channel.send(reply);
+                return;
+            }
+
+            // applied[0] is filled in as adoptLines goes, so it reflects what actually
+            // landed even when it stops partway — the host has already broadcast those
+            // events to its live clients by the time a later one fails, so telling the
+            // caller "nothing happened" would be wrong, not just uninformative.
+            reply.applied = applied[0];
+            if (failure[0] != null) {
+                reply.reason = failure[0];
+            } else {
+                reply.accepted = true;
+            }
+            System.out.println("[host] caught up " + applied[0] + " events from "
+                    + req.userId + " — now at seq " + log.lastSeq()
+                    + (failure[0] != null ? " (stopped: " + failure[0] + ")" : ""));
+            channel.send(reply);
+
+        } catch (Exception e) {
+            reply.reason = "could not catch up: " + e.getMessage();
+            channel.send(reply);
+        }
+    }
+
+    /**
+     * Sequencer thread only. Throws with a reason if any line is unacceptable.
+     *
+     * Takes the counter to increment as an out-parameter rather than returning a count,
+     * so a caller reading it from the catch block still sees how many events were
+     * adopted before the one that failed — those are already applied and broadcast,
+     * not rolled back.
+     */
+    private void adoptLines(List<String> lines, int[] appliedCounter) throws IOException {
+        for (String line : lines) {
+            SequencedEvent se;
+            try {
+                se = EventLog.parseLine(line);
+            } catch (Exception e) {
+                throw new IOException("unreadable event: " + e.getMessage());
+            }
+
+            if (se.seq != log.lastSeq() + 1) {
+                throw new IOException("event " + se.seq + " doesn't follow our head "
+                        + log.lastSeq() + " — this is a fork, not a catch-up");
+            }
+
+            String problem = EventVerifier.verify(state, se.event, se.signature);
+            if (problem != null) {
+                throw new IOException("event " + se.seq + ": " + problem);
+            }
+
+            EventApplier.Result check = EventApplier.validate(state, se);
+            if (!check.accepted) {
+                throw new IOException("event " + se.seq + " invalid here: " + check.reason);
+            }
+
+            // appendRaw re-checks seq and prevHash against our head, so a branch that
+            // doesn't actually descend from us is refused at the file level too.
+            log.appendRaw(line);
+            EventApplier.apply(state, se);
+            appliedCounter[0]++;
+
+            Message.Accepted acc = new Message.Accepted();
+            acc.logLine = line;
+            broadcast(acc);
+        }
     }
 
     /** Extracts just the IP from "/127.0.0.1:55148". */
@@ -353,7 +802,11 @@ public class HostServer {
         while (running) {
             try {
                 Proposal p = queue.take();
-                processProposal(p);
+                if (p.hostAction != null) {
+                    p.hostAction.run();
+                } else {
+                    processProposal(p);
+                }
             } catch (InterruptedException e) {
                 return;
             } catch (Exception e) {
@@ -386,23 +839,13 @@ public class HostServer {
             return;
         }
 
-        // Verify the signature before anything else.
-        if (msg.signature == null || msg.signature.isEmpty()) {
-            reject(p.from, msg.clientEventId, "unsigned proposal");
-            return;
-        }
-
-        PublicKey key = keyRegistry.lookup(event.userId);
-        if (key == null) {
-            reject(p.from, msg.clientEventId, "unknown identity");
-            return;
-        }
-
-        String payload = EventCanonical.canonicalPayload(event);
-        if (!PlayerKeys.verify(payload, msg.signature, key)) {
-            System.err.println("[host] BAD SIGNATURE from " + event.userId
-                    + " — possible impersonation attempt");
-            reject(p.from, msg.clientEventId, "invalid signature");
+        // Verified against the log's key directory, not known-keys.json — so the host
+        // and every replica reach the same verdict about the same event. See
+        // EventVerifier for why two sources of truth here was a hazard.
+        String problem = EventVerifier.verify(state, event, msg.signature);
+        if (problem != null) {
+            System.err.println("[host] REFUSED event from " + event.userId + ": " + problem);
+            reject(p.from, msg.clientEventId, problem);
             return;
         }
 
@@ -418,8 +861,10 @@ public class HostServer {
             return;
         }
 
-        // Valid — now it becomes history.
-        SequencedEvent se = log.append(event);
+        // Valid — now it becomes history. The signature is stored alongside the event
+        // so anyone replaying this log later can check authorship without having been
+        // present when it was written.
+        SequencedEvent se = log.append(event, msg.signature);
         EventApplier.Result result = EventApplier.apply(state, se);
 
         if (result.accepted) {
@@ -427,12 +872,125 @@ public class HostServer {
             Message.Accepted acc = new Message.Accepted();
             acc.logLine = log.rawLineFor(se.seq);
             broadcast(acc);
+
+            // A newly registered identity gets its starting balance immediately. Done
+            // on the sequencer thread, so it lands right after the registration it
+            // responds to and can't interleave with anything.
+            if (event instanceof Event.KeyRegistered) {
+                issueWelcomeGrant(event.userId);
+            }
         } else {
             // Shouldn't happen — validate said yes. Loud, because it means the two
             // paths disagree, which is a bug.
             System.err.println("[host] BUG: validate passed but apply rejected: " + result.reason);
             reject(p.from, msg.clientEventId, result.reason);
         }
+    }
+
+    /**
+     * Starting balance for an identity new to this market. Zero disables grants
+     * entirely — a reasonable choice for a public deployment that would rather all
+     * currency be earned than issued.
+     */
+    private final long welcomeGrantAmount;
+
+    private UUID creatorUserId() {
+        return state.creator();
+    }
+
+    /**
+     * Puts the host's own key in the log if it isn't already there.
+     *
+     * The host authors events of its own — welcome grants — and EventApplier requires
+     * an event's author to be registered. A host that never registers can't issue any,
+     * which is the state a dedicated server lands in when it serves a market it didn't
+     * create: it never self-connects, so nothing else would ever register it.
+     */
+    private void ensureHostRegistered() throws IOException {
+        UUID me;
+        try {
+            me = hostUserIdAsUuid();
+        } catch (IllegalArgumentException e) {
+            System.err.println("[host] malformed host userId — cannot register: " + hostUserId);
+            return;
+        }
+        if (state.isRegistered(me)) return;
+
+        Event.KeyRegistered kr = new Event.KeyRegistered();
+        kr.userId = me;
+        kr.marketId = state.marketId();
+        kr.publicKey = hostKeys.publicKeyString();
+        kr.clientEventId = UUID.randomUUID().toString();
+        kr.timestamp = System.currentTimeMillis();
+
+        SequencedEvent probe = new SequencedEvent();
+        probe.seq = log.lastSeq() + 1;
+        probe.event = kr;
+        EventApplier.Result check = EventApplier.validate(state, probe);
+        if (!check.accepted) {
+            System.err.println("[host] could not register host identity: " + check.reason);
+            return;
+        }
+
+        String signature;
+        try {
+            signature = hostKeys.sign(EventCanonical.canonicalPayload(kr));
+        } catch (GeneralSecurityException e) {
+            System.err.println("[host] could not sign host registration: " + e.getMessage());
+            return;
+        }
+
+        SequencedEvent se = log.append(kr, signature);
+        if (EventApplier.apply(state, se).accepted) {
+            System.out.println("[host] seq " + se.seq + " KeyRegistered (host identity)");
+        }
+    }
+
+    private void issueWelcomeGrant(UUID userId) throws IOException {
+        if (welcomeGrantAmount <= 0) return;
+        if (userId == null) return;
+        if (state.hasBeenGranted(userId)) return;
+
+        Event.WelcomeGrant wg = new Event.WelcomeGrant();
+        wg.userId = hostUserIdAsUuid();
+        wg.marketId = state.marketId();
+        wg.targetUserId = userId;
+        wg.amount = welcomeGrantAmount;
+        wg.clientEventId = UUID.randomUUID().toString();
+        wg.timestamp = System.currentTimeMillis();
+
+        SequencedEvent probe = new SequencedEvent();
+        probe.seq = log.lastSeq() + 1;
+        probe.event = wg;
+        EventApplier.Result check = EventApplier.validate(state, probe);
+        if (!check.accepted) {
+            // Was a silent return, which made a server that issued no grants at all
+            // impossible to diagnose from the console.
+            System.err.println("[host] welcome grant for " + userId
+                    + " refused: " + check.reason);
+            return;
+        }
+
+        String signature;
+        try {
+            signature = hostKeys.sign(EventCanonical.canonicalPayload(wg));
+        } catch (GeneralSecurityException e) {
+            System.err.println("[host] could not sign welcome grant: " + e.getMessage());
+            return;
+        }
+
+        SequencedEvent se = log.append(wg, signature);
+        if (EventApplier.apply(state, se).accepted) {
+            System.out.println("[host] seq " + se.seq + " WelcomeGrant " + welcomeGrantAmount
+                    + " to " + userId);
+            Message.Accepted acc = new Message.Accepted();
+            acc.logLine = log.rawLineFor(se.seq);
+            broadcast(acc);
+        }
+    }
+
+    private UUID hostUserIdAsUuid() {
+        return UUID.fromString(hostUserId);
     }
 
     private void broadcast(Message msg) {
@@ -452,9 +1010,32 @@ public class HostServer {
         to.send(r);
     }
 
+    /**
+     * Refusal kinds a client can act on. The prose changes; these don't.
+     *
+     * DIFFERENT_MARKET and FORK both mean "your history can't join mine", but the
+     * remedies differ: one is "you're in the wrong place", the other is "your branch
+     * diverged". Telling them apart is the whole point of market identity.
+     */
+    public static final class Refusal {
+        public static final String DIFFERENT_MARKET = "different_market";
+        public static final String FORK             = "fork";
+        public static final String AHEAD            = "ahead";
+        /** History, but no MarketCreated — a log written before market identity. */
+        public static final String NO_IDENTITY      = "no_identity";
+        /** Right identity, wrong signing key — usually a moved or lost key file. */
+        public static final String KEY_MISMATCH     = "key_mismatch";
+        private Refusal() {}
+    }
+
     private void sendError(MessageChannel channel, String reason) {
+        sendError(channel, null, reason);
+    }
+
+    private void sendError(MessageChannel channel, String code, String reason) {
         Message.Error err = new Message.Error();
         err.reason = reason;
+        err.code = code;
         channel.send(err);
     }
 
@@ -480,9 +1061,19 @@ public class HostServer {
         String hostUserId = args.length > 3 ? args[3]
                 : "00000000-0000-0000-0000-0000000000ff";
 
+        String marketName = args.length > 4 ? args[4] : hostName + "'s market";
+
         System.out.println("[host] log file: " + logFile.toAbsolutePath());
         PlayerKeys keys = PlayerKeys.loadOrCreate(logFile.resolveSibling("server-identity.key"));
         PeerCache peers = new PeerCache(logFile.resolveSibling("server-peers.json"));
+
+        // A dedicated server starting on an empty log is deliberately creating a
+        // market — unlike a player clicking Host, there is no ambiguity about intent.
+        EventLog log = new EventLog(logFile);
+        if (log.lastSeq() == 0) {
+            MarketBootstrap.createMarket(log, UUID.fromString(hostUserId), marketName, keys);
+        }
+
         new HostServer(port, logFile, hostName, hostUserId, keys, peers).start();
     }
 }

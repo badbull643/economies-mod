@@ -32,19 +32,20 @@ public class TestClient {
                 return;
             }
 
-            // Propose one event
-            Event.InjectCredits ic = new Event.InjectCredits();
-            ic.userId = UUID.fromString(userId);
-            ic.targetUserId = ic.userId;
-            ic.amount = 1000;
-            ic.timestamp = System.currentTimeMillis();
+            // Propose one event. Unsigned, so the host will reject it — this harness
+            // exists to exercise framing and sync, not the proposal path.
+            Event.Deposit d = new Event.Deposit();
+            d.userId = UUID.fromString(userId);
+            d.itemId = "minecraft:iron_ingot";
+            d.quantity = 1;
+            d.timestamp = System.currentTimeMillis();
 
             Message.Propose p = new Message.Propose();
             p.clientEventId = UUID.randomUUID().toString();
-            p.eventType = "InjectCredits";
-            p.eventJson = new Gson().toJson(ic);
+            p.eventType = "Deposit";
+            p.eventJson = new Gson().toJson(d);
             ch.send(p);
-            System.out.println("[" + label + "] proposed InjectCredits");
+            System.out.println("[" + label + "] proposed Deposit");
 
             // Stay connected and print everything that arrives
             System.out.println("[" + label + "] listening...");
