@@ -1537,6 +1537,63 @@ public class MarketTests {
                     fine.problem() == null ? 1 : 0, 1);
         }
 
+        section("X1: a fork reset only offers back what the fork actually cost");
+        {
+            // Orders placed before the divergence point come back on reconnecting,
+            // because that history is shared. Offering those too would invite someone to
+            // place a second copy of an order the host still holds.
+            Path p = scratch("test-branchdiff-x1.jsonl");
+            Files.deleteIfExists(p);
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(p);
+            MarketBootstrap.createMarket(log, ALICE, "fork diff market", keys);
+            UUID marketId = log.marketId();
+
+            Event.Deposit dep = new Event.Deposit();
+            dep.userId = ALICE;
+            dep.marketId = marketId;
+            dep.itemId = IRON;
+            dep.quantity = 100;
+            dep.timestamp = 1L;
+            log.append(dep, keys.sign(EventCanonical.canonicalPayload(dep)));
+
+            // Two orders before the split, two after.
+            long forkSeq = -1;
+            for (int i = 0; i < 4; i++) {
+                Event.PlaceOrder po = new Event.PlaceOrder();
+                po.userId = ALICE;
+                po.marketId = marketId;
+                po.itemId = IRON;
+                po.volume = 5;
+                po.price = 10 + i;      // distinct prices, so a failure is legible
+                po.isBid = false;
+                po.timestamp = 2L + i;
+                SequencedEvent se = log.append(po, keys.sign(EventCanonical.canonicalPayload(po)));
+                if (i == 1) forkSeq = se.seq;    // the last event both branches agree on
+            }
+
+            List<Order> lost = BranchDiff.ordersOnlyAfter(log, forkSeq, ALICE);
+            check("only the post-fork orders are offered back", lost.size(), 2);
+
+            // The boundary is inclusive, and getting it wrong is silent either way: one
+            // order too many invites a duplicate, one too few loses a real order.
+            long lowest = Long.MAX_VALUE;
+            for (Order o : lost) lowest = Math.min(lowest, o.value());
+            check("the order at the fork point is not among them", lowest, 12);
+
+            check("someone else's orders are not offered to us",
+                    BranchDiff.ordersOnlyAfter(log, forkSeq, BOB).size(), 0);
+
+            // A market that never diverged loses nothing by this measure.
+            check("no divergence, nothing lost",
+                    BranchDiff.ordersOnlyAfter(log, log.lastSeq(), ALICE).size(), 0);
+
+            // And a fork at genesis costs every order placed since.
+            check("a fork at the very start costs all four",
+                    BranchDiff.ordersOnlyAfter(log, 1, ALICE).size(), 4);
+        }
+
         section("W1: an attestation is judged by contradiction, not belief");
         {
             // Nothing here can be verified. What can be done is to notice that two
