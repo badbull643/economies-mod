@@ -92,6 +92,19 @@ public class MarketScreen extends Screen {
     private static final int ROW_STEP = 24;
 
     /**
+     * The control column's internal spacing.
+     *
+     * One gap, and widths derived from the column rather than typed in per row, so
+     * every row ends flush with every other. Hand-picked pixel widths were what left
+     * the rows raggedly different lengths.
+     */
+    private static final int PAD = 6;
+    /** Half a row, allowing for the gap between the two halves. */
+    private static final int HALF_W = (CONTROLS_W - PAD) / 2;
+    /** A short field — a quantity, a price, a port. */
+    private static final int HALF_W_S = 46;
+
+    /**
      * Left edge of the inventory column, or -1 when there isn't room for it.
      *
      * The third column is dropped rather than squeezed when the window is too narrow —
@@ -254,104 +267,104 @@ public class MarketScreen extends Screen {
 
         // ─── TRADING ───
         this.amountField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, 45, FIELD_HEIGHT, new LiteralText("Amount"));
-        this.amountField.setSuggestion("qty");
+                rowX, rowY, HALF_W_S, FIELD_HEIGHT, new LiteralText("Amount"));
+        hint(this.amountField, "qty");
         onScreen(SCREEN_TRADING, this.amountField);
 
         // Built but deliberately NOT registered as a widget. It is now pure storage for
         // the selection — every handler still reads the item from here, and the slot
         // and picker write to it, so none of them had to change. Nothing types into it.
         this.itemField = new TextFieldWidget(this.textRenderer,
-                rowX + 50, rowY, 130, FIELD_HEIGHT, new LiteralText("Item"));
+                rowX + HALF_W_S + PAD, rowY, CONTROLS_W - (HALF_W_S + PAD) * 2, FIELD_HEIGHT, new LiteralText("Item"));
         this.itemField.setMaxLength(64);
         this.itemField.setText(savedItem());
 
         this.itemButton = onScreen(SCREEN_TRADING,
-                new ButtonWidget(rowX + 50, rowY, 130, FIELD_HEIGHT,
+                new ButtonWidget(rowX + HALF_W_S + PAD, rowY, CONTROLS_W - (HALF_W_S + PAD) * 2, FIELD_HEIGHT,
                         new LiteralText("Choose item..."), b -> openPicker()));
 
         this.priceField = new TextFieldWidget(this.textRenderer,
-                rowX + 185, rowY, 45, FIELD_HEIGHT, new LiteralText("Price"));
-        this.priceField.setSuggestion("price");
+                rowX + CONTROLS_W - HALF_W_S, rowY, HALF_W_S, FIELD_HEIGHT, new LiteralText("Price"));
+        hint(this.priceField, "price");
         onScreen(SCREEN_TRADING, this.priceField);
 
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, buttonsY, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, buttonsY, HALF_W, FIELD_HEIGHT,
                 new LiteralText("Buy"), b -> onBuy()));
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + 120, buttonsY, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + HALF_W + PAD, buttonsY, HALF_W, FIELD_HEIGHT,
                 new LiteralText("Sell"), b -> onSell()));
 
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, cancelY, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, cancelY, HALF_W, FIELD_HEIGHT,
                 new LiteralText("Withdraw"), b -> onWithdraw()));
 
         this.cancelField = new TextFieldWidget(this.textRenderer,
-                rowX + 120, cancelY, 45, FIELD_HEIGHT, new LiteralText("Order ID"));
-        this.cancelField.setSuggestion("id");
+                rowX + HALF_W + PAD, cancelY, HALF_W_S, FIELD_HEIGHT, new LiteralText("Order ID"));
+        hint(this.cancelField, "order id");
         onScreen(SCREEN_TRADING, this.cancelField);
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + 170, cancelY, 60, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + HALF_W + PAD + HALF_W_S + PAD, cancelY, CONTROLS_W - (HALF_W + PAD + HALF_W_S + PAD), FIELD_HEIGHT,
                 new LiteralText("Cancel"), b -> onCancel()));
 
         // ─── NETWORK ───
         this.hostField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, 175, FIELD_HEIGHT, new LiteralText("Host"));
+                rowX, rowY, CONTROLS_W - HALF_W_S - PAD, FIELD_HEIGHT, new LiteralText("Host"));
         this.hostField.setMaxLength(64);
         this.hostField.setText(savedHost());
         onScreen(SCREEN_NETWORK, this.hostField);
 
         this.hostPortField = new TextFieldWidget(this.textRenderer,
-                rowX + 185, rowY, 45, FIELD_HEIGHT, new LiteralText("Port"));
+                rowX + CONTROLS_W - HALF_W_S, rowY, HALF_W_S, FIELD_HEIGHT, new LiteralText("Port"));
         this.hostPortField.setText(savedPort());
         onScreen(SCREEN_NETWORK, this.hostPortField);
 
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP, HALF_W, FIELD_HEIGHT,
                 new LiteralText("Connect"), b -> onConnect()));
 
         // Host serves the market this world already holds. With no market there is
         // nothing to serve, so the button is disabled rather than silently creating
         // one — that silent creation is what fragments a friend group into two
         // permanently incompatible economies.
-        this.hostButton = new ButtonWidget(rowX + 120, rowY + ROW_STEP, 110, FIELD_HEIGHT,
+        this.hostButton = new ButtonWidget(rowX + HALF_W + PAD, rowY + ROW_STEP, HALF_W, FIELD_HEIGHT,
                 new LiteralText("Host"), b -> onHost());
         onScreen(SCREEN_NETWORK, this.hostButton);
 
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 2, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 2, HALF_W, FIELD_HEIGHT,
                 new LiteralText("Disconnect"), b -> onDisconnect()));
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX + 120, rowY + ROW_STEP * 2, 110,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX + HALF_W + PAD, rowY + ROW_STEP * 2, HALF_W,
                 FIELD_HEIGHT, new LiteralText("Stop hosting"), b -> onStopHosting()));
 
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 3, 110, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 3, HALF_W, FIELD_HEIGHT,
                 new LiteralText("Refresh hosts"), b -> startPoll()));
 
         // ─── MARKET ───
         this.marketNameField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, 230, FIELD_HEIGHT, new LiteralText("Market name"));
+                rowX, rowY, CONTROLS_W, FIELD_HEIGHT, new LiteralText("Market name"));
         this.marketNameField.setMaxLength(32);
         this.marketNameField.setText(savedMarketName());
-        this.marketNameField.setSuggestion("new market name");
+        hint(this.marketNameField, "new market name");
         onScreen(SCREEN_MARKET, this.marketNameField);
 
         // Positions are assigned per frame by refreshMarketActions, since which of
         // these apply depends on the situation and gaps where a hidden button used to
         // be would read as something missing.
         this.createButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
                         new LiteralText("Create a new market"), b -> onCreateMarket()));
 
         // Sharing a market by file is how someone joins who was never online at the
         // same time as anyone holding it.
         this.importButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
                         new LiteralText("Import one from a file"), b -> onImport()));
 
         this.exportButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
                         new LiteralText("Export to a file"), b -> onExport()));
 
         this.migrateButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
                         new LiteralText("Migrate my position"), b -> onMigrate()));
 
         this.resetButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
                         new LiteralText("Discard and start over"), b -> onReset()));
 
         // ─── SETTINGS ───
@@ -359,15 +372,15 @@ public class MarketScreen extends Screen {
         // been saved since before there was anywhere to see them.
         Settings prefs = settings();
 
-        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY, 230, FIELD_HEIGHT,
+        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
                 "Fill notices in chat", prefs != null && prefs.notifyChat(),
                 on -> { if (settings() != null) settings().setNotifyChat(on); }));
 
-        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY + ROW_STEP, 230, FIELD_HEIGHT,
+        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY + ROW_STEP, CONTROLS_W, FIELD_HEIGHT,
                 "Fill notices above hotbar", prefs != null && prefs.notifyActionBar(),
                 on -> { if (settings() != null) settings().setNotifyActionBar(on); }));
 
-        onScreen(SCREEN_SETTINGS, new IntSlider(rowX, rowY + ROW_STEP * 2, 230,
+        onScreen(SCREEN_SETTINGS, new IntSlider(rowX, rowY + ROW_STEP * 2, CONTROLS_W,
                 FIELD_HEIGHT, "Notice limit", 0, 60,
                 prefs == null ? 20 : prefs.notifyMaxPerMinute(),
                 v -> { if (settings() != null) settings().setNotifyMaxPerMinute(v); }));
@@ -823,33 +836,63 @@ public class MarketScreen extends Screen {
      * as empty panels rather than left out, so the layout is real and adding a panel
      * later is filling one in rather than finding room for it.
      */
+    /**
+     * Three widget slots around one fixture.
+     *
+     * Hosts is permanent and central because it is the only thing here that is always
+     * worth knowing — who is serving, and whether anyone is. The three slots either
+     * side are deliberately empty for now; what belongs in them is a question best
+     * answered by using the thing, not by guessing up front.
+     */
     private void renderHome(MatrixStack m) {
-        int top = rowY - 4;
-        int bottom = top + CONTENT_H - 10;
-        int gap = 6;
-        int leftW = LIST_W;
-        int midX = listX + leftW + gap;
-        int midW = 130;
-        int rightX = midX + midW + gap;
-        int rightW = Math.max(60, (listX + CONTENT_W) - rightX);
-        int half = (bottom - top - gap) / 2;
+        int gap = 8;
+        int top = rowY;
+        int height = CONTENT_H - 16;
+        int total = invX >= 0 ? (invX + INV_W) - listX : CONTENT_W;
 
-        panel(m, listX, top, leftW, bottom - top, "Notice board");
-        panel(m, midX, top, midW, half, "Hosts");
-        renderHostsPanel(m, midX + 4, top + 14, midW - 8, half - 18);
-        panel(m, midX, top + half + gap, midW, half, "Widget");
-        panel(m, rightX, top, rightW, half, "Most traded");
-        panel(m, rightX, top + half + gap, rightW, half, "Widget");
+        int sideW = (total - gap * 2) / 3;
+        int midW = total - gap * 2 - sideW * 2;
+        int midX = listX + sideW + gap;
+        int rightX = midX + midW + gap;
+
+        panel(m, listX, top, sideW, height, "Widget 1");
+
+        int hostsH = height / 2;
+        panel(m, midX, top, midW, hostsH, "Hosts");
+        renderHostsPanel(m, midX + 8, top + 18, midW - 16, hostsH - 24);
+        panel(m, midX, top + hostsH + gap, midW, height - hostsH - gap, "Widget 2");
+
+        panel(m, rightX, top, sideW, height, "Widget 3");
+    }
+
+    /**
+     * The vanilla tooltip frame — near-black fill, violet gradient edge.
+     *
+     * Minecraft has one panel look and this is it, so anything the mod draws itself
+     * uses it rather than inventing a flat modern box that sits oddly beside the
+     * vanilla buttons right next to it.
+     */
+    private void vanillaPanel(MatrixStack m, int x, int y, int w, int h) {
+        final int bg = 0xF0100010;
+        final int edgeTop = 0x505000FF;
+        final int edgeBottom = 0x5028007F;
+
+        fill(m, x - 3, y - 4, x + w + 3, y - 3, bg);
+        fill(m, x - 3, y + h + 3, x + w + 3, y + h + 4, bg);
+        fill(m, x - 3, y - 3, x + w + 3, y + h + 3, bg);
+        fill(m, x - 4, y - 3, x - 3, y + h + 3, bg);
+        fill(m, x + w + 3, y - 3, x + w + 4, y + h + 3, bg);
+
+        fillGradient(m, x - 3, y - 2, x - 2, y + h + 2, edgeTop, edgeBottom);
+        fillGradient(m, x + w + 2, y - 2, x + w + 3, y + h + 2, edgeTop, edgeBottom);
+        fillGradient(m, x - 3, y - 3, x + w + 3, y - 2, edgeTop, edgeTop);
+        fillGradient(m, x - 3, y + h + 2, x + w + 3, y + h + 3, edgeBottom, edgeBottom);
     }
 
     /** A titled empty box. The border makes the layout legible before the content exists. */
     private void panel(MatrixStack m, int x, int y, int w, int h, String title) {
-        fill(m, x, y, x + w, y + h, 0x40000000);
-        fill(m, x, y, x + w, y + 1, 0xFF404040);
-        fill(m, x, y + h - 1, x + w, y + h, 0xFF404040);
-        fill(m, x, y, x + 1, y + h, 0xFF404040);
-        fill(m, x + w - 1, y, x + w, y + h, 0xFF404040);
-        label(m, title, x + 4, y + 4, 0xFFDD66);
+        vanillaPanel(m, x + 4, y + 4, w - 8, h - 8);
+        label(m, title, x + 6, y + 5, 0xFFAA00);
     }
 
     private void renderHostsPanel(MatrixStack m, int x, int y, int w, int h) {
@@ -1933,6 +1976,18 @@ public class MarketScreen extends Screen {
     }
 
     /**
+     * Grey placeholder text that disappears once something is typed.
+     *
+     * setSuggestion on its own draws after whatever is in the field and never stops,
+     * so typing 5 into an amount box left it reading "5qty". The suggestion has to be
+     * cleared and restored as the field fills and empties.
+     */
+    private void hint(TextFieldWidget field, String hint) {
+        field.setSuggestion(field.getText().isEmpty() ? hint : null);
+        field.setChangedListener(text -> field.setSuggestion(text.isEmpty() ? hint : null));
+    }
+
+    /**
      * Chooses what to trade.
      *
      * Still routed through the item field for now, because every handler reads the
@@ -2211,10 +2266,9 @@ public class MarketScreen extends Screen {
         fill(m, 0, 0, this.width, this.height, 0xE0101010);
 
         int[] box = pickerBox();
-        fill(m, box[0] - 1, box[1] - 1, box[0] + box[2] + 1, box[1] + box[3] + 1, 0xFF88CCFF);
-        fill(m, box[0], box[1], box[0] + box[2], box[1] + box[3], 0xFF202020);
+        vanillaPanel(m, box[0], box[1], box[2], box[3]);
 
-        label(m, "Pick an item", box[0] + 8, box[1] + 8, 0x88CCFF);
+        label(m, "Pick an item", box[0] + 8, box[1] + 8, 0xFFAA00);
 
         // Search box, drawn rather than widgeted. It always has focus — the picker is
         // modal and there is nothing else here to type into — so it shows a caret from
@@ -2348,23 +2402,19 @@ public class MarketScreen extends Screen {
 
         int[] first = navRowRect(0);
         int[] last = navRowRect(SCREEN_NAMES.length - 1);
-        int top = first[1] - 2;
-        int bottom = last[1] + last[3] + 2;
+        int top = first[1];
+        int bottom = last[1] + last[3];
 
-        fill(m, first[0] - 2, top - 1, first[0] + NAV_W + 2, bottom + 1, 0xFFFFDD66);
-        fill(m, first[0] - 1, top, first[0] + NAV_W + 1, bottom, 0xF0181818);
+        vanillaPanel(m, first[0], top, NAV_W, bottom - top);
 
         for (int i = 0; i < SCREEN_NAMES.length; i++) {
             int[] r = navRowRect(i);
             boolean here = i == activeScreen;
             boolean hot = within(mouseX, mouseY, r);
-            if (here) {
-                fill(m, r[0], r[1], r[0] + r[2], r[1] + r[3], 0xFF3A3A2A);
-            } else if (hot) {
-                fill(m, r[0], r[1], r[0] + r[2], r[1] + r[3], 0xFF303030);
-            }
-            label(m, SCREEN_NAMES[i], r[0] + 8, r[1] + 4,
-                    here ? 0xFFDD66 : (hot ? 0xFFFFFF : 0xC0C0C0));
+            // Vanilla marks the current entry with a chevron rather than a highlight
+            // block — the selection reads at a glance without another filled rectangle.
+            label(m, (here ? "> " : "  ") + SCREEN_NAMES[i], r[0] + 4, r[1] + 4,
+                    here ? 0xFFAA00 : (hot ? 0xFFFFFF : 0xA0A0A0));
         }
     }
 
@@ -2503,11 +2553,11 @@ public class MarketScreen extends Screen {
         fill(m, 0, 0, this.width, this.height, 0xE0101010);
 
         int[] box = overlayBox(o);
-        int accent = o.kind == Overlay.DANGER ? 0xFFFF6655
-                : o.kind == Overlay.CONFIRM ? 0xFFFFCC66 : 0xFF88CCFF;
+        // Vanilla's own severity colours: red for destructive, yellow for a choice.
+        int accent = o.kind == Overlay.DANGER ? 0xFFFF5555
+                : o.kind == Overlay.CONFIRM ? 0xFFFFAA00 : 0xFF55FFFF;
 
-        fill(m, box[0] - 1, box[1] - 1, box[0] + box[2] + 1, box[1] + box[3] + 1, accent);
-        fill(m, box[0], box[1], box[0] + box[2], box[1] + box[3], 0xFF202020);
+        vanillaPanel(m, box[0], box[1], box[2], box[3]);
 
         int y = box[1] + OVERLAY_PAD;
         label(m, o.title, box[0] + OVERLAY_PAD, y, accent);
