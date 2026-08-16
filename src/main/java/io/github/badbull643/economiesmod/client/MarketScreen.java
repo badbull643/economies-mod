@@ -79,17 +79,8 @@ public class MarketScreen extends Screen {
     private static final int FIELD_HEIGHT = 20;
     private static final long MAX_QTY = 100_000L;
 
-    /** Left column, for whichever list the current destination shows. */
-    private static final int LIST_W = 190;
-    /** Middle column, for that destination's controls. */
-    private static final int CONTROLS_W = 230;
-    /** Right column on Trading, for what you are actually carrying. */
-    private static final int INV_W = 116;
     private static final int COL_GAP = 12;
-    private static final int CONTENT_W = LIST_W + COL_GAP + CONTROLS_W;
-    private static final int CONTENT_W_WIDE = CONTENT_W + COL_GAP + INV_W;
-    private static final int CONTENT_H = 150;
-    private static final int ROW_STEP = 24;
+    private static final int ROW_STEP = 26;
 
     /**
      * The control column's internal spacing.
@@ -99,10 +90,29 @@ public class MarketScreen extends Screen {
      * the rows raggedly different lengths.
      */
     private static final int PAD = 6;
-    /** Half a row, allowing for the gap between the two halves. */
-    private static final int HALF_W = (CONTROLS_W - PAD) / 2;
+
+    // ─── layout, measured against the window rather than fixed ───
+    //
+    // A fixed box stopped the screen overflowing at high GUI scale, but at any normal
+    // size it left three small columns adrift in the middle of a large empty screen.
+    // These are computed per init() from the window, between a floor that keeps the
+    // buttons legible and a ceiling that stops the panels sprawling.
+
+    private static final int MIN_CONTENT_W = 380;
+    private static final int MAX_CONTENT_W = 620;
+    private static final int MIN_CONTENT_H = 150;
+    private static final int MAX_CONTENT_H = 260;
+    /** Below this the inventory column is not worth showing at all. */
+    private static final int MIN_INV_W = 96;
+
+    private int listW;
+    private int controlsW;
+    private int invW;
+    private int contentW;
+    private int contentH;
+    private int halfW;
     /** A short field — a quantity, a price, a port. */
-    private static final int HALF_W_S = 46;
+    private int halfWS;
 
     /**
      * Left edge of the inventory column, or -1 when there isn't room for it.
@@ -245,29 +255,49 @@ public class MarketScreen extends Screen {
             screenWidgets.add(new ArrayList<>());
         }
 
-        // A fixed box, centred and clamped, instead of origins derived from the window
-        // size. The percentages this used to use put the bottom row off-screen at GUI
-        // scale 3 and higher, because the rows below them were a fixed pixel height
-        // that the percentage never accounted for.
-        // Widen to three columns only when the window can actually hold them; the
-        // inventory panel is the one that goes, since it repeats what the vanilla
-        // inventory screen already shows.
-        boolean wide = this.width >= CONTENT_W_WIDE + 16;
-        int contentW = wide ? CONTENT_W_WIDE : CONTENT_W;
+        // Sized from the window, between a floor that keeps the controls legible and a
+        // ceiling that stops them sprawling. The old fixed box kept the screen from
+        // overflowing at GUI scale 4, but at any ordinary size it left three small
+        // columns adrift in the middle of a lot of nothing.
+        this.contentW = Math.max(MIN_CONTENT_W,
+                Math.min(MAX_CONTENT_W, this.width - 48));
+        this.contentH = Math.max(MIN_CONTENT_H,
+                Math.min(MAX_CONTENT_H, this.height - 96));
+
+        // The controls take a fixed share; whatever is left is split between the two
+        // panels, favouring the left one because it carries the book and the chart.
+        int usable = contentW - COL_GAP * 2;
+        this.controlsW = Math.max(200, Math.min(280, (int) (usable * 0.36)));
+        int panels = usable - controlsW;
+        this.listW = (int) (panels * 0.58);
+        this.invW = panels - listW;
+
+        // Only dropped when it is genuinely too narrow to read, rather than whenever
+        // the window is not large — it disappearing at ordinary sizes was worse than
+        // it being a little cramped.
+        boolean showInventory = invW >= MIN_INV_W;
+        if (!showInventory) {
+            this.listW = panels;
+            this.invW = 0;
+        }
+
+        this.halfW = (controlsW - PAD) / 2;
+        this.halfWS = Math.max(38, (controlsW - PAD * 2) / 5);
 
         int boxX = Math.max(4, (this.width - contentW) / 2);
-        int boxY = Math.max(30, Math.min((this.height - CONTENT_H) / 2, this.height - CONTENT_H - 30));
+        int boxY = Math.max(34, Math.min((this.height - contentH) / 2,
+                this.height - contentH - 30));
 
         this.listX = boxX;
-        this.rowX = boxX + LIST_W + COL_GAP;
-        this.invX = wide ? rowX + CONTROLS_W + COL_GAP : -1;
-        this.rowY = boxY + 22;
+        this.rowX = boxX + listW + COL_GAP;
+        this.invX = showInventory ? rowX + controlsW + COL_GAP : -1;
+        this.rowY = boxY + 24;
         this.buttonsY = rowY + ROW_STEP;
         this.cancelY = rowY + ROW_STEP * 2;
 
         // ─── TRADING ───
         this.amountField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, HALF_W_S, FIELD_HEIGHT, new LiteralText("Amount"));
+                rowX, rowY, halfWS, FIELD_HEIGHT, new LiteralText("Amount"));
         hint(this.amountField, "qty");
         onScreen(SCREEN_TRADING, this.amountField);
 
@@ -275,68 +305,68 @@ public class MarketScreen extends Screen {
         // the selection — every handler still reads the item from here, and the slot
         // and picker write to it, so none of them had to change. Nothing types into it.
         this.itemField = new TextFieldWidget(this.textRenderer,
-                rowX + HALF_W_S + PAD, rowY, CONTROLS_W - (HALF_W_S + PAD) * 2, FIELD_HEIGHT, new LiteralText("Item"));
+                rowX + halfWS + PAD, rowY, controlsW - (halfWS + PAD) * 2, FIELD_HEIGHT, new LiteralText("Item"));
         this.itemField.setMaxLength(64);
         this.itemField.setText(savedItem());
 
         this.itemButton = onScreen(SCREEN_TRADING,
-                new ButtonWidget(rowX + HALF_W_S + PAD, rowY, CONTROLS_W - (HALF_W_S + PAD) * 2, FIELD_HEIGHT,
+                new ButtonWidget(rowX + halfWS + PAD, rowY, controlsW - (halfWS + PAD) * 2, FIELD_HEIGHT,
                         new LiteralText("Choose item..."), b -> openPicker()));
 
         this.priceField = new TextFieldWidget(this.textRenderer,
-                rowX + CONTROLS_W - HALF_W_S, rowY, HALF_W_S, FIELD_HEIGHT, new LiteralText("Price"));
+                rowX + controlsW - halfWS, rowY, halfWS, FIELD_HEIGHT, new LiteralText("Price"));
         hint(this.priceField, "price");
         onScreen(SCREEN_TRADING, this.priceField);
 
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, buttonsY, HALF_W, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, buttonsY, halfW, FIELD_HEIGHT,
                 new LiteralText("Buy"), b -> onBuy()));
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + HALF_W + PAD, buttonsY, HALF_W, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + halfW + PAD, buttonsY, halfW, FIELD_HEIGHT,
                 new LiteralText("Sell"), b -> onSell()));
 
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, cancelY, HALF_W, FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, cancelY, halfW, FIELD_HEIGHT,
                 new LiteralText("Withdraw"), b -> onWithdraw()));
 
         this.cancelField = new TextFieldWidget(this.textRenderer,
-                rowX + HALF_W + PAD, cancelY, HALF_W_S, FIELD_HEIGHT, new LiteralText("Order ID"));
+                rowX + halfW + PAD, cancelY, halfWS, FIELD_HEIGHT, new LiteralText("Order ID"));
         hint(this.cancelField, "order id");
         onScreen(SCREEN_TRADING, this.cancelField);
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + HALF_W + PAD + HALF_W_S + PAD, cancelY, CONTROLS_W - (HALF_W + PAD + HALF_W_S + PAD), FIELD_HEIGHT,
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + halfW + PAD + halfWS + PAD, cancelY, controlsW - (halfW + PAD + halfWS + PAD), FIELD_HEIGHT,
                 new LiteralText("Cancel"), b -> onCancel()));
 
         // ─── NETWORK ───
         this.hostField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, CONTROLS_W - HALF_W_S - PAD, FIELD_HEIGHT, new LiteralText("Host"));
+                rowX, rowY, controlsW - halfWS - PAD, FIELD_HEIGHT, new LiteralText("Host"));
         this.hostField.setMaxLength(64);
         this.hostField.setText(savedHost());
         onScreen(SCREEN_NETWORK, this.hostField);
 
         this.hostPortField = new TextFieldWidget(this.textRenderer,
-                rowX + CONTROLS_W - HALF_W_S, rowY, HALF_W_S, FIELD_HEIGHT, new LiteralText("Port"));
+                rowX + controlsW - halfWS, rowY, halfWS, FIELD_HEIGHT, new LiteralText("Port"));
         this.hostPortField.setText(savedPort());
         onScreen(SCREEN_NETWORK, this.hostPortField);
 
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP, HALF_W, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP, halfW, FIELD_HEIGHT,
                 new LiteralText("Connect"), b -> onConnect()));
 
         // Host serves the market this world already holds. With no market there is
         // nothing to serve, so the button is disabled rather than silently creating
         // one — that silent creation is what fragments a friend group into two
         // permanently incompatible economies.
-        this.hostButton = new ButtonWidget(rowX + HALF_W + PAD, rowY + ROW_STEP, HALF_W, FIELD_HEIGHT,
+        this.hostButton = new ButtonWidget(rowX + halfW + PAD, rowY + ROW_STEP, halfW, FIELD_HEIGHT,
                 new LiteralText("Host"), b -> onHost());
         onScreen(SCREEN_NETWORK, this.hostButton);
 
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 2, HALF_W, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 2, halfW, FIELD_HEIGHT,
                 new LiteralText("Disconnect"), b -> onDisconnect()));
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX + HALF_W + PAD, rowY + ROW_STEP * 2, HALF_W,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX + halfW + PAD, rowY + ROW_STEP * 2, halfW,
                 FIELD_HEIGHT, new LiteralText("Stop hosting"), b -> onStopHosting()));
 
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 3, HALF_W, FIELD_HEIGHT,
+        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 3, halfW, FIELD_HEIGHT,
                 new LiteralText("Refresh hosts"), b -> startPoll()));
 
         // ─── MARKET ───
         this.marketNameField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, CONTROLS_W, FIELD_HEIGHT, new LiteralText("Market name"));
+                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Market name"));
         this.marketNameField.setMaxLength(32);
         this.marketNameField.setText(savedMarketName());
         hint(this.marketNameField, "new market name");
@@ -346,25 +376,25 @@ public class MarketScreen extends Screen {
         // these apply depends on the situation and gaps where a hidden button used to
         // be would read as something missing.
         this.createButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Create a new market"), b -> onCreateMarket()));
 
         // Sharing a market by file is how someone joins who was never online at the
         // same time as anyone holding it.
         this.importButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Import one from a file"), b -> onImport()));
 
         this.exportButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Export to a file"), b -> onExport()));
 
         this.migrateButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Migrate my position"), b -> onMigrate()));
 
         this.resetButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Discard and start over"), b -> onReset()));
 
         // ─── SETTINGS ───
@@ -372,15 +402,15 @@ public class MarketScreen extends Screen {
         // been saved since before there was anywhere to see them.
         Settings prefs = settings();
 
-        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY, CONTROLS_W, FIELD_HEIGHT,
+        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY, controlsW, FIELD_HEIGHT,
                 "Fill notices in chat", prefs != null && prefs.notifyChat(),
                 on -> { if (settings() != null) settings().setNotifyChat(on); }));
 
-        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY + ROW_STEP, CONTROLS_W, FIELD_HEIGHT,
+        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY + ROW_STEP, controlsW, FIELD_HEIGHT,
                 "Fill notices above hotbar", prefs != null && prefs.notifyActionBar(),
                 on -> { if (settings() != null) settings().setNotifyActionBar(on); }));
 
-        onScreen(SCREEN_SETTINGS, new IntSlider(rowX, rowY + ROW_STEP * 2, CONTROLS_W,
+        onScreen(SCREEN_SETTINGS, new IntSlider(rowX, rowY + ROW_STEP * 2, controlsW,
                 FIELD_HEIGHT, "Notice limit", 0, 60,
                 prefs == null ? 20 : prefs.notifyMaxPerMinute(),
                 v -> { if (settings() != null) settings().setNotifyMaxPerMinute(v); }));
@@ -845,10 +875,12 @@ public class MarketScreen extends Screen {
      * answered by using the thing, not by guessing up front.
      */
     private void renderHome(MatrixStack m) {
-        int gap = 8;
-        int top = rowY;
-        int height = CONTENT_H - 16;
-        int total = invX >= 0 ? (invX + INV_W) - listX : CONTENT_W;
+        int gap = COL_GAP;
+        // Same frame line the other screens use, so switching between them does not
+        // shift everything by a few pixels.
+        int top = rowY - 6;
+        int height = contentH - 18;
+        int total = contentW;
 
         int sideW = (total - gap * 2) / 3;
         int midW = total - gap * 2 - sideW * 2;
@@ -926,7 +958,7 @@ public class MarketScreen extends Screen {
                 + " you lose the detail, never the news.";
 
         int y = rowY + 4;
-        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), LIST_W)) {
+        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW)) {
             this.textRenderer.drawWithShadow(m, line, listX, y, 0xC0C0C0);
             y += 10;
         }
@@ -1081,7 +1113,7 @@ public class MarketScreen extends Screen {
         label(m, heading, x, rowY - 11, 0xFFDD66);
 
         int y = rowY + 4;
-        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), LIST_W)) {
+        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW)) {
             this.textRenderer.drawWithShadow(m, line, x, y, 0xC0C0C0);
             y += 10;
         }
@@ -1091,7 +1123,7 @@ public class MarketScreen extends Screen {
             for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(
                     foreign.reply.hostName + " is running a separate market ('"
                             + foreign.reply.marketName + "'). Migrating carries your"
-                            + " whole position there and abandons this one."), LIST_W)) {
+                            + " whole position there and abandons this one."), listW)) {
                 this.textRenderer.drawWithShadow(m, line, x, y, 0x88CCFF);
                 y += 10;
             }
@@ -1572,6 +1604,19 @@ public class MarketScreen extends Screen {
             }
         }
 
+        // Frames around each column. Without them the controls float in the middle of
+        // an empty screen with nothing saying where one grouping ends and the next
+        // begins — the panels are most of what makes the layout read as a layout.
+        int frameTop = rowY - 6;
+        int frameH = contentH - 18;
+        if (activeScreen != SCREEN_HOME) {
+            vanillaPanel(matrices, listX, frameTop, listW, frameH);
+            vanillaPanel(matrices, rowX - PAD, frameTop, controlsW + PAD * 2, frameH);
+            if (invX >= 0 && activeScreen == SCREEN_TRADING) {
+                vanillaPanel(matrices, invX, frameTop, invW, frameH);
+            }
+        }
+
         // Only the current destination's left column.
         if (activeScreen == SCREEN_TRADING) {
             renderSelectedItem(matrices, listX, rowY - 14, mouseX, mouseY);
@@ -1662,7 +1707,7 @@ public class MarketScreen extends Screen {
     private static int leftView = LEFT_BOOK;
 
     private int[] leftSwitcherRect() {
-        return new int[]{listX, rowY + 6, LIST_W, 12};
+        return new int[]{listX, rowY + 6, listW, 12};
     }
 
     private void renderLeftSwitcher(MatrixStack m, int mouseX, int mouseY) {
@@ -1719,15 +1764,15 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        int viewH = CONTENT_H - 34;
-        noteScrollable("markets", x, y, LIST_W, viewH,
+        int viewH = contentH - 34;
+        noteScrollable("markets", x, y, listW, viewH,
                 ids.size() * MARKET_ROW_H, mouseX, mouseY);
         int rowTop = y - scrollOf("markets");
 
-        beginClip(x, y, LIST_W, viewH);
+        beginClip(x, y, listW, viewH);
         for (String id : ids) {
             Item item = MinecraftIds.idToItem(id);
-            boolean hot = mouseX >= x && mouseX < x + LIST_W
+            boolean hot = mouseX >= x && mouseX < x + listW
                     && mouseY >= rowTop && mouseY < rowTop + MARKET_ROW_H
                     && mouseY >= y && mouseY < y + viewH;
 
@@ -1735,7 +1780,7 @@ public class MarketScreen extends Screen {
                     x, rowTop, null, hot);
 
             String name = this.textRenderer.trimToWidth(
-                    item == Items.AIR ? id : item.getName().getString(), LIST_W - 24);
+                    item == Items.AIR ? id : item.getName().getString(), listW - 24);
             label(m, name, x + 21, rowTop + 1, hot ? 0xFFFFFF : 0xC0C0C0);
 
             // peekBook: this runs per item per frame, and bookFor would create a book
@@ -1761,8 +1806,8 @@ public class MarketScreen extends Screen {
     private String marketRowAt(double mouseX, double mouseY) {
         if (activeScreen != SCREEN_TRADING || leftView != LEFT_MARKETS) return null;
         int y = rowY + 20;
-        int viewH = CONTENT_H - 34;
-        if (mouseX < listX || mouseX >= listX + LIST_W
+        int viewH = contentH - 34;
+        if (mouseX < listX || mouseX >= listX + listW
                 || mouseY < y || mouseY >= y + viewH) {
             return null;
         }
@@ -1805,16 +1850,19 @@ public class MarketScreen extends Screen {
         }
         long span = Math.max(1, max - min);
 
-        int h = CONTENT_H - 50;
-        int w = LIST_W;
-        int barW = Math.max(1, w / recent.size());
+        int h = contentH - 74;
+        int w = listW - 8;
+        // Capped, or a market with three trades draws three bars the width of the
+        // panel, which looks like a rendering fault rather than like sparse data.
+        int barW = Math.max(2, Math.min(12, w / recent.size()));
 
         fill(m, x, y, x + w, y + h, 0x40000000);
         for (int i = 0; i < recent.size(); i++) {
             long p = recent.get(i).price;
             int barH = (int) ((p - min) * (h - 2) / span) + 1;
             int bx = x + i * barW;
-            fill(m, bx, y + h - barH, bx + Math.max(1, barW - 1), y + h, 0xFF88CCFF);
+            if (bx + barW > x + w) break;
+            fill(m, bx, y + h - barH, bx + barW - 1, y + h, 0xFF55FFFF);
         }
 
         label(m, "high " + max, x, y + h + 2, 0x909090);
@@ -1848,15 +1896,15 @@ public class MarketScreen extends Screen {
         }
 
         int rowHeight = 11;
-        int viewH = CONTENT_H - (startY - (rowY - 4)) - 30;
+        int viewH = contentH - (startY - (rowY - 4)) - 30;
         int contentH = (asks.size() + bids.size()) * rowHeight + 4;
 
-        noteScrollable("book", x, startY, LIST_W, viewH, contentH, mouseX, mouseY);
+        noteScrollable("book", x, startY, listW, viewH, contentH, mouseX, mouseY);
         int y = startY - scrollOf("book");
 
         // Clipped rather than truncated. The book used to stop at six a side with no
         // indication there was more, which on a busy item hid most of the market.
-        beginClip(x, startY, LIST_W, viewH);
+        beginClip(x, startY, listW, viewH);
         for (Order o : asks) {
             boolean mine = myUuid != null && o.userID().equals(myUuid);
             label(matrices, (mine ? "* " : "  ") + "#" + o.orderId()
@@ -1898,20 +1946,20 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        int viewH = CONTENT_H - 20;
+        int viewH = contentH - 20;
         int contentH = held.items.size() * INV_ROW_H;
-        noteScrollable("inv", x, y, INV_W, viewH, contentH, mouseX, mouseY);
+        noteScrollable("inv", x, y, invW, viewH, contentH, mouseX, mouseY);
         int rowY0 = y - scrollOf("inv");
 
-        beginClip(x, y, INV_W, viewH);
+        beginClip(x, y, invW, viewH);
         for (InventoryBridge.Holding h : held.items) {
             boolean hot = mouseY >= rowY0 && mouseY < rowY0 + INV_ROW_H
-                    && mouseX >= x && mouseX < x + INV_W
+                    && mouseX >= x && mouseX < x + invW
                     && mouseY >= y && mouseY < y + viewH;
             drawItemCell(m, new ItemStack(h.item), x, rowY0, null, hot);
             label(m, String.valueOf(h.count), x + 21, rowY0 + 1, 0xFFFFFF);
             String name = this.textRenderer.trimToWidth(
-                    h.item.getName().getString(), INV_W - 24);
+                    h.item.getName().getString(), invW - 24);
             label(m, name, x + 21, rowY0 + 11, 0xA0A0A0);
             rowY0 += INV_ROW_H;
         }
@@ -1931,8 +1979,8 @@ public class MarketScreen extends Screen {
         if (mc.player == null) return null;
 
         int y = rowY + 6;
-        int viewH = CONTENT_H - 20;
-        if (mouseX < invX || mouseX >= invX + INV_W || mouseY < y || mouseY >= y + viewH) {
+        int viewH = contentH - 20;
+        if (mouseX < invX || mouseX >= invX + invW || mouseY < y || mouseY >= y + viewH) {
             return null;
         }
 
