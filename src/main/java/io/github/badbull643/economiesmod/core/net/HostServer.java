@@ -21,7 +21,11 @@ public class HostServer {
 
     // 6: MigrateBalance event; MigrateRequest/MigrateResult messages.
     public static final String PROTOCOL_VERSION = "7";
+    /** Only the fallback for the deprecated constructors now — see ServerConfig. */
     private static final int MAX_CONNECTIONS = 64;
+
+    /** Everything the two hosting modes disagree about. Never null. */
+    private final ServerConfig config;
 
     private final int port;
     private final EventLog log;
@@ -101,7 +105,8 @@ public class HostServer {
 
 
     //change too about 50
-    public static final long DEFAULT_WELCOME_GRANT = 1000L;
+    /** Kept as an alias so existing callers still read naturally; ServerConfig owns it. */
+    public static final long DEFAULT_WELCOME_GRANT = ServerConfig.DEFAULT_WELCOME_GRANT;
 
     public HostServer(int port, Path logFile, String hostName, String hostUserId,
                       PlayerKeys hostKeys, PeerCache peerCache) throws IOException {
@@ -111,10 +116,41 @@ public class HostServer {
     public HostServer(int port, Path logFile, String hostName, String hostUserId,
                       PlayerKeys hostKeys, PeerCache peerCache,
                       long welcomeGrantAmount) throws IOException {
-        this.welcomeGrantAmount = welcomeGrantAmount;
-        this.port = port;
-        this.hostName = hostName;
-        this.hostUserId = hostUserId;
+        this(configFor(port, hostName, hostUserId, welcomeGrantAmount),
+                logFile, hostKeys, peerCache);
+    }
+
+    /**
+     * Wraps the loose arguments the client still passes in the same object the
+     * dedicated launcher loads from disk, so there is one code path below this point
+     * rather than two that have to be kept agreeing.
+     */
+    private static ServerConfig configFor(int port, String hostName, String hostUserId,
+                                          long welcomeGrantAmount) {
+        ServerConfig cfg = ServerConfig.friendGroup(port);
+        cfg.hostName = hostName;
+        cfg.hostUserId = hostUserId;
+        cfg.welcomeGrant = welcomeGrantAmount;
+        return cfg;
+    }
+
+    /**
+     * The one constructor that matters. Everything the two hosting modes disagree about
+     * arrives in the config; nothing below here can tell them apart, which is the whole
+     * design — a dedicated server is a host whose operator never changes.
+     */
+    public HostServer(ServerConfig config, Path logFile, PlayerKeys hostKeys,
+                      PeerCache peerCache) throws IOException {
+        String configProblem = config.problem();
+        if (configProblem != null) {
+            throw new IOException("bad server config: " + configProblem);
+        }
+
+        this.config = config;
+        this.welcomeGrantAmount = config.welcomeGrant;
+        this.port = config.port;
+        this.hostName = config.hostName;
+        this.hostUserId = config.hostUserId;
         this.hostKeys = hostKeys;
         this.peerCache = peerCache;
         this.log = new EventLog(logFile);
@@ -157,20 +193,30 @@ public class HostServer {
         sequencerThread.start();
 
         try {
-            serverSocket = new ServerSocket(port);
+            // An explicit bindAddress listens on that interface only. Absent, this is
+            // the same all-interfaces socket as before.
+            String bind = config.bindAddress;
+            if (bind == null || bind.trim().isEmpty()) {
+                serverSocket = new ServerSocket(port);
+            } else {
+                serverSocket = new ServerSocket(port, 50,
+                        java.net.InetAddress.getByName(bind.trim()));
+            }
         } catch (IOException e) {
             bindError = e;
             bound.countDown();          // release the waiter even on failure
             throw e;
         }
         bound.countDown();
-        System.out.println("[host] listening on port " + port);
+        System.out.println("[host] listening on port " + port
+                + (config.bindAddress == null || config.bindAddress.trim().isEmpty()
+                        ? "" : " (" + config.bindAddress.trim() + " only)"));
 
         try {
             while (running) {
                 Socket socket = serverSocket.accept();
 
-                if (clients.size() >= MAX_CONNECTIONS) {
+                if (clients.size() >= config.maxConnections) {
                     System.out.println("[host] refusing connection — at capacity");
                     try (MessageChannel ch = new MessageChannel(socket)) {
                         Message.Error err = new Message.Error();
@@ -1054,26 +1100,145 @@ public class HostServer {
     }
     // ─────────── standalone entry point ───────────
 
+    private static final String USAGE =
+            "usage: HostServer [--config <file>] [--write-config] [--creator-key <file>]\n"
+            + "                  [--port N] [--log <file>] [--name <host name>]\n"
+            + "                  [--market <market name>] [--bind <address>]\n"
+            + "\n"
+            + "  --config        config file to read (default server-config.json)\n"
+            + "  --write-config  write the effective config back out and exit\n"
+            + "  --creator-key   key file that signs genesis when bootstrapping a market;\n"
+            + "                  requires creatorUserId in the config. The server keeps its\n"
+            + "                  own key for grants — this one need not stay on the box.\n"
+            + "\n"
+            + "Flags override the config file. Everything has a default.";
+
     public static void main(String[] args) throws Exception {
-        int port = args.length > 0 ? Integer.parseInt(args[0]) : 25555;
-        Path logFile = Paths.get(args.length > 1 ? args[1] : "server-market.jsonl");
-        String hostName = args.length > 2 ? args[2] : "dedicated";
-        String hostUserId = args.length > 3 ? args[3]
-                : "00000000-0000-0000-0000-0000000000ff";
+        Path configFile = Paths.get("server-config.json");
+        Path creatorKeyFile = null;
+        boolean writeConfig = false;
 
-        String marketName = args.length > 4 ? args[4] : hostName + "'s market";
+        // Read --config first: the rest override what it loaded, so it has to be known
+        // before any of them are applied.
+        for (int i = 0; i < args.length - 1; i++) {
+            if ("--config".equals(args[i])) configFile = Paths.get(args[i + 1]);
+        }
 
+        ServerConfig cfg = ServerConfig.load(configFile);
+
+        try {
+            for (int i = 0; i < args.length; i++) {
+                switch (args[i]) {
+                    case "--config":       i++; break;   // already handled
+                    case "--write-config": writeConfig = true; break;
+                    case "--creator-key":  creatorKeyFile = Paths.get(args[++i]); break;
+                    case "--port":         cfg.port = Integer.parseInt(args[++i]); break;
+                    case "--log":          cfg.logFile = args[++i]; break;
+                    case "--name":         cfg.hostName = args[++i]; break;
+                    case "--market":       cfg.marketName = args[++i]; break;
+                    case "--bind":         cfg.bindAddress = args[++i]; break;
+                    case "--help":
+                    case "-h":
+                        System.out.println(USAGE);
+                        return;
+                    default:
+                        System.err.println("unknown argument: " + args[i]);
+                        System.err.println(USAGE);
+                        System.exit(2);
+                }
+            }
+        } catch (ArrayIndexOutOfBoundsException e) {
+            System.err.println("missing value for the last argument");
+            System.err.println(USAGE);
+            System.exit(2);
+        } catch (NumberFormatException e) {
+            System.err.println("expected a number: " + e.getMessage());
+            System.exit(2);
+        }
+
+        String bad = cfg.problem();
+        if (bad != null) {
+            System.err.println("[host] " + bad);
+            System.exit(2);
+        }
+
+        if (writeConfig) {
+            cfg.save(configFile);
+            System.out.println("[host] wrote " + configFile.toAbsolutePath());
+            return;
+        }
+
+        Path logFile = Paths.get(cfg.logFile);
         System.out.println("[host] log file: " + logFile.toAbsolutePath());
+
         PlayerKeys keys = PlayerKeys.loadOrCreate(logFile.resolveSibling("server-identity.key"));
         PeerCache peers = new PeerCache(logFile.resolveSibling("server-peers.json"));
+
+        // Remembered once rather than defaulted every start. The old fallback was a
+        // hardcoded UUID, so two dedicated servers that never had one configured were
+        // literally the same participant — fine while there was one of them, wrong the
+        // moment any client met both.
+        if (cfg.hostUserId == null || cfg.hostUserId.trim().isEmpty()) {
+            cfg.hostUserId = UUID.randomUUID().toString();
+            cfg.save(configFile);
+            System.out.println("[host] assigned this server the identity " + cfg.hostUserId);
+        }
 
         // A dedicated server starting on an empty log is deliberately creating a
         // market — unlike a player clicking Host, there is no ambiguity about intent.
         EventLog log = new EventLog(logFile);
         if (log.lastSeq() == 0) {
-            MarketBootstrap.createMarket(log, UUID.fromString(hostUserId), marketName, keys);
+            try {
+                bootstrap(log, cfg, keys, creatorKeyFile);
+            } catch (IOException e) {
+                // An operator misconfiguration, not a crash. A stack trace here buries
+                // the one line that says what to change.
+                System.err.println("[host] " + e.getMessage());
+                System.exit(2);
+            }
+        } else if (creatorKeyFile != null) {
+            System.out.println("[host] --creator-key ignored: this log already holds a market");
         }
 
-        new HostServer(port, logFile, hostName, hostUserId, keys, peers).start();
+        new HostServer(cfg, logFile, keys, peers).start();
+    }
+
+    /**
+     * Writes genesis, signed by the operator's key when one is supplied.
+     *
+     * Creator-gating is currently unused — WelcomeGrant checks only its target, never
+     * its author, which is what lets hosting rotate — so the creator identity is free
+     * to become the rule for who may set policy later. Recording the operator rather
+     * than the box is what makes that worth having: compromising the server then gets
+     * grant-signing and denial of service, not authority over the market.
+     */
+    private static void bootstrap(EventLog log, ServerConfig cfg, PlayerKeys serverKeys,
+                                  Path creatorKeyFile) throws Exception {
+        String name = cfg.marketName != null && !cfg.marketName.trim().isEmpty()
+                ? cfg.marketName
+                : cfg.hostName + "'s market";
+
+        if (creatorKeyFile == null) {
+            // The server is its own creator. Simplest case, and the only one that needs
+            // nothing kept anywhere else.
+            MarketBootstrap.createMarket(log, UUID.fromString(cfg.hostUserId), name, serverKeys);
+            System.out.println("[host] created '" + name + "' owned by this server");
+            return;
+        }
+
+        if (cfg.creatorUserId == null || cfg.creatorUserId.trim().isEmpty()) {
+            throw new IOException("--creator-key needs creatorUserId set in the config file"
+                    + " — the key signs the market into existence, but the identity is"
+                    + " what gets recorded as owning it");
+        }
+        if (!Files.exists(creatorKeyFile)) {
+            throw new IOException("no such key file: " + creatorKeyFile.toAbsolutePath());
+        }
+
+        PlayerKeys creator = PlayerKeys.loadOrCreate(creatorKeyFile);
+        MarketBootstrap.createMarket(log, UUID.fromString(cfg.creatorUserId.trim()),
+                name, creator);
+        System.out.println("[host] created '" + name + "' owned by " + cfg.creatorUserId
+                + " — that key is not needed on this machine again");
     }
 }
