@@ -73,13 +73,27 @@ public class MarketScreen extends Screen {
     private static final int FIELD_HEIGHT = 20;
     private static final long MAX_QTY = 100_000L;
 
-    /** Left column, for whichever list the current tab shows. */
+    /** Left column, for whichever list the current destination shows. */
     private static final int LIST_W = 190;
-    /** Right column, for that tab's controls. */
+    /** Middle column, for that destination's controls. */
     private static final int CONTROLS_W = 230;
-    private static final int CONTENT_W = LIST_W + 16 + CONTROLS_W;
+    /** Right column on Trading, for what you are actually carrying. */
+    private static final int INV_W = 116;
+    private static final int COL_GAP = 12;
+    private static final int CONTENT_W = LIST_W + COL_GAP + CONTROLS_W;
+    private static final int CONTENT_W_WIDE = CONTENT_W + COL_GAP + INV_W;
     private static final int CONTENT_H = 150;
     private static final int ROW_STEP = 24;
+
+    /**
+     * Left edge of the inventory column, or -1 when there isn't room for it.
+     *
+     * The third column is dropped rather than squeezed when the window is too narrow —
+     * at GUI scale 4 the whole screen is only 480 wide. Losing a panel that duplicates
+     * what pressing E already tells you is a far better failure than a layout that runs
+     * off the edge, which is what the old percentage-derived origins did.
+     */
+    private int invX = -1;
 
     // Row positions, set in init() so render and hit-tests can't drift.
     private int rowX;
@@ -216,11 +230,18 @@ public class MarketScreen extends Screen {
         // size. The percentages this used to use put the bottom row off-screen at GUI
         // scale 3 and higher, because the rows below them were a fixed pixel height
         // that the percentage never accounted for.
-        int boxX = Math.max(4, (this.width - CONTENT_W) / 2);
+        // Widen to three columns only when the window can actually hold them; the
+        // inventory panel is the one that goes, since it repeats what the vanilla
+        // inventory screen already shows.
+        boolean wide = this.width >= CONTENT_W_WIDE + 16;
+        int contentW = wide ? CONTENT_W_WIDE : CONTENT_W;
+
+        int boxX = Math.max(4, (this.width - contentW) / 2);
         int boxY = Math.max(30, Math.min((this.height - CONTENT_H) / 2, this.height - CONTENT_H - 30));
 
         this.listX = boxX;
-        this.rowX = boxX + LIST_W + 16;
+        this.rowX = boxX + LIST_W + COL_GAP;
+        this.invX = wide ? rowX + CONTROLS_W + COL_GAP : -1;
         this.rowY = boxY + 22;
         this.buttonsY = rowY + ROW_STEP;
         this.cancelY = rowY + ROW_STEP * 2;
@@ -996,6 +1017,16 @@ public class MarketScreen extends Screen {
         // The nav sits above everything else, so it gets first refusal on a click.
         if (button == 0 && navClicked(mouseX, mouseY)) return true;
 
+        // Picking from what you're carrying is the fastest way to choose what to sell,
+        // and it never involves knowing an item's registry id.
+        if (button == 0) {
+            InventoryBridge.Holding held = inventoryRowAt(mouseX, mouseY);
+            if (held != null) {
+                selectItem(held.item);
+                return true;
+            }
+        }
+
         // Any click acknowledges the recovery note — it describes something already
         // done, so it does not need to keep occupying a line.
         recoveryNote = "";
@@ -1305,6 +1336,7 @@ public class MarketScreen extends Screen {
             renderSelectedItem(matrices, listX, rowY - 14, mouseX, mouseY);
             label(matrices, "Order book", listX, rowY + 8, 0xFFFFFF);
             renderBook(matrices, listX, rowY + 20, mouseX, mouseY);
+            if (invX >= 0) renderInventory(matrices, invX, rowY + 6, mouseX, mouseY);
         } else if (activeScreen == SCREEN_NETWORK) {
             renderDiscovery(matrices);
         } else if (activeScreen == SCREEN_MARKET) {
@@ -1425,6 +1457,68 @@ public class MarketScreen extends Screen {
     }
 
     /**
+     * What you are actually carrying, as opposed to what the ledger holds for you.
+     *
+     * Those two are constantly confused — "I have 500 iron" is true of your pockets and
+     * false of the market, or the reverse, and until now the screen only ever showed
+     * the second. Clicking a row selects that item to trade.
+     */
+    private void renderInventory(MatrixStack m, int x, int y, double mouseX, double mouseY) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return;
+
+        label(m, "You are carrying", x, y - 11, 0xFFFFFF);
+
+        InventoryBridge.Holdings held = InventoryBridge.held(mc.player);
+        if (held.items.isEmpty()) {
+            label(m, "(nothing)", x, y, 0x808080);
+            return;
+        }
+
+        int viewH = CONTENT_H - 20;
+        int contentH = held.items.size() * INV_ROW_H;
+        noteScrollable("inv", x, y, INV_W, viewH, contentH, mouseX, mouseY);
+        int rowY0 = y - scrollOf("inv");
+
+        beginClip(x, y, INV_W, viewH);
+        for (InventoryBridge.Holding h : held.items) {
+            boolean hot = mouseY >= rowY0 && mouseY < rowY0 + INV_ROW_H
+                    && mouseX >= x && mouseX < x + INV_W
+                    && mouseY >= y && mouseY < y + viewH;
+            drawItemCell(m, new ItemStack(h.item), x, rowY0, null, hot);
+            label(m, String.valueOf(h.count), x + 21, rowY0 + 1, 0xFFFFFF);
+            String name = this.textRenderer.trimToWidth(
+                    h.item.getName().getString(), INV_W - 24);
+            label(m, name, x + 21, rowY0 + 11, 0xA0A0A0);
+            rowY0 += INV_ROW_H;
+        }
+        endClip();
+
+        if (held.skipped > 0) {
+            label(m, held.skipped + " with NBT hidden", x, y + viewH + 1, 0x606060);
+        }
+    }
+
+    private static final int INV_ROW_H = 20;
+
+    /** Which carried item a click landed on, or null. */
+    private InventoryBridge.Holding inventoryRowAt(double mouseX, double mouseY) {
+        if (invX < 0 || activeScreen != SCREEN_TRADING) return null;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return null;
+
+        int y = rowY + 6;
+        int viewH = CONTENT_H - 20;
+        if (mouseX < invX || mouseX >= invX + INV_W || mouseY < y || mouseY >= y + viewH) {
+            return null;
+        }
+
+        List<InventoryBridge.Holding> items = InventoryBridge.held(mc.player).items;
+        int index = (int) ((mouseY - y + scrollOf("inv")) / INV_ROW_H);
+        return index >= 0 && index < items.size() ? items.get(index) : null;
+    }
+
+    /**
      * The selected item, as an icon rather than a string of text.
      *
      * A first use of the item cell, and the beginning of the slot that will replace the
@@ -1456,6 +1550,19 @@ public class MarketScreen extends Screen {
 
     private void label(MatrixStack m, String s, int x, int y, int colour) {
         drawTextWithShadow(m, this.textRenderer, new LiteralText(s), x, y, colour);
+    }
+
+    /**
+     * Chooses what to trade.
+     *
+     * Still routed through the item field for now, because every handler reads the
+     * selection from there. That field is on its way out — this is the seam the item
+     * slot and picker will replace it behind, without those handlers changing.
+     */
+    private void selectItem(Item item) {
+        if (item == null || item == Items.AIR) return;
+        itemField.setText(MinecraftIds.itemToId(item));
+        scrollOffsets.put("book", 0);   // a different item, a different book
     }
 
     // ─────────── drawing primitives ───────────
