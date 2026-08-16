@@ -162,6 +162,24 @@ public class MarketState {
         }
     }
 
+    /**
+     * The smallest sale this rate actually takes anything from, or 0 when there is no
+     * rate.
+     *
+     * Rounding down means a percentage of a small enough sale is nothing, and with
+     * integer credits that is unavoidable: a market whose items go for one or two
+     * credits cannot express 2.5% of a sale at all. The rate is not broken when that
+     * happens, but it is invisible, and somebody who set a fee and watched it take
+     * nothing deserves to be told which of the two they are looking at.
+     *
+     * Ceiling division, because the fee bites at the first amount where
+     * amount * bps reaches one whole ten-thousandth.
+     */
+    public static long smallestTaxableSale(int bps) {
+        if (bps <= 0) return 0;
+        return (BPS_DIVISOR + bps - 1) / bps;
+    }
+
     public static long taxOn(long amount, int bps) {
         if (bps <= 0 || amount <= 0) return 0;
         long tax = Math.multiplyExact(amount, (long) bps) / BPS_DIVISOR;
