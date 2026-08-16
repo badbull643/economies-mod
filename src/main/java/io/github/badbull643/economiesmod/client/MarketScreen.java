@@ -1315,6 +1315,18 @@ public class MarketScreen extends Screen {
      * at, and the fee is the one number here that silently takes money. Not a DANGER
      * overlay though — nothing is destroyed and the next event can put it back, which
      * is the line the overlay kinds are drawn on.
+     *
+     * There is deliberately no equivalent control for the welcome grant. Engine-side
+     * the two are symmetric — same event, same creator gate, same ceiling — but the
+     * grant is a one-time mint per identity rather than something felt per trade, so a
+     * casual friend-group creator fat-fingering it has more consequence and less
+     * feedback than fat-fingering a fee. Restricting the amount by hosting mode was
+     * considered and rejected: core has no concept of dedicated vs rotating — that is a
+     * self-reported per-connection flag on Sync/QueryReply, not a property of the log —
+     * so there is nowhere honest to enforce such a split, and the creator's key could
+     * author the event by hand regardless of what the shipped UI offers. Leaving the
+     * button out is the whole mitigation; setWelcomeGrant via ServerConfig at bootstrap
+     * remains the only path, which is deliberate rather than a gap to fill in later.
      */
     private void onSetFee() {
         String raw = feeField.getText().trim();
