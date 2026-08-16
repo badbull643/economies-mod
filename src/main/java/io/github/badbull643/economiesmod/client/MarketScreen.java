@@ -6,7 +6,9 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.CheckboxWidget;
 import net.minecraft.client.gui.widget.ClickableWidget;
+import net.minecraft.client.gui.widget.SliderWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.client.render.item.ItemRenderer;
@@ -351,6 +353,24 @@ public class MarketScreen extends Screen {
         this.resetButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, 230, FIELD_HEIGHT,
                         new LiteralText("Discard and start over"), b -> onReset()));
+
+        // ─── SETTINGS ───
+        // Every control writes straight through to the persisted settings, which have
+        // been saved since before there was anywhere to see them.
+        Settings prefs = settings();
+
+        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY, 230, FIELD_HEIGHT,
+                "Fill notices in chat", prefs != null && prefs.notifyChat(),
+                on -> { if (settings() != null) settings().setNotifyChat(on); }));
+
+        onScreen(SCREEN_SETTINGS, new Toggle(rowX, rowY + ROW_STEP, 230, FIELD_HEIGHT,
+                "Fill notices above hotbar", prefs != null && prefs.notifyActionBar(),
+                on -> { if (settings() != null) settings().setNotifyActionBar(on); }));
+
+        onScreen(SCREEN_SETTINGS, new IntSlider(rowX, rowY + ROW_STEP * 2, 230,
+                FIELD_HEIGHT, "Notice limit", 0, 60,
+                prefs == null ? 20 : prefs.notifyMaxPerMinute(),
+                v -> { if (settings() != null) settings().setNotifyMaxPerMinute(v); }));
 
         applyScreenVisibility();
         startPoll();
@@ -855,13 +875,23 @@ public class MarketScreen extends Screen {
     }
 
     private void renderSettingsPlaceholder(MatrixStack m) {
-        panel(m, listX, rowY - 4, CONTENT_W, CONTENT_H - 10, "Settings");
-        label(m, "Port and notification options will live here.",
-                listX + 8, rowY + 14, 0x808080);
-        label(m, "They are already saved between sessions —",
-                listX + 8, rowY + 26, 0x808080);
-        label(m, "this screen just hasn't been built yet.",
-                listX + 8, rowY + 38, 0x808080);
+        label(m, "Notifications", listX, rowY - 11, 0xFFDD66);
+
+        String body = "Told when one of your resting orders fills, so you can set an"
+                + " order, log off, and find out later that it happened. The limit"
+                + " batches them once they come faster than that — on a busy market"
+                + " you lose the detail, never the news.";
+
+        int y = rowY + 4;
+        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), LIST_W)) {
+            this.textRenderer.drawWithShadow(m, line, listX, y, 0xC0C0C0);
+            y += 10;
+        }
+
+        y += 8;
+        label(m, "Saved for " + MinecraftClient.getInstance().getSession().getUsername(),
+                listX, y, 0x707070);
+        label(m, "The hosting port lives on Network.", listX, y + 10, 0x707070);
     }
 
     // ─────────── the Market screen ───────────
@@ -1913,6 +1943,66 @@ public class MarketScreen extends Screen {
         if (item == null || item == Items.AIR) return;
         itemField.setText(MinecraftIds.itemToId(item));
         scrollOffsets.put("book", 0);   // a different item, a different book
+    }
+
+    // ─────────── settings widgets ───────────
+    //
+    // Neither vanilla control reports a change on its own: CheckboxWidget takes no
+    // callback, and SliderWidget is abstract. Both are subclassed here so a setting
+    // saves the moment it is changed, rather than needing an Apply button that people
+    // forget to press.
+
+    private static final class Toggle extends CheckboxWidget {
+        private final java.util.function.Consumer<Boolean> onChange;
+
+        Toggle(int x, int y, int w, int h, String message, boolean checked,
+               java.util.function.Consumer<Boolean> onChange) {
+            super(x, y, w, h, new LiteralText(message), checked);
+            this.onChange = onChange;
+        }
+
+        @Override
+        public void onPress() {
+            super.onPress();
+            onChange.accept(isChecked());
+        }
+    }
+
+    private static final class IntSlider extends SliderWidget {
+        private final String label;
+        private final int min;
+        private final int max;
+        private final java.util.function.IntConsumer onChange;
+
+        IntSlider(int x, int y, int w, int h, String label, int min, int max,
+                  int initial, java.util.function.IntConsumer onChange) {
+            super(x, y, w, h, new LiteralText(""),
+                    max == min ? 0.0 : (double) (initial - min) / (max - min));
+            this.label = label;
+            this.min = min;
+            this.max = max;
+            this.onChange = onChange;
+            updateMessage();
+        }
+
+        private int current() {
+            return min + (int) Math.round(this.value * (max - min));
+        }
+
+        @Override
+        protected void updateMessage() {
+            setMessage(new LiteralText(label + ": " + describe(current())));
+        }
+
+        @Override
+        protected void applyValue() {
+            onChange.accept(current());
+        }
+
+        /** Zero is a real setting here, not "off" — it means always batch. */
+        private String describe(int v) {
+            return v == 0 ? "always batch" : v + " / min";
+        }
     }
 
     // ─────────── drawing primitives ───────────
