@@ -19,6 +19,17 @@ public class ItemBalanceRegistry {
                 .merge(itemId, delta, Long::sum);
     }
 
+    /**
+     * Every item this user holds a balance in.
+     *
+     * The ledger is the only complete answer: an item deposited but never listed has
+     * no order book, so anything enumerating from the books misses it.
+     */
+    public Map<String, Long> heldBy(UUID userId) {
+        Map<String, Long> userBalances = balances.get(userId);
+        return userBalances == null ? new HashMap<>() : new HashMap<>(userBalances);
+    }
+
     // package-private, for MarketState's snapshot logic
     Map<UUID, Map<String, Long>> balances() { return balances; }
 }
