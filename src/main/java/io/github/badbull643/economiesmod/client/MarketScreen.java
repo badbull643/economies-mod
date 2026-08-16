@@ -2182,11 +2182,24 @@ public class MarketScreen extends Screen {
      * when a stack holds exactly one, and these cells show aggregate totals that have
      * nothing to do with stack sizes.
      */
+    /**
+     * A vanilla container slot: grey body, dark top-left, light bottom-right.
+     *
+     * That inset bevel is the whole reason a Minecraft slot reads as a slot. A flat
+     * square is the same information and none of the recognition.
+     */
     private void drawItemCell(MatrixStack m, ItemStack stack, int x, int y,
                               String countLabel, boolean hovered) {
-        fill(m, x, y, x + 18, y + 18, hovered ? 0xFF4A4A4A : 0xFF2A2A2A);
-        fill(m, x, y, x + 18, y + 1, 0xFF1A1A1A);
-        fill(m, x, y, x + 1, y + 18, 0xFF1A1A1A);
+        fill(m, x, y, x + 18, y + 18, 0xFF8B8B8B);
+        fill(m, x, y, x + 17, y + 1, 0xFF373737);
+        fill(m, x, y + 1, x + 1, y + 17, 0xFF373737);
+        fill(m, x + 17, y, x + 18, y + 18, 0xFFFFFFFF);
+        fill(m, x + 1, y + 17, x + 18, y + 18, 0xFFFFFFFF);
+
+        // Before the icon, as vanilla's drawSlot does — the item is drawn at a raised
+        // z-offset, so a highlight painted afterwards would sit behind it.
+        if (hovered) fill(m, x + 1, y + 1, x + 17, y + 17, 0x80FFFFFF);
+
         drawIcon(m, stack, x + 1, y + 1, countLabel);
     }
 
@@ -2202,21 +2215,6 @@ public class MarketScreen extends Screen {
         items.renderGuiItemOverlay(this.textRenderer, stack, x, y, countLabel);
         items.zOffset = 0.0F;
         this.setZOffset(0);
-    }
-
-    /**
-     * Text drawn larger than the one size Minecraft's font comes in.
-     *
-     * Scaling the matrix is the only way to do it, and it has to be done around the
-     * draw rather than to the coordinates — which is why the position is translated
-     * first and the text drawn at the origin.
-     */
-    private void scaledLabel(MatrixStack m, String s, int x, int y, int colour, float scale) {
-        m.push();
-        m.translate(x, y, 0);
-        m.scale(scale, scale, 1.0F);
-        drawTextWithShadow(m, this.textRenderer, new LiteralText(s), 0, 0, colour);
-        m.pop();
     }
 
     /**
@@ -2468,12 +2466,11 @@ public class MarketScreen extends Screen {
         if (mc.player != null && market != null) {
             UUID me = MinecraftIds.userIdOf(mc.player);
 
-            // An emerald for money and the item itself for the item — what you are
-            // worth is the number people glance at most, and an icon finds it faster
-            // than reading the word in front of it.
+            // An emerald marks the money, and only the money. Putting the item's own
+            // icon beside the second line made two icons compete when only one of them
+            // was saying anything the words did not already say.
             drawIcon(m, new ItemStack(Items.EMERALD), 8, 16, null);
-            scaledLabel(m, String.valueOf(market.wallets().getBalance(me)),
-                    28, 19, 0xFFFF55, 1.3F);
+            label(m, "Credits: " + market.wallets().getBalance(me), 28, 20, 0xFFFF88);
 
             // Only where an item is selected and the number means something.
             if (activeScreen == SCREEN_TRADING) {
@@ -2481,8 +2478,8 @@ public class MarketScreen extends Screen {
                 if (item != Items.AIR) {
                     long held = market.itemBalances()
                             .getBalance(me, MinecraftIds.itemToId(item));
-                    drawIcon(m, new ItemStack(item), 8, 33, null);
-                    scaledLabel(m, held + " in market", 28, 36, 0xFFFF55, 1.3F);
+                    label(m, item.getName().getString() + " market credit: " + held,
+                            28, 32, 0xFFFF88);
                 }
             }
         }
@@ -2591,6 +2588,18 @@ public class MarketScreen extends Screen {
     /** Queued rather than replaced: a second warning must not erase the first unread one. */
     private final Deque<Overlay> overlays = new ArrayDeque<>();
 
+    /**
+     * Drawn by renderOverlay, never registered with the screen.
+     *
+     * They exist for their appearance — vanilla's button texture and its hover and
+     * disabled states — while the overlay's own hit-testing decides what a click does.
+     * Their press actions are therefore empty on purpose.
+     */
+    private final ButtonWidget overlayConfirmButton = new ButtonWidget(
+            0, 0, OVERLAY_BTN_W, OVERLAY_BTN_H, new LiteralText(""), b -> {});
+    private final ButtonWidget overlayDismissButton = new ButtonWidget(
+            0, 0, OVERLAY_BTN_W, OVERLAY_BTN_H, new LiteralText(""), b -> {});
+
     private void showNotice(String title, String body) {
         overlays.addLast(new Overlay(Overlay.NOTICE, title, body, "OK", null));
     }
@@ -2675,26 +2684,36 @@ public class MarketScreen extends Screen {
             y += 10;
         }
 
+        // Real ButtonWidgets, drawn by hand rather than registered.
+        //
+        // Registering them would put them in super.render, underneath the panel they
+        // belong to. Drawing them here keeps vanilla's texture, hover and disabled
+        // states — hand-filled rectangles could imitate the shape but never the way a
+        // Minecraft button actually looks next to the ones on the screen behind.
+        // Clicks are still hit-tested against the same rectangles, so render and input
+        // cannot disagree.
+        RenderSystem.enableDepthTest();
+
         int[] confirm = overlayConfirmRect(o);
         if (confirm != null) {
-            boolean armed = o.armed();
-            boolean hot = armed && within(mouseX, mouseY, confirm);
-            fill(m, confirm[0], confirm[1], confirm[0] + confirm[2], confirm[1] + confirm[3],
-                    armed ? (hot ? 0xFF505050 : 0xFF383838) : 0xFF262626);
-            drawCenteredText(m, this.textRenderer, new LiteralText(o.confirmLabel),
-                    confirm[0] + confirm[2] / 2, confirm[1] + 6,
-                    armed ? accent : 0xFF707070);
+            overlayConfirmButton.setMessage(new LiteralText(o.confirmLabel));
+            overlayConfirmButton.x = confirm[0];
+            overlayConfirmButton.y = confirm[1];
+            overlayConfirmButton.setWidth(confirm[2]);
+            overlayConfirmButton.active = o.armed();
+            overlayConfirmButton.visible = true;
+            overlayConfirmButton.render(m, mouseX, mouseY, 0.0F);
         }
 
         int[] dismiss = overlayDismissRect(o);
-        boolean dismissHot = within(mouseX, mouseY, dismiss);
-        fill(m, dismiss[0], dismiss[1], dismiss[0] + dismiss[2], dismiss[1] + dismiss[3],
-                dismissHot ? 0xFF505050 : 0xFF383838);
-        drawCenteredText(m, this.textRenderer,
-                new LiteralText(o.onConfirm == null ? "OK" : "Cancel"),
-                dismiss[0] + dismiss[2] / 2, dismiss[1] + 6, 0xFFDDDDDD);
-
-        RenderSystem.enableDepthTest();
+        overlayDismissButton.setMessage(
+                new LiteralText(o.onConfirm == null ? "OK" : "Cancel"));
+        overlayDismissButton.x = dismiss[0];
+        overlayDismissButton.y = dismiss[1];
+        overlayDismissButton.setWidth(dismiss[2]);
+        overlayDismissButton.active = true;
+        overlayDismissButton.visible = true;
+        overlayDismissButton.render(m, mouseX, mouseY, 0.0F);
     }
 
     /** Returns true if the click was the overlay's, which is any click at all while one is up. */
