@@ -171,14 +171,6 @@ public class MarketScreen extends Screen {
     /** One widget list per destination, indexed by the SCREEN_ constants. */
     private final List<List<ClickableWidget>> screenWidgets = new ArrayList<>();
 
-    /**
-     * Whether the nav panel is showing.
-     *
-     * Instance, not static: a menu left open is not a place you were, it is a gesture
-     * half-finished, and it should not be waiting for you next time you open the screen.
-     */
-    private boolean navOpen = false;
-
     private <T extends ClickableWidget> T onScreen(int screen, T widget) {
         screenWidgets.get(screen).add(widget);
         return this.addButton(widget);
@@ -186,7 +178,6 @@ public class MarketScreen extends Screen {
 
     private void selectScreen(int screen) {
         activeScreen = screen;
-        navOpen = false;
         applyScreenVisibility();
     }
 
@@ -203,25 +194,25 @@ public class MarketScreen extends Screen {
         }
     }
 
-    // ─── nav panel geometry ───
+    // ─── tab bar geometry ───
     //
-    // Drawn and hit-tested by hand rather than built from ButtonWidgets, because it has
-    // to sit above whatever screen is beneath it. Widgets are drawn by super.render at
-    // one fixed point in the pipeline, so a widget-based menu would end up underneath
-    // the content it is supposed to cover.
+    // A hamburger menu is the one thing on this screen that exists nowhere in Minecraft —
+    // it is a web idiom, and it announced the whole screen as a mod louder than anything
+    // else did. Vanilla's own answer to "several views of one thing" is a row of tabs
+    // along the top of the panel, which is what the advancements screen is, so that is
+    // what this is now.
+    //
+    // Still hand-drawn and hand-hit-tested: 1.16.5 has no tab widget, and the creative
+    // and advancement screens both draw their own from a texture. Attached to the panel
+    // rather than to the window, so the tabs travel with the box when it is re-centred.
 
-    private static final int NAV_W = 96;
-    private static final int NAV_ROW_H = 16;
-    private static final int BURGER_SIZE = 14;
+    private static final int TAB_H = 18;
+    private static final int TAB_GAP = 2;
 
-    private int[] burgerRect() {
-        return new int[]{this.width - BURGER_SIZE - 8, 6, BURGER_SIZE, BURGER_SIZE};
-    }
-
-    private int[] navRowRect(int index) {
-        int[] burger = burgerRect();
-        int top = burger[1] + burger[3] + 4;
-        return new int[]{this.width - NAV_W - 8, top + index * NAV_ROW_H, NAV_W, NAV_ROW_H};
+    private int[] tabRect(int index) {
+        int span = contentW - TAB_GAP * (SCREEN_NAMES.length - 1);
+        int w = span / SCREEN_NAMES.length;
+        return new int[]{listX + index * (w + TAB_GAP), frameTop() - TAB_H - 2, w, TAB_H};
     }
 
     /**
@@ -301,7 +292,9 @@ public class MarketScreen extends Screen {
         this.halfWS = Math.max(46, Math.min(76, (controlsW - PAD * 2) / 4));
 
         int boxX = Math.max(4, (this.width - contentW) / 2);
-        int boxY = Math.max(34, Math.min((this.height - contentH) / 2,
+        // The floor was 34, which left exactly enough room for the header. The tab row
+        // now lives between the header and the panel and needs its own 20 on top of that.
+        int boxY = Math.max(46, Math.min((this.height - contentH) / 2,
                 this.height - contentH - 30));
 
         this.listX = boxX;
@@ -876,8 +869,15 @@ public class MarketScreen extends Screen {
      * Below the tallest tab's fourth row, so it is clear of every tab's controls —
      * they all share the same rows, so one clearance works for all of them.
      */
+    /**
+     * The header row of a list in the left panel; its entries start one row below.
+     *
+     * Both the host list and the re-place list measure from here, and both their hit
+     * tests do too. When this meant "header" to one of them and "first entry" to the
+     * other, every click on a host landed one row low and the last one was unreachable.
+     */
     private int discoveryStartY() {
-        return panelTop() + 14;
+        return panelTop();
     }
 
     // ─────────── home ───────────
@@ -910,14 +910,201 @@ public class MarketScreen extends Screen {
         int midX = listX + sideW + gap;
         int rightX = midX + midW + gap;
 
-        panel(m, listX, top, sideW, height, "Widget 1");
+        panel(m, listX, top, sideW, height, "Most traded");
+        renderMostTraded(m, listX + 8, top + 18, sideW - 16, height - 24);
 
         int hostsH = height / 2;
         panel(m, midX, top, midW, hostsH, "Hosts");
         renderHostsPanel(m, midX + 8, top + 18, midW - 16, hostsH - 24);
-        panel(m, midX, top + hostsH + gap, midW, height - hostsH - gap, "Widget 2");
 
-        panel(m, rightX, top, sideW, height, "Widget 3");
+        int priceY = top + hostsH + gap;
+        int priceH = height - hostsH - gap;
+        panel(m, midX, priceY, midW, priceH, "Price");
+        renderHomePrice(m, midX + 8, priceY + 18, midW - 16, priceH - 24);
+
+        panel(m, rightX, top, sideW, height, "Activity");
+        renderActivity(m, rightX + 8, top + 18, sideW - 16, height - 24);
+    }
+
+    /** An item that has traded, with how much of it and what it last went for. */
+    private static final class TradedItem {
+        final String itemId;
+        final long volume;
+        final long lastPrice;
+
+        TradedItem(String itemId, long volume, long lastPrice) {
+            this.itemId = itemId;
+            this.volume = volume;
+            this.lastPrice = lastPrice;
+        }
+    }
+
+    /**
+     * What the market is busiest with, by units traded.
+     *
+     * Ranked by volume rather than by number of trades: one player moving a stack is
+     * more of a market than six people swapping single items, and volume is the figure
+     * a price means anything next to.
+     */
+    private List<TradedItem> mostTraded(MarketState market, int limit) {
+        if (market == null) return Collections.emptyList();
+        TradeHistory trades = market.trades();
+        List<TradedItem> out = new ArrayList<>();
+        for (String id : trades.tradedItems()) {
+            out.add(new TradedItem(id, trades.volumeFor(id), trades.lastPrice(id)));
+        }
+        out.sort((a, b) -> Long.compare(b.volume, a.volume));
+        return out.size() > limit ? out.subList(0, limit) : out;
+    }
+
+    private void renderMostTraded(MatrixStack m, int x, int y, int w, int h) {
+        MarketState market = MarketStateHolder.get();
+        List<TradedItem> top = mostTraded(market, Math.max(1, h / INV_ROW_H));
+
+        if (top.isEmpty()) {
+            label(m, "nothing has traded yet", x, y, 0x808080);
+            return;
+        }
+
+        int row = y;
+        for (TradedItem t : top) {
+            if (row + INV_ROW_H > y + h) break;
+            Item item = MinecraftIds.idToItem(t.itemId);
+            drawItemCell(m, new ItemStack(item), x, row, null, false);
+
+            String name = item == Items.AIR ? t.itemId : item.getName().getString();
+            label(m, trim(name, w - 66), x + 22, row + 1, 0xFFFFFF);
+            label(m, t.volume + " traded", x + 22, row + 11, 0x808080);
+
+            if (t.lastPrice >= 0) {
+                String price = String.valueOf(t.lastPrice);
+                label(m, price, x + w - this.textRenderer.getWidth(price), row + 6, 0xFFFF88);
+            }
+            row += INV_ROW_H;
+        }
+    }
+
+    /**
+     * The chart for whatever item is selected, falling back to the busiest one.
+     *
+     * The fallback matters more than it looks: on Home, nothing has been picked yet the
+     * first time anyone arrives, and an empty panel on the landing screen says the
+     * feature is broken rather than that the player has not chosen anything.
+     */
+    private void renderHomePrice(MatrixStack m, int x, int y, int w, int h) {
+        MarketState market = MarketStateHolder.get();
+        if (market == null) {
+            label(m, "no market", x, y, 0x808080);
+            return;
+        }
+
+        Item chosen = MinecraftIds.itemFromName(itemField.getText().trim());
+        String itemId = chosen != Items.AIR ? MinecraftIds.itemToId(chosen) : null;
+        boolean fellBack = false;
+        if (itemId == null || market.trades().countFor(itemId) < 2) {
+            List<TradedItem> busiest = mostTraded(market, 1);
+            if (!busiest.isEmpty()) {
+                itemId = busiest.get(0).itemId;
+                fellBack = chosen != Items.AIR;
+            }
+        }
+
+        if (itemId == null) {
+            label(m, "nothing has traded yet", x, y, 0x808080);
+            return;
+        }
+
+        List<Trade> recent = market.trades().recentFor(itemId, 60);
+        Item item = MinecraftIds.idToItem(itemId);
+        String name = item == Items.AIR ? itemId : item.getName().getString();
+        label(m, trim(name, w) + (fellBack ? " (busiest)" : ""), x, y, 0x88CCFF);
+
+        int chartY = y + 12;
+        int chartH = h - 24;
+        if (recent.size() < 2 || chartH < 8) {
+            label(m, "not enough trades yet", x, chartY, 0x808080);
+            return;
+        }
+
+        long min = Long.MAX_VALUE, max = Long.MIN_VALUE;
+        for (Trade t : recent) {
+            min = Math.min(min, t.price);
+            max = Math.max(max, t.price);
+        }
+        long span = Math.max(1, max - min);
+
+        // Capped like the Trading view's chart, or three trades draw three bars the
+        // width of the panel and it reads as a rendering fault rather than sparse data.
+        int barW = Math.max(2, Math.min(12, w / recent.size()));
+        fill(m, x, chartY, x + w, chartY + chartH, 0x40000000);
+        for (int i = 0; i < recent.size(); i++) {
+            int barH = (int) ((recent.get(i).price - min) * (chartH - 2) / span) + 1;
+            int bx = x + i * barW;
+            if (bx + barW > x + w) break;
+            fill(m, bx, chartY + chartH - barH, bx + barW - 1, chartY + chartH, 0xFF55FFFF);
+        }
+
+        label(m, "low " + min + "  high " + max + "  last "
+                + recent.get(recent.size() - 1).price, x, chartY + chartH + 2, 0x909090);
+    }
+
+    /** The tail of the log in words. Newest first — the top of a feed is where you look. */
+    private void renderActivity(MatrixStack m, int x, int y, int w, int h) {
+        List<SequencedEvent> recent = MarketStateHolder.recentActivity();
+        if (recent.isEmpty()) {
+            label(m, "nothing yet", x, y, 0x808080);
+            return;
+        }
+
+        int row = y;
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            if (row + 10 > y + h) break;
+            label(m, trim(describeEvent(recent.get(i)), w), x, row, 0x9090A0);
+            row += 10;
+        }
+    }
+
+    /** One line for an event, in the terms a player thinks in rather than class names. */
+    private String describeEvent(SequencedEvent se) {
+        Event e = se.event;
+        if (e instanceof Event.PlaceOrder) {
+            Event.PlaceOrder p = (Event.PlaceOrder) e;
+            return (p.isBid ? "buy " : "sell ") + p.volume + " "
+                    + shortName(p.itemId) + " @ " + p.price;
+        }
+        if (e instanceof Event.DepositAndList) {
+            Event.DepositAndList d = (Event.DepositAndList) e;
+            return "listed " + d.quantity + " " + shortName(d.itemId) + " @ " + d.price;
+        }
+        if (e instanceof Event.Deposit) {
+            Event.Deposit d = (Event.Deposit) e;
+            return "deposited " + d.quantity + " " + shortName(d.itemId);
+        }
+        if (e instanceof Event.Withdraw) {
+            Event.Withdraw wd = (Event.Withdraw) e;
+            return "withdrew " + wd.quantity + " " + shortName(wd.itemId);
+        }
+        if (e instanceof Event.CancelOrder) return "cancelled an order";
+        if (e instanceof Event.KeyRegistered) return "someone joined";
+        if (e instanceof Event.MarketCreated) return "market created";
+        return e.getClass().getSimpleName();
+    }
+
+    private String shortName(String itemId) {
+        Item item = MinecraftIds.idToItem(itemId);
+        return item == Items.AIR ? itemId : item.getName().getString();
+    }
+
+    /**
+     * Cuts a string to fit a pixel width, with an ellipsis when it had to.
+     *
+     * Uses vanilla's own trimToWidth rather than walking characters off the end: this is
+     * called for every row of two panels every frame, and the font is not fixed-width.
+     */
+    private String trim(String s, int maxWidth) {
+        if (this.textRenderer.getWidth(s) <= maxWidth) return s;
+        int room = Math.max(0, maxWidth - this.textRenderer.getWidth("..."));
+        return this.textRenderer.trimToWidth(s, room) + "...";
     }
 
     /**
@@ -927,10 +1114,15 @@ public class MarketScreen extends Screen {
      * uses it rather than inventing a flat modern box that sits oddly beside the
      * vanilla buttons right next to it.
      */
+    /** The tooltip frame's own colours, shared with the tab bar so the two agree. */
+    private static final int PANEL_BG = 0xF0100010;
+    private static final int PANEL_EDGE_TOP = 0x505000FF;
+    private static final int PANEL_EDGE_BOTTOM = 0x5028007F;
+
     private void vanillaPanel(MatrixStack m, int x, int y, int w, int h) {
-        final int bg = 0xF0100010;
-        final int edgeTop = 0x505000FF;
-        final int edgeBottom = 0x5028007F;
+        final int bg = PANEL_BG;
+        final int edgeTop = PANEL_EDGE_TOP;
+        final int edgeBottom = PANEL_EDGE_BOTTOM;
 
         fill(m, x - 3, y - 4, x + w + 3, y - 3, bg);
         fill(m, x - 3, y + h + 3, x + w + 3, y + h + 4, bg);
@@ -1164,11 +1356,13 @@ public class MarketScreen extends Screen {
         List<MarketStateHolder.OldOrder> old = MarketStateHolder.pendingReplace();
         if (old.isEmpty()) return;
 
-        int x = rowX;
+        // In the left panel, where the lists live. At rowX it drew over the control
+        // buttons, which have a frame around them now.
+        int x = listX + 4;
         int y = discoveryStartY();
 
-        label(matrices, "Orders from your old market — click to re-place, "
-                + "[X] to dismiss all:", x, y, 0xFFDD66);
+        label(matrices, "Old orders — click to re-place, [X] to dismiss:",
+                x, y, 0xFFDD66);
         y += DISCOVERY_ROW_HEIGHT + 2;
 
         MarketState s = MarketStateHolder.get();
@@ -1235,8 +1429,14 @@ public class MarketScreen extends Screen {
         return rows;
     }
 
-    private void renderDiscovery(MatrixStack matrices, int px, int py,
+    /**
+     * The y is taken from discoveryStartY rather than passed in, so it cannot drift
+     * from the hit test that reads the same function — which is exactly how clicking a
+     * host came to do nothing.
+     */
+    private void renderDiscovery(MatrixStack matrices, int px,
                                  double mouseX, double mouseY) {
+        int py = discoveryStartY();
         // The re-place list takes this space while it exists — it's transient and
         // actionable, discovery is neither. render() draws it directly now, on
         // whichever tab you are on, so this only has to stand aside.
@@ -1305,7 +1505,10 @@ public class MarketScreen extends Screen {
         }
 
         // The nav sits above everything else, so it gets first refusal on a click.
-        if (button == 0 && navClicked(mouseX, mouseY)) return true;
+        if (button == 0 && tabsClicked(mouseX, mouseY)) return true;
+
+        // Drawn over the panels, so it claims clicks ahead of them too.
+        if (button == 0 && alertClicked(mouseX, mouseY)) return true;
 
         if (button == 0 && leftSwitcherClicked(mouseX, mouseY)) return true;
 
@@ -1331,11 +1534,11 @@ public class MarketScreen extends Screen {
         // The re-place list occupies the discovery area while it exists, so it claims
         // clicks there first.
         if (button == 0 && !MarketStateHolder.pendingReplace().isEmpty()) {
-            int x = rowX;
+            int x = listX + 4;
             int headerY = discoveryStartY();
 
             // Header doubles as dismiss — the list is a convenience, not an obligation.
-            if (mouseX >= x && mouseX <= x + 300
+            if (mouseX >= x && mouseX <= x + listW - 8
                     && mouseY >= headerY && mouseY < headerY + DISCOVERY_ROW_HEIGHT) {
                 MarketStateHolder.clearPendingReplace();
                 status = "Dismissed — your balance is unaffected";
@@ -1344,7 +1547,7 @@ public class MarketScreen extends Screen {
 
             int y = headerY + DISCOVERY_ROW_HEIGHT + 2;
             for (MarketOldRow row : replaceRows()) {
-                if (mouseX >= x && mouseX <= x + 300
+                if (mouseX >= x && mouseX <= x + listW - 8
                         && mouseY >= y && mouseY < y + DISCOVERY_ROW_HEIGHT) {
                     replaceOrder(row.order);
                     return true;
@@ -1356,7 +1559,7 @@ public class MarketScreen extends Screen {
             // return unconditionally, which meant that while any orders were waiting
             // to be re-placed — i.e. immediately after every migration — no button or
             // text field anywhere on the screen could be clicked at all.
-            if (mouseX >= x && mouseX <= x + 300 && mouseY >= headerY && mouseY < y) {
+            if (mouseX >= x && mouseX <= x + listW - 8 && mouseY >= headerY && mouseY < y) {
                 return true;
             }
         }
@@ -1606,28 +1809,6 @@ public class MarketScreen extends Screen {
 
         int listX = this.listX;
 
-        // Persistent, not a status-line message — this one doesn't get to scroll away.
-        int warnY = 42;
-        if (MarketStateHolder.chainBrokenAt() != -1) {
-            String why = MarketStateHolder.damageReason();
-            label(matrices, "LOG UNUSABLE — " + (why == null ? "damaged" : why),
-                    listX, warnY, 0xFF6666);
-        } else {
-            long behind = MarketStateHolder.eventsBehind();
-            MarketStateHolder.Divergence split = MarketStateHolder.divergence();
-            if (behind > 0) {
-                label(matrices, behind + " events behind — connect to catch up",
-                        listX, warnY, 0xFFAA55);
-            }
-            // Below the behind-warning rather than instead of it: they're different
-            // problems and both can be true at once. Found passively by discovery, so
-            // it can be showing before anyone has tried to connect.
-            if (split != null) {
-                label(matrices, "FORKED — " + split.describe(),
-                        listX, behind > 0 ? warnY + 10 : warnY, 0xFF8844);
-            }
-        }
-
         // Frames around each column. Without them the controls float in the middle of
         // an empty screen with nothing saying where one grouping ends and the next
         // begins — the panels are most of what makes the layout read as a layout.
@@ -1656,7 +1837,7 @@ public class MarketScreen extends Screen {
         } else if (activeScreen == SCREEN_NETWORK) {
             // In the left panel, not stacked under the buttons — that put it outside
             // the frame drawn around the controls.
-            renderDiscovery(matrices, listX + 4, panelTop(), mouseX, mouseY);
+            renderDiscovery(matrices, listX + 4, mouseX, mouseY);
         } else if (activeScreen == SCREEN_MARKET) {
             renderMarketGuidance(matrices, listX + 4);
         } else if (activeScreen == SCREEN_HOME) {
@@ -1670,6 +1851,16 @@ public class MarketScreen extends Screen {
         if (!MarketStateHolder.pendingReplace().isEmpty()) {
             renderReplaceList(matrices);
         }
+
+        // After every panel on every destination, including Home's, so the current tab
+        // can overlap the border below it and read as joined to the panel.
+        renderTabs(matrices, mouseX, mouseY);
+
+        // After the panels rather than before them. These used to be drawn straight
+        // after the header, which put them underneath a panel frame that starts as high
+        // as y=52 on a short window — the one message that must not be missed was the
+        // one thing that could be covered.
+        renderAlerts(matrices, mouseX, mouseY);
 
         // Shown the first time the screen is opened after a recovery, then dismissed by
         // any click — it explains something that already happened, so it only has to be
@@ -1697,13 +1888,127 @@ public class MarketScreen extends Screen {
         // hand-rolled render calls could not do.
         super.render(matrices, mouseX, mouseY, delta);
 
-        // Above the widgets super.render just drew, and below an overlay, which is the
-        // only thing that outranks the menu.
-        renderNav(matrices, mouseX, mouseY);
         renderPicker(matrices, mouseX, mouseY);
 
         Overlay overlay = overlays.peekFirst();
         if (overlay != null) renderOverlay(matrices, overlay, mouseX, mouseY);
+    }
+
+    // ─────────── alerts ───────────
+    //
+    // The guided Market screen exists to say what is wrong and what to do about it, but
+    // you had to already suspect something was wrong to go and look at it. These are
+    // drawn on every destination, and each one carries you to the screen that actually
+    // answers it — which is not always Market: falling behind is fixed by connecting,
+    // and connecting lives on Network.
+
+    private static final int ALERT_ROW_H = 12;
+
+    /**
+     * Just inside the panel, below the tab row.
+     *
+     * These deliberately sit over the top of the panel's content rather than in the
+     * header: the header is full, the tab row is where the space above the panel went,
+     * and a state bad enough to raise one of these outranks the first line of an order
+     * book. Measured from frameTop so it follows the box when the window resizes.
+     */
+    private int alertTop() { return frameTop() + 8; }
+
+    /** Something wrong with the market, and where the answer to it lives. */
+    private static final class Alert {
+        final String text;
+        final int colour;
+        /** A SCREEN_ constant, or -1 when there is nowhere useful to go. */
+        final int target;
+
+        Alert(String text, int colour, int target) {
+            this.text = text;
+            this.colour = colour;
+            this.target = target;
+        }
+    }
+
+    /** What is currently wrong, worst first. Empty when there is nothing to say. */
+    private List<Alert> alerts() {
+        List<Alert> out = new ArrayList<>();
+
+        if (MarketStateHolder.chainBrokenAt() != -1) {
+            String why = MarketStateHolder.damageReason();
+            out.add(new Alert("LOG UNUSABLE — " + (why == null ? "damaged" : why),
+                    0xFF6666, SCREEN_MARKET));
+            // A log that can't be read makes every other reading of it meaningless.
+            return out;
+        }
+
+        long behind = MarketStateHolder.eventsBehind();
+        if (behind > 0) {
+            out.add(new Alert(behind + " events behind — connect to catch up",
+                    0xFFAA55, SCREEN_NETWORK));
+        }
+
+        // Alongside the behind-warning rather than instead of it: they're different
+        // problems and both can be true at once. Found passively by discovery, so this
+        // can be showing before anyone has tried to connect.
+        MarketStateHolder.Divergence split = MarketStateHolder.divergence();
+        if (split != null) {
+            out.add(new Alert("FORKED — " + split.describe(), 0xFF8844, SCREEN_MARKET));
+        }
+
+        return out;
+    }
+
+    private boolean alertLeadsSomewhere(Alert a) {
+        return a.target >= 0 && a.target != activeScreen;
+    }
+
+    /** The text as drawn — the hit region is measured from this, so it is computed once. */
+    private String alertText(Alert a) {
+        return alertLeadsSomewhere(a) ? a.text + "  — open " + SCREEN_NAMES[a.target] : a.text;
+    }
+
+    /**
+     * Both the frame and the hit-test measure from here.
+     *
+     * Deliberately one helper taking the index, after a click handler and a renderer
+     * once disagreed about whether a start offset already included a row height and
+     * made an entire list unclickable.
+     */
+    private int[] alertRect(int index, String text) {
+        return new int[]{listX + 4, alertTop() + index * ALERT_ROW_H,
+                this.textRenderer.getWidth(text) + 10, ALERT_ROW_H};
+    }
+
+    private void renderAlerts(MatrixStack m, int mouseX, int mouseY) {
+        List<Alert> list = alerts();
+        for (int i = 0; i < list.size(); i++) {
+            Alert a = list.get(i);
+            String text = alertText(a);
+            int[] r = alertRect(i, text);
+            boolean hot = alertLeadsSomewhere(a)
+                    && mouseX >= r[0] && mouseX < r[0] + r[2]
+                    && mouseY >= r[1] && mouseY < r[1] + r[3];
+
+            // A ground and an accent bar, so it reads as one object worth clicking
+            // rather than a loose red line among the labels around it.
+            fill(m, r[0], r[1], r[0] + r[2], r[1] + r[3], hot ? 0xC0000000 : 0x90000000);
+            fill(m, r[0], r[1], r[0] + 2, r[1] + r[3], 0xFF000000 | a.colour);
+            label(m, text, r[0] + 6, r[1] + 2, a.colour);
+        }
+    }
+
+    private boolean alertClicked(double mouseX, double mouseY) {
+        List<Alert> list = alerts();
+        for (int i = 0; i < list.size(); i++) {
+            Alert a = list.get(i);
+            if (!alertLeadsSomewhere(a)) continue;
+            int[] r = alertRect(i, alertText(a));
+            if (mouseX >= r[0] && mouseX < r[0] + r[2]
+                    && mouseY >= r[1] && mouseY < r[1] + r[3]) {
+                selectScreen(a.target);
+                return true;
+            }
+        }
+        return false;
     }
 
     private void renderConnectionStatus(MatrixStack matrices, int x, int y) {
@@ -2261,7 +2566,7 @@ public class MarketScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double amount) {
-        if (!overlays.isEmpty() || navOpen) return true;
+        if (!overlays.isEmpty()) return true;
         if (hoveredScrollKey != null && hoveredScrollMax > 0) {
             int next = (int) (scrollOf(hoveredScrollKey) - amount * 12);
             scrollOffsets.put(hoveredScrollKey,
@@ -2487,59 +2792,55 @@ public class MarketScreen extends Screen {
         String clock = java.time.LocalTime.now()
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
         int clockW = this.textRenderer.getWidth(clock);
-        label(m, clock, burgerRect()[0] - clockW - 8, 9, 0xA0A0A0);
-
-        renderBurger(m);
+        // Against the right edge of the content box rather than the window, so it lines
+        // up with the tab row and the panels underneath it.
+        label(m, clock, listX + contentW - clockW, 9, 0xA0A0A0);
     }
 
-    private void renderBurger(MatrixStack m) {
-        int[] r = burgerRect();
-        int colour = navOpen ? 0xFFFFDD66 : 0xFFCCCCCC;
-        for (int i = 0; i < 3; i++) {
-            int y = r[1] + 3 + i * 4;
-            fill(m, r[0], y, r[0] + r[2], y + 2, colour);
-        }
-    }
-
-    private void renderNav(MatrixStack m, int mouseX, int mouseY) {
-        if (!navOpen) return;
-
-        int[] first = navRowRect(0);
-        int[] last = navRowRect(SCREEN_NAMES.length - 1);
-        int top = first[1];
-        int bottom = last[1] + last[3];
-
-        vanillaPanel(m, first[0], top, NAV_W, bottom - top);
-
+    /**
+     * The tab row.
+     *
+     * Vanilla's tabs bleed into the panel below to read as joined to it, which works
+     * because there is one panel under them. There are three here with gaps between, so
+     * a bleeding tab would as often as not run into empty space — the current tab is
+     * raised and lit instead, which says the same thing without depending on what
+     * happens to be underneath it.
+     */
+    private void renderTabs(MatrixStack m, int mouseX, int mouseY) {
         for (int i = 0; i < SCREEN_NAMES.length; i++) {
-            int[] r = navRowRect(i);
+            int[] r = tabRect(i);
             boolean here = i == activeScreen;
-            boolean hot = within(mouseX, mouseY, r);
-            // Vanilla marks the current entry with a chevron rather than a highlight
-            // block — the selection reads at a glance without another filled rectangle.
-            label(m, (here ? "> " : "  ") + SCREEN_NAMES[i], r[0] + 4, r[1] + 4,
-                    here ? 0xFFAA00 : (hot ? 0xFFFFFF : 0xA0A0A0));
+            boolean hot = !here && within(mouseX, mouseY, r);
+
+            // The inactive ones sit lower, so the current one reads as standing forward
+            // of the row rather than merely being a different colour in it.
+            int top = here ? r[1] : r[1] + 2;
+            int bottom = r[1] + r[3];
+            int right = r[0] + r[2];
+
+            fill(m, r[0], top, right, bottom, here ? PANEL_BG : 0xC0080008);
+
+            fillGradient(m, r[0], top, r[0] + 1, bottom, PANEL_EDGE_TOP, PANEL_EDGE_BOTTOM);
+            fillGradient(m, right - 1, top, right, bottom, PANEL_EDGE_TOP, PANEL_EDGE_BOTTOM);
+            fillGradient(m, r[0], top, right, top + 1, PANEL_EDGE_TOP, PANEL_EDGE_TOP);
+            fillGradient(m, r[0], bottom - 1, right, bottom,
+                    PANEL_EDGE_BOTTOM, PANEL_EDGE_BOTTOM);
+
+            drawCenteredText(m, this.textRenderer, new LiteralText(SCREEN_NAMES[i]),
+                    r[0] + r[2] / 2, top + (bottom - top - 8) / 2,
+                    here ? 0xFFAA00 : (hot ? 0xFFFFFF : 0x909090));
         }
     }
 
-    /** Returns true if the click belonged to the nav, including opening or closing it. */
-    private boolean navClicked(double mouseX, double mouseY) {
-        if (within(mouseX, mouseY, burgerRect())) {
-            navOpen = !navOpen;
-            return true;
-        }
-        if (!navOpen) return false;
-
+    /** Returns true if the click landed on a tab. */
+    private boolean tabsClicked(double mouseX, double mouseY) {
         for (int i = 0; i < SCREEN_NAMES.length; i++) {
-            if (within(mouseX, mouseY, navRowRect(i))) {
+            if (within(mouseX, mouseY, tabRect(i))) {
                 selectScreen(i);
                 return true;
             }
         }
-        // Clicking anywhere else dismisses rather than falling through to whatever is
-        // underneath — a menu that closes AND presses the button behind it is a trap.
-        navOpen = false;
-        return true;
+        return false;
     }
 
     // ─────────── overlays ───────────
@@ -2792,13 +3093,6 @@ public class MarketScreen extends Screen {
                 pickerQuery = pickerQuery.substring(0, pickerQuery.length() - 1);
                 scrollOffsets.put("picker", 0);
             }
-            return true;
-        }
-
-        // Then the menu, for the same reason: Escape should back out one step at a
-        // time rather than dropping straight to the game.
-        if (navOpen && keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
-            navOpen = false;
             return true;
         }
 
