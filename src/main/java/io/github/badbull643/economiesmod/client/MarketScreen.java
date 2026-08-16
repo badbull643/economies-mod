@@ -2187,17 +2187,36 @@ public class MarketScreen extends Screen {
         fill(m, x, y, x + 18, y + 18, hovered ? 0xFF4A4A4A : 0xFF2A2A2A);
         fill(m, x, y, x + 18, y + 1, 0xFF1A1A1A);
         fill(m, x, y, x + 1, y + 18, 0xFF1A1A1A);
+        drawIcon(m, stack, x + 1, y + 1, countLabel);
+    }
 
+    /** The icon on its own, for places that want the item without a slot around it. */
+    private void drawIcon(MatrixStack m, ItemStack stack, int x, int y, String countLabel) {
         if (stack == null || stack.isEmpty()) return;
 
         ItemRenderer items = MinecraftClient.getInstance().getItemRenderer();
         this.setZOffset(100);
         items.zOffset = 100.0F;
         RenderSystem.enableDepthTest();
-        items.renderInGui(stack, x + 1, y + 1);
-        items.renderGuiItemOverlay(this.textRenderer, stack, x + 1, y + 1, countLabel);
+        items.renderInGui(stack, x, y);
+        items.renderGuiItemOverlay(this.textRenderer, stack, x, y, countLabel);
         items.zOffset = 0.0F;
         this.setZOffset(0);
+    }
+
+    /**
+     * Text drawn larger than the one size Minecraft's font comes in.
+     *
+     * Scaling the matrix is the only way to do it, and it has to be done around the
+     * draw rather than to the coordinates — which is why the position is translated
+     * first and the text drawn at the origin.
+     */
+    private void scaledLabel(MatrixStack m, String s, int x, int y, int colour, float scale) {
+        m.push();
+        m.translate(x, y, 0);
+        m.scale(scale, scale, 1.0F);
+        drawTextWithShadow(m, this.textRenderer, new LiteralText(s), 0, 0, colour);
+        m.pop();
     }
 
     /**
@@ -2448,7 +2467,13 @@ public class MarketScreen extends Screen {
         MarketState market = MarketStateHolder.get();
         if (mc.player != null && market != null) {
             UUID me = MinecraftIds.userIdOf(mc.player);
-            label(m, "Credits: " + market.wallets().getBalance(me), 8, 20, 0xFFFF88);
+
+            // An emerald for money and the item itself for the item — what you are
+            // worth is the number people glance at most, and an icon finds it faster
+            // than reading the word in front of it.
+            drawIcon(m, new ItemStack(Items.EMERALD), 8, 16, null);
+            scaledLabel(m, String.valueOf(market.wallets().getBalance(me)),
+                    28, 19, 0xFFFF55, 1.3F);
 
             // Only where an item is selected and the number means something.
             if (activeScreen == SCREEN_TRADING) {
@@ -2456,8 +2481,8 @@ public class MarketScreen extends Screen {
                 if (item != Items.AIR) {
                     long held = market.itemBalances()
                             .getBalance(me, MinecraftIds.itemToId(item));
-                    label(m, item.getName().getString() + " market credit: " + held,
-                            8, 30, 0xFFFF88);
+                    drawIcon(m, new ItemStack(item), 8, 33, null);
+                    scaledLabel(m, held + " in market", 28, 36, 0xFFFF55, 1.3F);
                 }
             }
         }
