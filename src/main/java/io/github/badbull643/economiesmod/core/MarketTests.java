@@ -1250,6 +1250,71 @@ public class MarketTests {
                     "minecraft:iron_ingot".equals(p.lastItem()) ? 1 : 0, 1);
         }
 
+        section("R1: server config round-trips");
+        {
+            Path f = scratch("test-serverconfig-r1.json");
+            Files.deleteIfExists(f);
+
+            ServerConfig cfg = ServerConfig.friendGroup(25610);
+            cfg.hostName = "dedicated-one";
+            cfg.welcomeGrant = 250;
+            cfg.maxConnections = 8;
+            cfg.bindAddress = "127.0.0.1";
+            cfg.creatorUserId = ALICE.toString();
+            cfg.save(f);
+
+            ServerConfig back = ServerConfig.load(f);
+            check("port survives", back.port, 25610);
+            check("grant survives", back.welcomeGrant, 250);
+            check("connection cap survives", back.maxConnections, 8);
+            check("bind address survives",
+                    "127.0.0.1".equals(back.bindAddress) ? 1 : 0, 1);
+            check("creator survives",
+                    ALICE.toString().equals(back.creatorUserId) ? 1 : 0, 1);
+        }
+
+        section("R2: a server nobody could use is refused, not clamped");
+        {
+            // Named rather than corrected: a port silently changed out from under an
+            // operator is worse than a refusal that says which field is wrong.
+            ServerConfig bad = ServerConfig.friendGroup(99999);
+            check("out-of-range port refused", bad.problem() != null ? 1 : 0, 1);
+
+            ServerConfig noRoom = ServerConfig.friendGroup(25555);
+            noRoom.maxConnections = 0;
+            check("zero connections refused", noRoom.problem() != null ? 1 : 0, 1);
+
+            ServerConfig negative = ServerConfig.friendGroup(25555);
+            negative.welcomeGrant = -1;
+            check("negative grant refused", negative.problem() != null ? 1 : 0, 1);
+
+            check("a sane config is accepted",
+                    ServerConfig.friendGroup(25555).problem() == null ? 1 : 0, 1);
+        }
+
+        section("R3: a missing or damaged config still starts a server");
+        {
+            // The dedicated server has no operator sitting at it. Refusing to boot over
+            // one mistyped field takes the market down at exactly the moment somebody is
+            // trying to fix it, so a bad file falls back rather than throwing.
+            ServerConfig absent = ServerConfig.load(scratch("test-serverconfig-none.json"));
+            check("absent file gives defaults", absent.port, 25555);
+            check("and the default grant", absent.welcomeGrant,
+                    ServerConfig.DEFAULT_WELCOME_GRANT);
+
+            Path junk = scratch("test-serverconfig-r3.json");
+            Files.deleteIfExists(junk);
+            Files.write(junk, "not json at all".getBytes());
+            check("damaged file gives defaults", ServerConfig.load(junk).port, 25555);
+
+            Path partial = scratch("test-serverconfig-r3b.json");
+            Files.deleteIfExists(partial);
+            Files.write(partial, "{\"port\":25611}".getBytes());
+            ServerConfig p = ServerConfig.load(partial);
+            check("known field read", p.port, 25611);
+            check("absent field keeps its default", p.maxConnections, 64);
+        }
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");
