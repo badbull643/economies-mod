@@ -77,6 +77,18 @@ public abstract class Event {
     public static class MarketPolicy extends Event {
         /** Transaction tax on fills, in basis points. 0 means no tax. */
         public int taxBps;
+
+        /**
+         * What a new identity is granted on first registering.
+         *
+         * Here rather than in a host's config, and that is a correctness requirement
+         * rather than tidiness. WelcomeGrant carries its own amount and is validated by
+         * every replica; with nothing in the log to compare against, "is this the right
+         * amount" was unanswerable and any signed grant for any sum validated. It also
+         * stops two hosts of one market handing out different amounts depending on who
+         * happened to be online.
+         */
+        public long grantAmount;
     }
 
     /**

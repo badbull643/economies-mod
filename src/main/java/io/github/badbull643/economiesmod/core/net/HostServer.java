@@ -1108,7 +1108,19 @@ public class HostServer {
     }
 
     private void issueWelcomeGrant(UUID userId) throws IOException {
-        if (welcomeGrantAmount <= 0) return;
+        // Two different questions, and only one of them is the market's to answer.
+        //
+        // Whether to issue grants at all is this host's business: declining is not a
+        // policy violation, it just means an event nobody was owed does not exist. A
+        // configured zero is that opt-out.
+        //
+        // How much is emphatically not. A host that used its own figure would author
+        // grants every replica rejected, and on a market it did not create it would be
+        // overruling policy it has no authority over.
+        if (config.welcomeGrant <= 0) return;
+
+        long amount = state.welcomeGrant();
+        if (amount <= 0) return;
         if (userId == null) return;
         if (state.hasBeenGranted(userId)) return;
 
@@ -1116,7 +1128,7 @@ public class HostServer {
         wg.userId = hostUserIdAsUuid();
         wg.marketId = state.marketId();
         wg.targetUserId = userId;
-        wg.amount = welcomeGrantAmount;
+        wg.amount = amount;
         wg.clientEventId = UUID.randomUUID().toString();
         wg.timestamp = System.currentTimeMillis();
 
@@ -1142,7 +1154,7 @@ public class HostServer {
 
         SequencedEvent se = log.append(wg, signature);
         if (EventApplier.apply(state, se).accepted) {
-            System.out.println("[host] seq " + se.seq + " WelcomeGrant " + welcomeGrantAmount
+            System.out.println("[host] seq " + se.seq + " WelcomeGrant " + amount
                     + " to " + userId);
             Message.Accepted acc = new Message.Accepted();
             acc.logLine = log.rawLineFor(se.seq);
@@ -1392,8 +1404,10 @@ public class HostServer {
         if (creatorKeyFile == null) {
             // The server is its own creator. Simplest case, and the only one that needs
             // nothing kept anywhere else.
-            MarketBootstrap.createMarket(log, UUID.fromString(cfg.hostUserId), name, serverKeys);
+            UUID creatorId = UUID.fromString(cfg.hostUserId);
+            MarketBootstrap.createMarket(log, creatorId, name, serverKeys);
             System.out.println("[host] created '" + name + "' owned by this server");
+            writeInitialPolicy(log, cfg, creatorId, serverKeys);
             return;
         }
 
@@ -1407,9 +1421,47 @@ public class HostServer {
         }
 
         PlayerKeys creator = PlayerKeys.loadOrCreate(creatorKeyFile);
-        MarketBootstrap.createMarket(log, UUID.fromString(cfg.creatorUserId.trim()),
-                name, creator);
+        UUID creatorId = UUID.fromString(cfg.creatorUserId.trim());
+        MarketBootstrap.createMarket(log, creatorId, name, creator);
         System.out.println("[host] created '" + name + "' owned by " + cfg.creatorUserId
                 + " — that key is not needed on this machine again");
+        writeInitialPolicy(log, cfg, creatorId, creator);
+    }
+
+    /**
+     * Records the configured welcome grant as the new market's policy.
+     *
+     * Only at creation, and only when it differs from the default every market starts
+     * with. After this the figure is the market's, not the server's: a host joining a
+     * market it did not create has no authority to change what newcomers are given, and
+     * a grant that disagreed with policy would be rejected by every replica including
+     * its own.
+     *
+     * Signed by the creator, because policy is creator-gated — which is the whole
+     * reason --creator-key records an operator rather than the box.
+     */
+    private static void writeInitialPolicy(EventLog log, ServerConfig cfg,
+                                           UUID creatorId, PlayerKeys creatorKeys) {
+        if (cfg.welcomeGrant == ServerConfig.DEFAULT_WELCOME_GRANT) return;
+
+        try {
+            Event.MarketPolicy mp = new Event.MarketPolicy();
+            mp.userId = creatorId;
+            mp.marketId = log.marketId();
+            mp.taxBps = 0;
+            mp.grantAmount = cfg.welcomeGrant;
+            mp.clientEventId = UUID.randomUUID().toString();
+            mp.timestamp = System.currentTimeMillis();
+
+            log.append(mp, creatorKeys.sign(EventCanonical.canonicalPayload(mp)));
+            System.out.println("[host] welcome grant for this market set to "
+                    + cfg.welcomeGrant);
+        } catch (Exception e) {
+            // Not fatal: the market exists and works, it just uses the default grant.
+            // Saying so is better than a server that quietly ignores its own config.
+            System.err.println("[host] could not record the configured welcome grant ("
+                    + e.getMessage() + ") — this market will use "
+                    + ServerConfig.DEFAULT_WELCOME_GRANT);
+        }
     }
 }

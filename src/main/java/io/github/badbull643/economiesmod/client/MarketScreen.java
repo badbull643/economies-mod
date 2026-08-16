@@ -1357,9 +1357,16 @@ public class MarketScreen extends Screen {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) { status = "No player"; return; }
 
+        MarketState market = MarketStateHolder.get();
+        if (market == null) { status = "No market"; return; }
+
         Event.MarketPolicy policy = new Event.MarketPolicy();
         policy.userId = MinecraftIds.userIdOf(mc.player);
         policy.taxBps = bps;
+        // A policy event carries the whole policy, so the fields this control does not
+        // touch have to be restated. Leaving grantAmount at its zero default would set
+        // the welcome grant to nothing as a side effect of changing the fee.
+        policy.grantAmount = market.welcomeGrant();
         policy.timestamp = System.currentTimeMillis();
 
         MarketStateHolder.Submission s = MarketStateHolder.submit(policy);

@@ -96,6 +96,28 @@ public class MarketState {
     /** Called only by EventApplier, which has already checked the bounds and the author. */
     void setTaxBps(int bps) { this.taxBps = bps; }
 
+    /**
+     * What a new identity is granted, in credits.
+     *
+     * Defaults to the value every market used when this was a compiled-in constant, so
+     * logs written before policy existed still validate — their grants were all for
+     * exactly this amount.
+     */
+    private volatile long welcomeGrant = ServerConfig.DEFAULT_WELCOME_GRANT;
+
+    public long welcomeGrant() { return welcomeGrant; }
+
+    void setWelcomeGrant(long amount) { this.welcomeGrant = amount; }
+
+    /**
+     * The most a market may grant a newcomer.
+     *
+     * A ceiling on a fat finger, not a security boundary — the security is that grants
+     * must equal the market's policy exactly, so the number a liar can give themselves
+     * is the same one an honest host would have given them anyway.
+     */
+    public static final long MAX_WELCOME_GRANT = 1_000_000L;
+
     /** Basis points are per ten thousand. Named so the 10000 is never a loose literal. */
     public static final int BPS_DIVISOR = 10_000;
 

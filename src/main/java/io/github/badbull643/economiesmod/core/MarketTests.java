@@ -1472,6 +1472,60 @@ public class MarketTests {
             check("only the later trade is taxed", m.wallets().getBalance(ALICE), 950);
         }
 
+        section("U1: a welcome grant must be the amount this market publishes");
+        {
+            // Nothing checks who authors a grant, and nothing can: hosting rotates, so a
+            // replica replaying the log cannot know who was sequencing at that point.
+            // The amount is therefore the only enforceable part, and before it was
+            // checked, any identity could sign itself a grant for any sum and every
+            // replica accepted it. Two ways in: a server configured with a zero grant
+            // never marks anyone granted, so the once-per-identity rule never fires; and
+            // a grant authored in one's own local world migrates in at full value.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "grant probe", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.registerKey(BOB, "bob-key");
+
+            check("a self-authored fortune is refused",
+                    grantRejection(m, BOB, BOB, 1_000_000_000L) != null ? 1 : 0, 1);
+            check("so is one credit too many",
+                    grantRejection(m, BOB, BOB, m.welcomeGrant() + 1) != null ? 1 : 0, 1);
+
+            // The fix must not simply disable grants — an honest host still issues them,
+            // and the amount a liar can take is now the one they would have been given.
+            check("the market's own figure is accepted",
+                    grantRejection(m, ALICE, BOB, m.welcomeGrant()) == null ? 1 : 0, 1);
+
+            // A market that grants nothing grants nothing to anybody, including the
+            // people who would previously have exploited exactly this configuration.
+            MarketState none = new MarketState();
+            none.setMarketIdentity(UUID.randomUUID(), "no grants", ALICE);
+            none.registerKey(ALICE, "alice-key");
+            none.registerKey(BOB, "bob-key");
+            none.setWelcomeGrant(0);
+            check("a zero-grant market grants nobody anything",
+                    grantRejection(none, BOB, BOB, 1000) != null ? 1 : 0, 1);
+        }
+
+        section("U2: the grant amount is policy, and bounded like the fee");
+        {
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "policy market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+
+            check("the default is what markets used before policy existed",
+                    m.welcomeGrant(), ServerConfig.DEFAULT_WELCOME_GRANT);
+            check("a sane grant is allowed",
+                    policyRejection(m, ALICE, 0, 50) == null ? 1 : 0, 1);
+            check("zero is allowed — a market may grant nothing",
+                    policyRejection(m, ALICE, 0, 0) == null ? 1 : 0, 1);
+            check("negative is refused",
+                    policyRejection(m, ALICE, 0, -1) != null ? 1 : 0, 1);
+            check("above the ceiling is refused",
+                    policyRejection(m, ALICE, 0, MarketState.MAX_WELCOME_GRANT + 1)
+                            != null ? 1 : 0, 1);
+        }
+
         section("T5: a fee typed as a percentage becomes exact basis points");
         {
             // The one place a human decimal meets a number every replica must agree on.
@@ -1563,11 +1617,35 @@ public class MarketTests {
      * only mean anything at the gate every replica passes through — checking them
      * anywhere else would prove something no client actually relies on.
      */
+    /** Why EventApplier would refuse this grant, or null if it would accept it. */
+    private static String grantRejection(MarketState state, UUID author, UUID target,
+                                         long amount) {
+        Event.WelcomeGrant wg = new Event.WelcomeGrant();
+        wg.userId = author;
+        wg.targetUserId = target;
+        wg.marketId = state.marketId();
+        wg.amount = amount;
+        wg.timestamp = 1L;
+
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 2;
+        se.event = wg;
+
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
     private static String policyRejection(MarketState state, UUID author, int bps) {
+        return policyRejection(state, author, bps, state.welcomeGrant());
+    }
+
+    private static String policyRejection(MarketState state, UUID author, int bps,
+                                          long grant) {
         Event.MarketPolicy mp = new Event.MarketPolicy();
         mp.userId = author;
         mp.marketId = state.marketId();
         mp.taxBps = bps;
+        mp.grantAmount = grant;
         mp.timestamp = 1L;
 
         SequencedEvent se = new SequencedEvent();
