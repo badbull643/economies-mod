@@ -876,8 +876,15 @@ public class MarketScreen extends Screen {
      * Below the tallest tab's fourth row, so it is clear of every tab's controls —
      * they all share the same rows, so one clearance works for all of them.
      */
+    /**
+     * The header row of a list in the left panel; its entries start one row below.
+     *
+     * Both the host list and the re-place list measure from here, and both their hit
+     * tests do too. When this meant "header" to one of them and "first entry" to the
+     * other, every click on a host landed one row low and the last one was unreachable.
+     */
     private int discoveryStartY() {
-        return panelTop() + 14;
+        return panelTop();
     }
 
     // ─────────── home ───────────
@@ -1164,11 +1171,13 @@ public class MarketScreen extends Screen {
         List<MarketStateHolder.OldOrder> old = MarketStateHolder.pendingReplace();
         if (old.isEmpty()) return;
 
-        int x = rowX;
+        // In the left panel, where the lists live. At rowX it drew over the control
+        // buttons, which have a frame around them now.
+        int x = listX + 4;
         int y = discoveryStartY();
 
-        label(matrices, "Orders from your old market — click to re-place, "
-                + "[X] to dismiss all:", x, y, 0xFFDD66);
+        label(matrices, "Old orders — click to re-place, [X] to dismiss:",
+                x, y, 0xFFDD66);
         y += DISCOVERY_ROW_HEIGHT + 2;
 
         MarketState s = MarketStateHolder.get();
@@ -1235,8 +1244,14 @@ public class MarketScreen extends Screen {
         return rows;
     }
 
-    private void renderDiscovery(MatrixStack matrices, int px, int py,
+    /**
+     * The y is taken from discoveryStartY rather than passed in, so it cannot drift
+     * from the hit test that reads the same function — which is exactly how clicking a
+     * host came to do nothing.
+     */
+    private void renderDiscovery(MatrixStack matrices, int px,
                                  double mouseX, double mouseY) {
+        int py = discoveryStartY();
         // The re-place list takes this space while it exists — it's transient and
         // actionable, discovery is neither. render() draws it directly now, on
         // whichever tab you are on, so this only has to stand aside.
@@ -1331,11 +1346,11 @@ public class MarketScreen extends Screen {
         // The re-place list occupies the discovery area while it exists, so it claims
         // clicks there first.
         if (button == 0 && !MarketStateHolder.pendingReplace().isEmpty()) {
-            int x = rowX;
+            int x = listX + 4;
             int headerY = discoveryStartY();
 
             // Header doubles as dismiss — the list is a convenience, not an obligation.
-            if (mouseX >= x && mouseX <= x + 300
+            if (mouseX >= x && mouseX <= x + listW - 8
                     && mouseY >= headerY && mouseY < headerY + DISCOVERY_ROW_HEIGHT) {
                 MarketStateHolder.clearPendingReplace();
                 status = "Dismissed — your balance is unaffected";
@@ -1344,7 +1359,7 @@ public class MarketScreen extends Screen {
 
             int y = headerY + DISCOVERY_ROW_HEIGHT + 2;
             for (MarketOldRow row : replaceRows()) {
-                if (mouseX >= x && mouseX <= x + 300
+                if (mouseX >= x && mouseX <= x + listW - 8
                         && mouseY >= y && mouseY < y + DISCOVERY_ROW_HEIGHT) {
                     replaceOrder(row.order);
                     return true;
@@ -1356,7 +1371,7 @@ public class MarketScreen extends Screen {
             // return unconditionally, which meant that while any orders were waiting
             // to be re-placed — i.e. immediately after every migration — no button or
             // text field anywhere on the screen could be clicked at all.
-            if (mouseX >= x && mouseX <= x + 300 && mouseY >= headerY && mouseY < y) {
+            if (mouseX >= x && mouseX <= x + listW - 8 && mouseY >= headerY && mouseY < y) {
                 return true;
             }
         }
@@ -1656,7 +1671,7 @@ public class MarketScreen extends Screen {
         } else if (activeScreen == SCREEN_NETWORK) {
             // In the left panel, not stacked under the buttons — that put it outside
             // the frame drawn around the controls.
-            renderDiscovery(matrices, listX + 4, panelTop(), mouseX, mouseY);
+            renderDiscovery(matrices, listX + 4, mouseX, mouseY);
         } else if (activeScreen == SCREEN_MARKET) {
             renderMarketGuidance(matrices, listX + 4);
         } else if (activeScreen == SCREEN_HOME) {
