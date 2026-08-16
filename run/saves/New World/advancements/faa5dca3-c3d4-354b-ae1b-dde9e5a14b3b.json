@@ -176,6 +176,12 @@
     },
     "done": true
   },
+  "minecraft:recipes/food/baked_potato_from_smoking": {
+    "criteria": {
+      "has_potato": "2026-08-15 17:43:08 +0100"
+    },
+    "done": true
+  },
   "minecraft:recipes/combat/iron_leggings": {
     "criteria": {
       "has_iron_ingot": "2026-08-08 21:10:00 +0100"
@@ -203,6 +209,12 @@
   "minecraft:recipes/combat/shield": {
     "criteria": {
       "has_iron_ingot": "2026-08-08 21:10:00 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/food/baked_potato": {
+    "criteria": {
+      "has_potato": "2026-08-15 17:43:08 +0100"
     },
     "done": true
   },
@@ -293,6 +305,12 @@
   "minecraft:story/smelt_iron": {
     "criteria": {
       "iron": "2026-08-08 21:10:00 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/food/baked_potato_from_campfire_cooking": {
+    "criteria": {
+      "has_potato": "2026-08-15 17:43:08 +0100"
     },
     "done": true
   },
