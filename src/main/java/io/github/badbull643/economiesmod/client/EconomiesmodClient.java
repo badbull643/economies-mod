@@ -157,7 +157,7 @@ public class EconomiesmodClient implements ClientModInitializer {
         }
 
         int total = recovery.refunds.size() + recovery.unconfirmed.size();
-        MarketScreen.reportRecovery(recovery.refunds.size(), recovery.unconfirmed.size());
+        MarketStateHolder.reportRecovery(recovery.refunds.size(), recovery.unconfirmed.size());
         System.out.println("[economiesmod] settled " + total
                 + " interrupted inventory operation(s) from a previous session");
     }

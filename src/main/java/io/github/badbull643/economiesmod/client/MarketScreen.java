@@ -48,33 +48,17 @@ public class MarketScreen extends Screen {
     private ButtonWidget exportButton;
     private ButtonWidget resetButton;
 
-    /** Set from the game thread by button handlers, and from the network thread
-     *  by callbacks — hence volatile. */
-    private static volatile String status = "";
-
     /**
-     * Result of settling interrupted inventory operations at world load.
+     * The status line.
      *
-     * Held rather than shown immediately, because it is worked out before the player
-     * has any reason to open this screen — and an item silently reappearing in your
-     * inventory with no explanation is worse than the original problem.
+     * Set from the game thread by button handlers, and from the network thread by the
+     * rejection callback registered in init() — hence volatile. Per-screen rather than
+     * static: a status is a reply to something you just did on this screen, and one
+     * left over from a previous screen would be answering a question nobody asked.
+     * The callback that writes it is dropped in removed(), so a closed screen is not
+     * kept alive by the holder still pointing at its handler.
      */
-    private static volatile String recoveryNote = "";
-
-    public static void reportRecovery(int returned, int unconfirmed) {
-        StringBuilder sb = new StringBuilder();
-        if (returned > 0) {
-            sb.append("Returned items from ").append(returned)
-              .append(returned == 1 ? " deposit that" : " deposits that")
-              .append(" never completed");
-        }
-        if (unconfirmed > 0) {
-            if (sb.length() > 0) sb.append(". ");
-            sb.append(unconfirmed).append(unconfirmed == 1 ? " withdrawal" : " withdrawals")
-              .append(" may not have reached you — see the log");
-        }
-        recoveryNote = sb.toString();
-    }
+    private volatile String status = "";
 
     private static final int FIELD_HEIGHT = 20;
     private static final long MAX_QTY = 100_000L;
@@ -1529,7 +1513,7 @@ public class MarketScreen extends Screen {
 
         // Any click acknowledges the recovery note — it describes something already
         // done, so it does not need to keep occupying a line.
-        recoveryNote = "";
+        MarketStateHolder.clearRecoveryNote();
 
         // The re-place list occupies the discovery area while it exists, so it claims
         // clicks there first.
@@ -1865,8 +1849,9 @@ public class MarketScreen extends Screen {
         // Shown the first time the screen is opened after a recovery, then dismissed by
         // any click — it explains something that already happened, so it only has to be
         // seen once.
-        if (!recoveryNote.isEmpty()) {
-            label(matrices, recoveryNote, listX, this.height - 36, 0x88CCFF);
+        String note = MarketStateHolder.recoveryNote();
+        if (!note.isEmpty()) {
+            label(matrices, note, listX, this.height - 36, 0x88CCFF);
         }
 
         if (!status.isEmpty()) {
@@ -2488,18 +2473,31 @@ public class MarketScreen extends Screen {
      * nothing to do with stack sizes.
      */
     /**
-     * A vanilla container slot: grey body, dark top-left, light bottom-right.
+     * A container slot: body, dark top-left, light bottom-right.
      *
      * That inset bevel is the whole reason a Minecraft slot reads as a slot. A flat
      * square is the same information and none of the recognition.
+     *
+     * Darkened out of vanilla's own palette (0x8B8B8B body between 0x373737 and white).
+     * Those values are correct in an inventory, which is drawn on a light stone
+     * texture; here they sit on PANEL_BG, which is near-black, and a grid of them read
+     * as a slab of light rather than as slots. What makes the shape recognisable is
+     * the *ratio* between the three tones, not their absolute values, so those are
+     * preserved — body/dark 2.5 and light/body 2.0 against vanilla's 2.5 and 1.8 —
+     * and the hue is pulled into the panel's violet so the grid belongs to the frame
+     * around it.
      */
+    private static final int SLOT_BODY = 0xFF2E2836;
+    private static final int SLOT_EDGE_DARK = 0xFF120F17;
+    private static final int SLOT_EDGE_LIGHT = 0xFF5F5469;
+
     private void drawItemCell(MatrixStack m, ItemStack stack, int x, int y,
                               String countLabel, boolean hovered) {
-        fill(m, x, y, x + 18, y + 18, 0xFF8B8B8B);
-        fill(m, x, y, x + 17, y + 1, 0xFF373737);
-        fill(m, x, y + 1, x + 1, y + 17, 0xFF373737);
-        fill(m, x + 17, y, x + 18, y + 18, 0xFFFFFFFF);
-        fill(m, x + 1, y + 17, x + 18, y + 18, 0xFFFFFFFF);
+        fill(m, x, y, x + 18, y + 18, SLOT_BODY);
+        fill(m, x, y, x + 17, y + 1, SLOT_EDGE_DARK);
+        fill(m, x, y + 1, x + 1, y + 17, SLOT_EDGE_DARK);
+        fill(m, x + 17, y, x + 18, y + 18, SLOT_EDGE_LIGHT);
+        fill(m, x + 1, y + 17, x + 18, y + 18, SLOT_EDGE_LIGHT);
 
         // Before the icon, as vanilla's drawSlot does — the item is drawn at a raised
         // z-offset, so a highlight painted afterwards would sit behind it.
@@ -3055,6 +3053,13 @@ public class MarketScreen extends Screen {
         // Nothing to disarm any more — confirmations are modal and answered in place,
         // so none of them can survive a screen close half-armed.
         overlays.clear();
+
+        // The handler registered in init() writes this screen's status field, so it
+        // holds a reference to this screen. The holder outlives every screen, so
+        // leaving it pointed here would keep a closed screen — and the whole widget
+        // tree hanging off it — reachable until the next one opens. Reset to the same
+        // no-op the holder starts with, not null: every call site accepts() unguarded.
+        MarketStateHolder.setOnRejected(reason -> {});
 
         // Persisted rather than parked in statics, so these survive quitting the game
         // and not merely closing the screen. The market name is saved when a market is
