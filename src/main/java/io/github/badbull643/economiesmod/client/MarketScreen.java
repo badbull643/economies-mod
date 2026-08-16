@@ -1791,7 +1791,10 @@ public class MarketScreen extends Screen {
         // show straight through the panel covering them.
         RenderSystem.disableDepthTest();
 
-        fill(m, 0, 0, this.width, this.height, 0xE0101010);
+        // Fully opaque, not a tint. Anything less leaves the buttons underneath legible
+        // through it, which reads as the panel failing to cover them rather than as
+        // deliberate context — and while a modal is up, what is behind is not in play.
+        fill(m, 0, 0, this.width, this.height, 0xFF0A0A0A);
 
         int[] box = pickerBox();
         fill(m, box[0] - 1, box[1] - 1, box[0] + box[2] + 1, box[1] + box[3] + 1, 0xFF88CCFF);
@@ -2083,7 +2086,10 @@ public class MarketScreen extends Screen {
 
         // Dim everything behind it, so it reads as blocking rather than as another
         // widget competing for attention with the rest of the screen.
-        fill(m, 0, 0, this.width, this.height, 0xE0101010);
+        // Fully opaque, not a tint. Anything less leaves the buttons underneath legible
+        // through it, which reads as the panel failing to cover them rather than as
+        // deliberate context — and while a modal is up, what is behind is not in play.
+        fill(m, 0, 0, this.width, this.height, 0xFF0A0A0A);
 
         int[] box = overlayBox(o);
         int accent = o.kind == Overlay.DANGER ? 0xFFFF6655
