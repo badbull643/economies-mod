@@ -1472,6 +1472,30 @@ public class MarketTests {
             check("only the later trade is taxed", m.wallets().getBalance(ALICE), 950);
         }
 
+        section("T5: a fee typed as a percentage becomes exact basis points");
+        {
+            // The one place a human decimal meets a number every replica must agree on.
+            check("whole percent", MarketState.bpsFromPercent("1"), 100);
+            check("half percent", MarketState.bpsFromPercent("0.5"), 50);
+
+            // Double.parseDouble("2.5") * 100 can land on 249.99999999999997, which
+            // truncates to a 2.49% fee nobody asked for.
+            check("the case a double gets wrong", MarketState.bpsFromPercent("2.5"), 250);
+            check("two decimal places", MarketState.bpsFromPercent("0.01"), 1);
+            check("zero turns it off", MarketState.bpsFromPercent("0"), 0);
+            check("surrounding space is not an error",
+                    MarketState.bpsFromPercent("  2.5 "), 250);
+            check("the ceiling", MarketState.bpsFromPercent("50"), 5000);
+
+            // Refused rather than rounded: a fee is not a number to be approximate about.
+            check("finer than basis points is refused",
+                    MarketState.bpsFromPercent("0.005"), -1);
+            check("negative is refused", MarketState.bpsFromPercent("-1"), -1);
+            check("words are refused", MarketState.bpsFromPercent("two"), -1);
+            check("empty is refused", MarketState.bpsFromPercent(""), -1);
+            check("null is refused", MarketState.bpsFromPercent(null), -1);
+        }
+
         section("T4: only the creator sets policy, and only within bounds");
         {
             // Bounds live in EventApplier because that is the gate every replica passes

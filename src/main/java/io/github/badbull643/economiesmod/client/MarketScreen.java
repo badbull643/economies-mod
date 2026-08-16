@@ -47,6 +47,8 @@ public class MarketScreen extends Screen {
     private ButtonWidget itemButton;
     private ButtonWidget exportButton;
     private ButtonWidget resetButton;
+    private TextFieldWidget feeField;
+    private ButtonWidget feeButton;
 
     /**
      * The status line.
@@ -411,6 +413,18 @@ public class MarketScreen extends Screen {
         this.resetButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Discard and start over"), b -> onReset()));
+
+        // Only the market's creator can author policy, so these appear for exactly one
+        // person per market — see refreshMarketActions.
+        this.feeField = new TextFieldWidget(this.textRenderer,
+                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Trading fee"));
+        this.feeField.setMaxLength(6);
+        hint(this.feeField, "fee %, e.g. 2.5");
+        onScreen(SCREEN_MARKET, this.feeField);
+
+        this.feeButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
+                        new LiteralText("Set trading fee"), b -> onSetFee()));
 
         // ─── SETTINGS ───
         // Every control writes straight through to the persisted settings, which have
@@ -1253,18 +1267,109 @@ public class MarketScreen extends Screen {
         marketNameField.visible = create;
         marketNameField.active = create;
 
+        // Hidden rather than greyed, unlike the Host button on a dedicated market.
+        // That one is demoted because every player could plausibly host and the greying
+        // teaches why they should not here; this is an action all but one person in any
+        // market can never take, and a permanently dead control teaches nothing. The
+        // About block says who does set the fee, so its absence is still explained.
+        boolean canSetFee = amCreator()
+                && situation != MS_NO_MARKET && situation != MS_DAMAGED;
+
         int y = rowY + 4;
         y = place(createButton, create, y);
         y = place(importButton, importFile, y);
         y = place(exportButton, export, y);
         y = place(migrateButton, migrate, y);
-        place(resetButton, reset, y);
+        y = place(resetButton, reset, y);
+
+        feeField.visible = canSetFee;
+        feeField.active = canSetFee;
+        if (canSetFee) {
+            feeField.y = y + 6;
+            place(feeButton, true, y + 6 + ROW_STEP);
+        } else {
+            place(feeButton, false, y);
+        }
 
         if (create) {
             // The name field sits above the button that consumes it.
             marketNameField.y = rowY + 4;
             createButton.y = rowY + 4 + ROW_STEP;
             importButton.y = rowY + 4 + ROW_STEP * 2;
+        }
+    }
+
+    /** Whether the player at this keyboard is the identity named in the genesis event. */
+    private boolean amCreator() {
+        MarketState market = MarketStateHolder.get();
+        if (market == null || market.creator() == null) return false;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return false;
+        return market.creator().equals(MinecraftIds.userIdOf(mc.player));
+    }
+
+    /**
+     * Sets the market's trading fee.
+     *
+     * Confirmed rather than immediate: it changes what everyone else's trades settle
+     * at, and the fee is the one number here that silently takes money. Not a DANGER
+     * overlay though — nothing is destroyed and the next event can put it back, which
+     * is the line the overlay kinds are drawn on.
+     */
+    private void onSetFee() {
+        String raw = feeField.getText().trim();
+        if (raw.isEmpty()) {
+            status = "Type a fee first, as a percentage";
+            return;
+        }
+
+        int bps = MarketState.bpsFromPercent(raw);
+        if (bps < 0) {
+            status = "Fee must be a percentage, at most 2 decimal places (e.g. 2.5)";
+            return;
+        }
+        if (bps > MarketState.MAX_TAX_BPS) {
+            status = "The most a market may charge is "
+                    + (MarketState.MAX_TAX_BPS / 100) + "%";
+            return;
+        }
+
+        MarketState market = MarketStateHolder.get();
+        int current = market == null ? 0 : market.taxBps();
+        if (bps == current) {
+            status = "The fee is already " + formatBps(bps);
+            return;
+        }
+
+        String body = bps == 0
+                ? "Selling will cost nothing from the next trade onward. Trades already"
+                        + " made keep the fee they settled at — this is not backdated."
+                : "From the next trade onward, " + formatBps(bps) + " of every sale is"
+                        + " taken from the seller and destroyed. Trades already made keep"
+                        + " the fee they settled at, and everyone connected sees this"
+                        + " change as soon as it is sequenced.";
+
+        showConfirm(bps == 0 ? "Remove the trading fee?" : "Set the trading fee to "
+                + formatBps(bps) + "?", body, "Set fee", () -> submitFee(bps));
+    }
+
+    private void submitFee(int bps) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) { status = "No player"; return; }
+
+        Event.MarketPolicy policy = new Event.MarketPolicy();
+        policy.userId = MinecraftIds.userIdOf(mc.player);
+        policy.taxBps = bps;
+        policy.timestamp = System.currentTimeMillis();
+
+        MarketStateHolder.Submission s = MarketStateHolder.submit(policy);
+        if (s.pending) {
+            status = "Fee change sent...";
+        } else if (s.accepted) {
+            status = "Trading fee is now " + formatBps(bps);
+            feeField.setText("");
+        } else {
+            status = "Rejected: " + s.reason;
         }
     }
 
@@ -1381,11 +1486,18 @@ public class MarketScreen extends Screen {
 
         int bps = market.taxBps();
         if (bps <= 0) {
-            wrapped(m, "Trading fee: none", x, y, 0xAAAAAA);
+            y = wrapped(m, "Trading fee: none", x, y, 0xAAAAAA);
         } else {
             // Both forms, because the rate is set in basis points and felt in credits.
-            wrapped(m, "Trading fee: " + formatBps(bps) + " of each sale, taken from"
+            y = wrapped(m, "Trading fee: " + formatBps(bps) + " of each sale, taken from"
                     + " the seller and destroyed", x, y, 0xFFAA55);
+        }
+
+        // Says who can change it, to whoever cannot. Without this the fee reads as a
+        // property of the software rather than a decision somebody made, and the
+        // absence of any control to change it looks like an omission.
+        if (!amCreator()) {
+            wrapped(m, "Set by whoever created this market.", x, y, 0x707070);
         }
     }
 

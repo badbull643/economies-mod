@@ -115,6 +115,31 @@ public class MarketState {
      * the alternative, rounding up, takes a credit from a one-credit trade and makes the
      * effective rate on small trades wildly higher than the number the market advertises.
      */
+    /**
+     * Reads a fee written as a percentage and returns basis points, or -1 if it is not
+     * one.
+     *
+     * Lives in core rather than beside the text field that calls it so it can be tested
+     * without Minecraft — the conversion is the one place a human-entered decimal meets
+     * a number every replica has to agree on.
+     *
+     * BigDecimal, not Double.parseDouble. Parsing "2.5" to a double and multiplying by
+     * 100 can land on 249.99999999999997, and truncating that gives a market a 2.49%
+     * fee nobody asked for. Two decimal places is exactly what basis points can hold,
+     * so anything finer is refused rather than quietly rounded.
+     */
+    public static int bpsFromPercent(String text) {
+        if (text == null) return -1;
+        try {
+            java.math.BigDecimal pct = new java.math.BigDecimal(text.trim());
+            if (pct.scale() > 2) return -1;
+            int bps = pct.movePointRight(2).intValueExact();
+            return bps < 0 ? -1 : bps;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
     public static long taxOn(long amount, int bps) {
         if (bps <= 0 || amount <= 0) return 0;
         long tax = Math.multiplyExact(amount, (long) bps) / BPS_DIVISOR;
