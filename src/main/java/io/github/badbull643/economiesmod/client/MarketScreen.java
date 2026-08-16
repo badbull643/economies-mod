@@ -133,6 +133,19 @@ public class MarketScreen extends Screen {
     /** Left column, where the lists live. */
     private int listX;
 
+    // ─── frame bounds ───
+    //
+    // Everything used to be placed relative to the control rows, which is why content
+    // hung out of the panels drawn around it — the panel and the thing inside it were
+    // measured from different origins. These are the single source for both.
+
+    private int frameTop() { return rowY - 6; }
+    private int frameH() { return contentH - 18; }
+    /** First usable row inside a panel. */
+    private int panelTop() { return frameTop() + 5; }
+    /** One past the last usable row inside a panel. */
+    private int panelBottom() { return frameTop() + frameH() - 5; }
+
     // ─── tabs ───
     //
     // Three clusters used at wildly different rates — trading constantly, connecting
@@ -854,7 +867,7 @@ public class MarketScreen extends Screen {
      * they all share the same rows, so one clearance works for all of them.
      */
     private int discoveryStartY() {
-        return rowY + ROW_STEP * 4 + 6;
+        return panelTop() + 14;
     }
 
     // ─────────── home ───────────
@@ -950,23 +963,23 @@ public class MarketScreen extends Screen {
     }
 
     private void renderSettingsPlaceholder(MatrixStack m) {
-        label(m, "Notifications", listX, rowY - 11, 0xFFDD66);
+        label(m, "Notifications", listX + 4, panelTop(), 0xFFAA00);
 
         String body = "Told when one of your resting orders fills, so you can set an"
                 + " order, log off, and find out later that it happened. The limit"
                 + " batches them once they come faster than that — on a busy market"
                 + " you lose the detail, never the news.";
 
-        int y = rowY + 4;
-        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW)) {
-            this.textRenderer.drawWithShadow(m, line, listX, y, 0xC0C0C0);
+        int y = panelTop() + 14;
+        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW - 12)) {
+            this.textRenderer.drawWithShadow(m, line, listX + 4, y, 0xC0C0C0);
             y += 10;
         }
 
         y += 8;
         label(m, "Saved for " + MinecraftClient.getInstance().getSession().getUsername(),
-                listX, y, 0x707070);
-        label(m, "The hosting port lives on Network.", listX, y + 10, 0x707070);
+                listX + 4, y, 0x707070);
+        label(m, "The hosting port lives on Network.", listX + 4, y + 10, 0x707070);
     }
 
     // ─────────── the Market screen ───────────
@@ -1110,10 +1123,10 @@ public class MarketScreen extends Screen {
                 break;
         }
 
-        label(m, heading, x, rowY - 11, 0xFFDD66);
+        label(m, heading, x, panelTop(), 0xFFAA00);
 
-        int y = rowY + 4;
-        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW)) {
+        int y = panelTop() + 14;
+        for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW - 12)) {
             this.textRenderer.drawWithShadow(m, line, x, y, 0xC0C0C0);
             y += 10;
         }
@@ -1212,14 +1225,15 @@ public class MarketScreen extends Screen {
         return rows;
     }
 
-    private void renderDiscovery(MatrixStack matrices) {
+    private void renderDiscovery(MatrixStack matrices, int px, int py,
+                                 double mouseX, double mouseY) {
         // The re-place list takes this space while it exists — it's transient and
         // actionable, discovery is neither. render() draws it directly now, on
         // whichever tab you are on, so this only has to stand aside.
         if (!MarketStateHolder.pendingReplace().isEmpty()) return;
 
-        int x = rowX;
-        int y = discoveryStartY();
+        int x = px;
+        int y = py;
 
         // No running counter: it re-polls every 10s, so the age is almost always
         // uninteresting and a ticking number just pulls the eye. Say something only
@@ -1344,12 +1358,12 @@ public class MarketScreen extends Screen {
             String myUuid = mc.player != null
                     ? MinecraftIds.userIdOf(mc.player).toString() : null;
 
-            int x = rowX;
+            int x = listX + 4;
             int y = discoveryStartY() + DISCOVERY_ROW_HEIGHT + 2;
 
             for (PeerPoll.HostInfo h : discovered) {
                 boolean isSelf = h.reply.userId != null && h.reply.userId.equals(myUuid);
-                if (!isSelf && mouseX >= x && mouseX <= x + 220
+                if (!isSelf && mouseX >= x && mouseX <= x + listW - 8
                         && mouseY >= y && mouseY < y + DISCOVERY_ROW_HEIGHT) {
                     joinHost(h);
                     return true;
@@ -1607,32 +1621,34 @@ public class MarketScreen extends Screen {
         // Frames around each column. Without them the controls float in the middle of
         // an empty screen with nothing saying where one grouping ends and the next
         // begins — the panels are most of what makes the layout read as a layout.
-        int frameTop = rowY - 6;
-        int frameH = contentH - 18;
         if (activeScreen != SCREEN_HOME) {
-            vanillaPanel(matrices, listX, frameTop, listW, frameH);
-            vanillaPanel(matrices, rowX - PAD, frameTop, controlsW + PAD * 2, frameH);
+            vanillaPanel(matrices, listX, frameTop(), listW, frameH());
+            vanillaPanel(matrices, rowX - PAD, frameTop(), controlsW + PAD * 2, frameH());
             if (invX >= 0 && activeScreen == SCREEN_TRADING) {
-                vanillaPanel(matrices, invX, frameTop, invW, frameH);
+                vanillaPanel(matrices, invX, frameTop(), invW, frameH());
             }
         }
 
-        // Only the current destination's left column.
+        // Only the current destination's left column, and everything in it placed from
+        // panelTop rather than from the control rows beside it.
         if (activeScreen == SCREEN_TRADING) {
-            renderSelectedItem(matrices, listX, rowY - 14, mouseX, mouseY);
+            renderSelectedItem(matrices, listX + 4, panelTop(), mouseX, mouseY);
             renderLeftSwitcher(matrices, mouseX, mouseY);
+            int viewTop = panelTop() + 36;
             if (leftView == LEFT_MARKETS) {
-                renderMarkets(matrices, listX, rowY + 20, mouseX, mouseY);
+                renderMarkets(matrices, listX + 4, viewTop, mouseX, mouseY);
             } else if (leftView == LEFT_CHART) {
-                renderPriceChart(matrices, listX, rowY + 20);
+                renderPriceChart(matrices, listX + 4, viewTop);
             } else {
-                renderBook(matrices, listX, rowY + 20, mouseX, mouseY);
+                renderBook(matrices, listX + 4, viewTop, mouseX, mouseY);
             }
-            if (invX >= 0) renderInventory(matrices, invX, rowY + 6, mouseX, mouseY);
+            if (invX >= 0) renderInventory(matrices, invX + 4, panelTop(), mouseX, mouseY);
         } else if (activeScreen == SCREEN_NETWORK) {
-            renderDiscovery(matrices);
+            // In the left panel, not stacked under the buttons — that put it outside
+            // the frame drawn around the controls.
+            renderDiscovery(matrices, listX + 4, panelTop(), mouseX, mouseY);
         } else if (activeScreen == SCREEN_MARKET) {
-            renderMarketGuidance(matrices, listX);
+            renderMarketGuidance(matrices, listX + 4);
         } else if (activeScreen == SCREEN_HOME) {
             renderHome(matrices);
         } else {
@@ -1707,7 +1723,7 @@ public class MarketScreen extends Screen {
     private static int leftView = LEFT_BOOK;
 
     private int[] leftSwitcherRect() {
-        return new int[]{listX, rowY + 6, listW, 12};
+        return new int[]{listX + 4, panelTop() + 22, listW - 8, 12};
     }
 
     private void renderLeftSwitcher(MatrixStack m, int mouseX, int mouseY) {
@@ -1764,15 +1780,15 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        int viewH = contentH - 34;
-        noteScrollable("markets", x, y, listW, viewH,
+        int viewH = panelBottom() - y;
+        noteScrollable("markets", x, y, listW - 8, viewH,
                 ids.size() * MARKET_ROW_H, mouseX, mouseY);
         int rowTop = y - scrollOf("markets");
 
-        beginClip(x, y, listW, viewH);
+        beginClip(x, y, listW - 8, viewH);
         for (String id : ids) {
             Item item = MinecraftIds.idToItem(id);
-            boolean hot = mouseX >= x && mouseX < x + listW
+            boolean hot = mouseX >= x && mouseX < x + listW - 8
                     && mouseY >= rowTop && mouseY < rowTop + MARKET_ROW_H
                     && mouseY >= y && mouseY < y + viewH;
 
@@ -1805,9 +1821,9 @@ public class MarketScreen extends Screen {
 
     private String marketRowAt(double mouseX, double mouseY) {
         if (activeScreen != SCREEN_TRADING || leftView != LEFT_MARKETS) return null;
-        int y = rowY + 20;
-        int viewH = contentH - 34;
-        if (mouseX < listX || mouseX >= listX + listW
+        int y = panelTop() + 36;
+        int viewH = panelBottom() - y;
+        if (mouseX < listX + 4 || mouseX >= listX + listW
                 || mouseY < y || mouseY >= y + viewH) {
             return null;
         }
@@ -1896,15 +1912,15 @@ public class MarketScreen extends Screen {
         }
 
         int rowHeight = 11;
-        int viewH = contentH - (startY - (rowY - 4)) - 30;
+        int viewH = panelBottom() - startY - 10;
         int contentH = (asks.size() + bids.size()) * rowHeight + 4;
 
-        noteScrollable("book", x, startY, listW, viewH, contentH, mouseX, mouseY);
+        noteScrollable("book", x, startY, listW - 8, viewH, contentH, mouseX, mouseY);
         int y = startY - scrollOf("book");
 
         // Clipped rather than truncated. The book used to stop at six a side with no
         // indication there was more, which on a busy item hid most of the market.
-        beginClip(x, startY, listW, viewH);
+        beginClip(x, startY, listW - 8, viewH);
         for (Order o : asks) {
             boolean mine = myUuid != null && o.userID().equals(myUuid);
             label(matrices, (mine ? "* " : "  ") + "#" + o.orderId()
@@ -1938,35 +1954,43 @@ public class MarketScreen extends Screen {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
 
-        label(m, "You are carrying", x, y - 11, 0xFFFFFF);
+        // Title inside the panel, not above it — placing it at y-11 was what left it
+        // hanging over the frame's top edge.
+        label(m, "You are carrying", x, y, 0xFFFFFF);
 
         InventoryBridge.Holdings held = InventoryBridge.held(mc.player);
         if (held.items.isEmpty()) {
-            label(m, "(nothing)", x, y, 0x808080);
+            label(m, "(nothing)", x, y + 12, 0x808080);
             return;
         }
 
-        int viewH = contentH - 20;
-        int contentH = held.items.size() * INV_ROW_H;
-        noteScrollable("inv", x, y, invW, viewH, contentH, mouseX, mouseY);
-        int rowY0 = y - scrollOf("inv");
+        int w = invW - 8;
+        int listTop = y + 12;
+        // Reserve the footer's line only when there is a footer, so the list uses the
+        // whole panel when there is nothing to say.
+        int footer = held.skipped > 0 ? 11 : 0;
+        int viewH = panelBottom() - listTop - footer;
 
-        beginClip(x, y, invW, viewH);
+        noteScrollable("inv", x, listTop, w, viewH,
+                held.items.size() * INV_ROW_H, mouseX, mouseY);
+        int rowTop = listTop - scrollOf("inv");
+
+        beginClip(x, listTop, w, viewH);
         for (InventoryBridge.Holding h : held.items) {
-            boolean hot = mouseY >= rowY0 && mouseY < rowY0 + INV_ROW_H
-                    && mouseX >= x && mouseX < x + invW
-                    && mouseY >= y && mouseY < y + viewH;
-            drawItemCell(m, new ItemStack(h.item), x, rowY0, null, hot);
-            label(m, String.valueOf(h.count), x + 21, rowY0 + 1, 0xFFFFFF);
+            boolean hot = mouseY >= rowTop && mouseY < rowTop + INV_ROW_H
+                    && mouseX >= x && mouseX < x + w
+                    && mouseY >= listTop && mouseY < listTop + viewH;
+            drawItemCell(m, new ItemStack(h.item), x, rowTop, null, hot);
+            label(m, String.valueOf(h.count), x + 21, rowTop + 1, 0xFFFFFF);
             String name = this.textRenderer.trimToWidth(
-                    h.item.getName().getString(), invW - 24);
-            label(m, name, x + 21, rowY0 + 11, 0xA0A0A0);
-            rowY0 += INV_ROW_H;
+                    h.item.getName().getString(), w - 24);
+            label(m, name, x + 21, rowTop + 11, 0xA0A0A0);
+            rowTop += INV_ROW_H;
         }
         endClip();
 
         if (held.skipped > 0) {
-            label(m, held.skipped + " with NBT hidden", x, y + viewH + 1, 0x606060);
+            label(m, held.skipped + " with NBT hidden", x, listTop + viewH + 1, 0x606060);
         }
     }
 
@@ -1978,9 +2002,9 @@ public class MarketScreen extends Screen {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return null;
 
-        int y = rowY + 6;
-        int viewH = contentH - 20;
-        if (mouseX < invX || mouseX >= invX + invW || mouseY < y || mouseY >= y + viewH) {
+        int y = panelTop() + 12;
+        int viewH = panelBottom() - y - 12;
+        if (mouseX < invX + 4 || mouseX >= invX + invW || mouseY < y || mouseY >= y + viewH) {
             return null;
         }
 
