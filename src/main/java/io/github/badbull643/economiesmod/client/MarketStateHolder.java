@@ -419,6 +419,13 @@ public class MarketStateHolder {
     // ─────────── LOCAL mode ───────────
 
     public static void loadLocal(Path worldDir) {
+        // Only when the world itself changes. This is also called on reset, disconnect
+        // and switching, and re-reading the marker on those would quietly overrule a
+        // switch whose marker failed to write.
+        if (!worldDir.equals(currentWorldDir)) {
+            activeSlot = MarketSlots.active(worldDir);
+        }
+
         currentWorldDir = worldDir;
         mode = Mode.LOCAL;
         disconnectIfConnected();
@@ -1034,8 +1041,92 @@ public class MarketStateHolder {
         mode = Mode.LOCAL;
     }
 
+    /**
+     * Which market in this world is in use. Still the single place a log path is decided.
+     *
+     * Every file a market owns is a sibling of its log, so pinning a different log here
+     * moves the high-water mark, pending ops and known keys with it. That is the whole
+     * of switching: nothing else in this class knows there is more than one.
+     */
+    private static String activeSlot = MarketSlots.DEFAULT;
+
+    public static String activeSlot() { return activeSlot; }
+
+    public static List<String> availableSlots() {
+        return MarketSlots.list(currentWorldDir);
+    }
+
+    /** What the market in a slot calls itself, or null when it holds none yet. */
+    public static String slotMarketName(String slot) {
+        return MarketSlots.marketNameIn(currentWorldDir, slot);
+    }
+
+    /**
+     * Makes room for another market in this world and switches to it.
+     *
+     * The new slot is empty, which the Market screen already reads as MS_NO_MARKET —
+     * so the player lands on exactly the Create, Import and Connect choices that a
+     * market-to-be needs, with no new flow to learn.
+     */
+    public static boolean addMarketSlot() {
+        if (currentWorldDir == null) {
+            onRejected.accept("no world open");
+            return false;
+        }
+        try {
+            return switchTo(MarketSlots.createNext(currentWorldDir));
+        } catch (IOException e) {
+            onRejected.accept("could not add a market: " + e.getMessage());
+            return false;
+        }
+    }
+
     private static Path logPathFor(Path worldDir) {
-        return worldDir.resolve("economiesmod").resolve("market.jsonl");
+        Path p = MarketSlots.logPath(worldDir, activeSlot);
+        // A name that cannot be a path should have been refused long before this, but
+        // falling back to the default beats handing a null to a file operation.
+        return p != null ? p : MarketSlots.logPath(worldDir, MarketSlots.DEFAULT);
+    }
+
+    /**
+     * Puts this world on a different market.
+     *
+     * Disconnects and stops hosting first, for the same reason resetLog does: a running
+     * HostServer owns the log file it was started on, and leaving it running while the
+     * holder pins a different one leaves two EventLog instances writing to files neither
+     * agrees about.
+     *
+     * An empty slot is a market that does not exist yet, not an error — the Market
+     * screen reads that as MS_NO_MARKET and offers Create, Import and Connect, which is
+     * exactly the right set of choices for one.
+     */
+    public static boolean switchTo(String slot) {
+        if (currentWorldDir == null) return false;
+        if (!MarketSlots.isValidName(slot)) {
+            onRejected.accept("'" + slot + "' is not a usable market name");
+            return false;
+        }
+        if (slot.equalsIgnoreCase(activeSlot)) return true;
+
+        if (hostServer != null) stopHosting();
+        disconnectIfConnected();
+
+        activeSlot = slot.trim();
+        try {
+            MarketSlots.setActive(currentWorldDir, activeSlot);
+        } catch (IOException e) {
+            // The switch still happens; it just will not be remembered next session.
+            System.err.println("[economiesmod] could not remember the active market: " + e);
+        }
+
+        // Judgements about the market we just left, not this one.
+        divergence = null;
+        checkedHeads.clear();
+        pendingReplace = new ArrayList<>();
+
+        loadLocal(currentWorldDir);
+        System.out.println("[economiesmod] now using market slot '" + activeSlot + "'");
+        return true;
     }
 
     /** Discards the local history entirely. Only for resolving a fork — destructive. */
