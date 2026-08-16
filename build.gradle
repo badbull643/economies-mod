@@ -67,6 +67,15 @@ jar {
     }
 }
 
+// The core engine imports no Minecraft, so the whole suite runs on a bare JVM in
+// milliseconds. Exits non-zero on failure, so this is safe to gate on.
+tasks.register('coreTests', JavaExec) {
+    group = 'verification'
+    description = 'Runs the core engine test suite without launching Minecraft.'
+    mainClass = 'io.github.badbull643.economiesmod.core.MarketTests'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
 // configure the maven publication
 publishing {
     publications {
@@ -108,4 +117,20 @@ loom {
             programArgs "--username", "Bob"
         }
     }
+}
+
+// Networking smoke test: binds sockets and signs a few thousand events, so it is
+// kept out of coreTests, which stays pure and instant.
+tasks.register('chunkTest', JavaExec) {
+    group = 'verification'
+    description = 'End-to-end check that an over-sized history still syncs.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.ChunkTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
+tasks.register('replayGuardTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks a synced history is not mistaken for live traffic.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.ReplayGuardTest'
+    classpath = sourceSets.main.runtimeClasspath
 }
