@@ -1537,6 +1537,73 @@ public class MarketTests {
                     fine.problem() == null ? 1 : 0, 1);
         }
 
+        section("Z1: an event must be stamped with its market before it is validated");
+        {
+            // The bug this pins: the local submit path stamped marketId after calling
+            // validate, so checkGenesis saw null and refused everything non-genesis as
+            // belonging to a different market. It surfaced as the fee control being
+            // rejected, but it applied to every event authored offline.
+            MarketState m = new MarketState();
+            UUID marketId = UUID.randomUUID();
+            m.setMarketIdentity(marketId, "stamping market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+
+            Event.MarketPolicy unstamped = new Event.MarketPolicy();
+            unstamped.userId = ALICE;
+            unstamped.taxBps = 250;
+            unstamped.grantAmount = m.welcomeGrant();
+            unstamped.timestamp = 1L;
+            // marketId deliberately left null, as the old order of operations left it
+
+            SequencedEvent probe = new SequencedEvent();
+            probe.seq = 2;
+            probe.event = unstamped;
+            check("an unstamped event is refused",
+                    EventApplier.validate(m, probe).accepted ? 1 : 0, 0);
+
+            unstamped.marketId = marketId;
+            check("the same event is accepted once stamped",
+                    EventApplier.validate(m, probe).accepted ? 1 : 0, 1);
+        }
+
+        section("Z2: a market can be removed from a world, except the first");
+        {
+            Path world = scratch("test-slots-z2");
+            deleteRecursively(world);
+            Files.createDirectories(world);
+
+            Path def = MarketSlots.logPath(world, MarketSlots.DEFAULT);
+            Files.createDirectories(def.getParent());
+            Files.write(def, "{}".getBytes());
+
+            String extra = MarketSlots.createNext(world);
+            Path extraLog = MarketSlots.logPath(world, extra);
+            Files.write(extraLog, "{}".getBytes());
+            // Everything a market owns sits beside its log, so removal has to take the
+            // directory — a stale high-water mark would be inherited by whatever
+            // occupied the name next.
+            Files.write(extraLog.resolveSibling("high-water.json"), "{}".getBytes());
+
+            check("both are there", MarketSlots.list(world).size(), 2);
+
+            MarketSlots.delete(world, extra);
+            check("the extra one is gone", MarketSlots.list(world).contains(extra) ? 1 : 0, 0);
+            check("its files went with it",
+                    Files.exists(extraLog.getParent()) ? 1 : 0, 0);
+            check("the first one is untouched", Files.exists(def) ? 1 : 0, 1);
+
+            // There has to be one slot that always exists, and it is where a
+            // single-market world already keeps its market.
+            boolean refused = false;
+            try {
+                MarketSlots.delete(world, MarketSlots.DEFAULT);
+            } catch (IOException e) {
+                refused = true;
+            }
+            check("the first market cannot be removed", refused ? 1 : 0, 1);
+            check("and is still there", Files.exists(def) ? 1 : 0, 1);
+        }
+
         section("Y1: a market name is a label, not a path");
         {
             // These become directory names, so this is the boundary between the two.
