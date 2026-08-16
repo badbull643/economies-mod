@@ -54,6 +54,15 @@ public abstract class Message {
         public String hostPublicKey;
         public String marketId;
         public String marketName;
+        /**
+         * Whether this host is a dedicated server rather than somebody's game.
+         *
+         * The one player-facing difference between the two hosting modes, and the only
+         * one worth surfacing: it answers "will this still be here tomorrow, and do I
+         * need to take a turn hosting". Everything else about them is identical by
+         * design, which is why there is no client-side mode toggle to go with it.
+         */
+        public boolean dedicated = false;
         public Sync() { type = "Sync"; }
     }
 
@@ -154,6 +163,18 @@ public abstract class Message {
         public String signature;      // over the canonical payload below
         public String marketId;       // which market this host is serving
         public String marketName;
+        /**
+         * Whether this host is a dedicated server. Carried here as well as on Sync
+         * because the host list is built from discovery, which never gets a Sync — a
+         * badge that only appeared after connecting would be answering the question
+         * too late to be of use in choosing.
+         *
+         * Self-reported, and inside the signed payload. Signing does not make it true —
+         * a host can describe itself however it likes — but it stops anyone else
+         * changing the answer in transit, which matters more than usual given the
+         * transport is assumed to be a trusted mesh rather than encrypted.
+         */
+        public boolean dedicated;
         public QueryReply() { type = "QueryReply"; }
     }
 

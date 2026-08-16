@@ -20,7 +20,10 @@ import java.nio.file.Paths;
 public class HostServer {
 
     // 6: MigrateBalance event; MigrateRequest/MigrateResult messages.
-    public static final String PROTOCOL_VERSION = "7";
+    // 8: MarketPolicy event (transaction tax); Sync.dedicated. Batched deliberately —
+    //    each wire change costs a version and a window where mixed clients cannot talk,
+    //    so the two that were ready went together.
+    public static final String PROTOCOL_VERSION = "8";
     /** Only the fallback for the deprecated constructors now — see ServerConfig. */
     private static final int MAX_CONNECTIONS = 64;
 
@@ -425,6 +428,9 @@ public class HostServer {
                 reply.marketId = state.marketId() != null
                         ? state.marketId().toString() : null;
                 reply.marketName = state.marketName();
+                // Set before signing, or it would be the one field in this reply a
+                // bystander could rewrite.
+                reply.dedicated = config.dedicated;
                 try {
                     reply.signature = hostKeys.sign(Probe.queryPayload(reply, q.nonce));
                 } catch (GeneralSecurityException e) {
@@ -658,6 +664,7 @@ public class HostServer {
                 sync.hostPublicKey = hostKeys.publicKeyString();
                 sync.marketId = ourMarket;
                 sync.marketName = state.marketName();
+                sync.dedicated = config.dedicated;
                 sync.knownPeers = shareable;
             }
             channel.send(sync);
@@ -1307,6 +1314,11 @@ public class HostServer {
             System.out.println("[host] wrote " + configFile.toAbsolutePath());
             return;
         }
+
+        // Reached only from the standalone launcher, so this is what "dedicated" means:
+        // started from a command line rather than from inside somebody's game. Forced
+        // rather than read, so a config copied from a client cannot claim otherwise.
+        cfg.dedicated = true;
 
         Path logFile = Paths.get(cfg.logFile);
         System.out.println("[host] log file: " + logFile.toAbsolutePath());
