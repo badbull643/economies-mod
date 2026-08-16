@@ -31,6 +31,16 @@ Thumbs.db
 run/
 logs/
 
+# Dedicated server runtime, written into the working directory by `gradlew hostServer`.
+# server-identity.key is an unencrypted private key and must never be committed; the
+# rest are per-deployment state, not source.
+server-config.json
+server-identity.key
+server-peers.json
+server-market.jsonl
+known-keys.json
+*.key
+
 # Test outputs
 market-test.json
 *.log
