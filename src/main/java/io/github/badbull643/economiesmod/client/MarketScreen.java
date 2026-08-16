@@ -295,7 +295,10 @@ public class MarketScreen extends Screen {
         }
 
         this.halfW = (controlsW - PAD) / 2;
-        this.halfWS = Math.max(38, (controlsW - PAD * 2) / 5);
+        // A quarter of the row rather than a fifth. The quantity and price boxes are
+        // typed into constantly and were the narrowest things on the screen, while the
+        // item button beside them only ever shows a name it can afford to trim.
+        this.halfWS = Math.max(46, Math.min(76, (controlsW - PAD * 2) / 4));
 
         int boxX = Math.max(4, (this.width - contentW) / 2);
         int boxY = Math.max(34, Math.min((this.height - contentH) / 2,
@@ -336,15 +339,19 @@ public class MarketScreen extends Screen {
         onScreen(SCREEN_TRADING, new ButtonWidget(rowX + halfW + PAD, buttonsY, halfW, FIELD_HEIGHT,
                 new LiteralText("Sell"), b -> onSell()));
 
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, cancelY, halfW, FIELD_HEIGHT,
+        // Withdraw takes its own row. Sharing one with the cancel controls left three
+        // things competing for a width that only comfortably fits two, and the order-id
+        // box was the one that lost.
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX, cancelY, controlsW, FIELD_HEIGHT,
                 new LiteralText("Withdraw"), b -> onWithdraw()));
 
+        int cancelRowY = cancelY + ROW_STEP;
         this.cancelField = new TextFieldWidget(this.textRenderer,
-                rowX + halfW + PAD, cancelY, halfWS, FIELD_HEIGHT, new LiteralText("Order ID"));
+                rowX, cancelRowY, halfW, FIELD_HEIGHT, new LiteralText("Order ID"));
         hint(this.cancelField, "order id");
         onScreen(SCREEN_TRADING, this.cancelField);
-        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + halfW + PAD + halfWS + PAD, cancelY, controlsW - (halfW + PAD + halfWS + PAD), FIELD_HEIGHT,
-                new LiteralText("Cancel"), b -> onCancel()));
+        onScreen(SCREEN_TRADING, new ButtonWidget(rowX + halfW + PAD, cancelRowY, halfW,
+                FIELD_HEIGHT, new LiteralText("Cancel"), b -> onCancel()));
 
         // ─── NETWORK ───
         this.hostField = new TextFieldWidget(this.textRenderer,
@@ -603,9 +610,12 @@ public class MarketScreen extends Screen {
         // without reading it back off the icon strip.
         if (itemButton != null) {
             Item selected = MinecraftIds.itemFromName(itemField.getText().trim());
+            // Trimmed to the button's own width rather than a fixed guess, since that
+            // width now varies with the window.
             itemButton.setMessage(new LiteralText(selected == Items.AIR
                     ? "Choose item..."
-                    : this.textRenderer.trimToWidth(selected.getName().getString(), 110)));
+                    : this.textRenderer.trimToWidth(
+                            selected.getName().getString(), itemButton.getWidth() - 8)));
         }
 
         boolean has = MarketStateHolder.hasMarket();
