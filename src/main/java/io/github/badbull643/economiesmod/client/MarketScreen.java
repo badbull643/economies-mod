@@ -2,13 +2,16 @@ package io.github.badbull643.economiesmod.client;
 
 import io.github.badbull643.economiesmod.core.*;
 import io.github.badbull643.economiesmod.core.net.PeerPoll;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.client.render.item.ItemRenderer;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.text.LiteralText;
 import net.minecraft.text.OrderedText;
@@ -1267,6 +1270,10 @@ public class MarketScreen extends Screen {
             startPoll();
         }
 
+        // Cleared before the panels re-register, or a region the cursor has since left
+        // keeps eating the scroll wheel.
+        hoveredScrollKey = null;
+
         renderHeader(matrices);
 
         int listX = this.listX;
@@ -1295,9 +1302,9 @@ public class MarketScreen extends Screen {
 
         // Only the current destination's left column.
         if (activeScreen == SCREEN_TRADING) {
-            label(matrices, "Order book", listX, rowY - 11, 0xFFFFFF);
-            renderBook(matrices, listX, rowY + 2);
-            renderBalances(matrices, listX);
+            renderSelectedItem(matrices, listX, rowY - 14, mouseX, mouseY);
+            label(matrices, "Order book", listX, rowY + 8, 0xFFFFFF);
+            renderBook(matrices, listX, rowY + 20, mouseX, mouseY);
         } else if (activeScreen == SCREEN_NETWORK) {
             renderDiscovery(matrices);
         } else if (activeScreen == SCREEN_MARKET) {
@@ -1360,71 +1367,195 @@ public class MarketScreen extends Screen {
         }
     }
 
-    private void renderBook(MatrixStack matrices, int x, int startY) {
+    private void renderBook(MatrixStack matrices, int x, int startY,
+                            double mouseX, double mouseY) {
         MinecraftClient mc = MinecraftClient.getInstance();
         UUID myUuid = mc.player != null ? MinecraftIds.userIdOf(mc.player) : null;
 
         Item item = MinecraftIds.itemFromName(itemField.getText().trim());
         if (item == Items.AIR) {
-            label(matrices, "(enter an item to see its book)", x, startY, 0x808080);
+            label(matrices, "(pick an item to see its book)", x, startY, 0x808080);
             return;
         }
 
         String itemId = MinecraftIds.itemToId(item);
         MarketState market = MarketStateHolder.get();
-        List<Order> asks = market.bookFor(itemId).restingAsks();
-        List<Order> bids = market.bookFor(itemId).restingBids();
+
+        // peekBook, not bookFor: this runs every frame for whatever is in the field,
+        // and bookFor would create an empty book for every item anyone ever types.
+        OrderBook book = market.peekBook(itemId);
+        List<Order> asks = book == null ? Collections.emptyList() : book.restingAsks();
+        List<Order> bids = book == null ? Collections.emptyList() : book.restingBids();
 
         if (asks.isEmpty() && bids.isEmpty()) {
             label(matrices, "(no orders)", x, startY, 0x808080);
             return;
         }
 
-        int y = startY;
-        int rowHeight = 13;
+        int rowHeight = 11;
+        int viewH = CONTENT_H - (startY - (rowY - 4)) - 30;
+        int contentH = (asks.size() + bids.size()) * rowHeight + 4;
 
-        int shown = 0;
+        noteScrollable("book", x, startY, LIST_W, viewH, contentH, mouseX, mouseY);
+        int y = startY - scrollOf("book");
+
+        // Clipped rather than truncated. The book used to stop at six a side with no
+        // indication there was more, which on a busy item hid most of the market.
+        beginClip(x, startY, LIST_W, viewH);
         for (Order o : asks) {
-            if (shown++ >= 6) break;
             boolean mine = myUuid != null && o.userID().equals(myUuid);
             label(matrices, (mine ? "* " : "  ") + "#" + o.orderId()
                             + " SELL " + o.volume() + " @ " + o.value(),
                     x, y, mine ? 0xFFCC66 : 0xFF8888);
             y += rowHeight;
         }
-
         y += 4;
-        shown = 0;
         for (Order o : bids) {
-            if (shown++ >= 6) break;
             boolean mine = myUuid != null && o.userID().equals(myUuid);
             label(matrices, (mine ? "* " : "  ") + "#" + o.orderId()
                             + " BUY  " + o.volume() + " @ " + o.value(),
                     x, y, mine ? 0xFFCC66 : 0x88FF88);
             y += rowHeight;
         }
+        endClip();
+
+        if (contentH > viewH) {
+            label(matrices, "scroll for more", x, startY + viewH + 1, 0x606060);
+        }
     }
 
-    private void renderBalances(MatrixStack matrices, int x) {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player == null) return;
-
-        UUID userId = MinecraftIds.userIdOf(mc.player);
-        MarketState market = MarketStateHolder.get();
-
-        int y = this.height - 50;
-        label(matrices, "Credits: " + market.wallets().getBalance(userId), x, y, 0xFFFF88);
-
+    /**
+     * The selected item, as an icon rather than a string of text.
+     *
+     * A first use of the item cell, and the beginning of the slot that will replace the
+     * typed item field entirely — seeing what you have selected should not require
+     * reading a registry id back to yourself.
+     */
+    private void renderSelectedItem(MatrixStack m, int x, int y, double mouseX, double mouseY) {
         Item item = MinecraftIds.itemFromName(itemField.getText().trim());
-        if (item != Items.AIR) {
-            long held = market.itemBalances().getBalance(userId, MinecraftIds.itemToId(item));
-            label(matrices, "Market credit: " + held + " " + item.getName().getString(),
-                    x, y + 13, 0xFFFF88);
+        boolean hovered = mouseX >= x && mouseX < x + 18 && mouseY >= y && mouseY < y + 18;
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        long held = 0;
+        MarketState market = MarketStateHolder.get();
+        if (item != Items.AIR && mc.player != null && market != null) {
+            held = market.itemBalances().getBalance(
+                    MinecraftIds.userIdOf(mc.player), MinecraftIds.itemToId(item));
+        }
+
+        drawItemCell(m, item == Items.AIR ? ItemStack.EMPTY : new ItemStack(item),
+                x, y, null, hovered);
+
+        if (item == Items.AIR) {
+            label(m, "no item selected", x + 22, y + 5, 0x808080);
+        } else {
+            label(m, item.getName().getString(), x + 22, y + 1, 0xFFFFFF);
+            label(m, held + " in market", x + 22, y + 11, 0xFFFF88);
         }
     }
 
     private void label(MatrixStack m, String s, int x, int y, int colour) {
         drawTextWithShadow(m, this.textRenderer, new LiteralText(s), x, y, colour);
+    }
+
+    // ─────────── drawing primitives ───────────
+
+    /**
+     * Clips drawing to a rectangle given in GUI coordinates.
+     *
+     * RenderSystem.enableScissor takes raw framebuffer pixels with the origin at the
+     * BOTTOM-left and applies no transformation of its own, so this needs both a scale
+     * conversion and a Y flip. Getting the flip wrong clips the complement of the
+     * intended region, which reads as content vanishing rather than as a clipping bug —
+     * worth doing in exactly one place.
+     *
+     * Scissor is a fragment test, so it clips item icons too, regardless of the
+     * z-offset they are drawn at.
+     */
+    private void beginClip(int x, int y, int w, int h) {
+        double scale = MinecraftClient.getInstance().getWindow().getScaleFactor();
+        RenderSystem.enableScissor(
+                (int) (x * scale),
+                (int) ((this.height - (y + h)) * scale),
+                (int) (w * scale),
+                (int) (h * scale));
+    }
+
+    private void endClip() {
+        RenderSystem.disableScissor();
+    }
+
+    /**
+     * An item icon in an 18x18 cell, with an optional count in the corner.
+     *
+     * renderInGui ignores the MatrixStack — it draws through the legacy RenderSystem
+     * matrix at absolute screen coordinates — and lands behind anything filled after
+     * it unless the z-offset is raised first. This is the same dance vanilla's
+     * HandledScreen.drawSlot performs, and without it the icons are invisible rather
+     * than merely misplaced.
+     *
+     * countLabel is explicit because renderGuiItemOverlay silently omits the number
+     * when a stack holds exactly one, and these cells show aggregate totals that have
+     * nothing to do with stack sizes.
+     */
+    private void drawItemCell(MatrixStack m, ItemStack stack, int x, int y,
+                              String countLabel, boolean hovered) {
+        fill(m, x, y, x + 18, y + 18, hovered ? 0xFF4A4A4A : 0xFF2A2A2A);
+        fill(m, x, y, x + 18, y + 1, 0xFF1A1A1A);
+        fill(m, x, y, x + 1, y + 18, 0xFF1A1A1A);
+
+        if (stack == null || stack.isEmpty()) return;
+
+        ItemRenderer items = MinecraftClient.getInstance().getItemRenderer();
+        this.setZOffset(100);
+        items.zOffset = 100.0F;
+        RenderSystem.enableDepthTest();
+        items.renderInGui(stack, x + 1, y + 1);
+        items.renderGuiItemOverlay(this.textRenderer, stack, x + 1, y + 1, countLabel);
+        items.zOffset = 0.0F;
+        this.setZOffset(0);
+    }
+
+    /**
+     * How far a scrollable region has been scrolled, keyed by a name.
+     *
+     * Kept on the screen rather than in each panel so the scroll survives a re-render
+     * without every panel having to own state, and is reset deliberately (on switching
+     * item, say) rather than by accident.
+     */
+    private final java.util.Map<String, Integer> scrollOffsets = new java.util.HashMap<>();
+
+    private int scrollOf(String key) {
+        Integer v = scrollOffsets.get(key);
+        return v == null ? 0 : v;
+    }
+
+    /** The region under the cursor last frame, so mouseScrolled knows what to move. */
+    private String hoveredScrollKey;
+    private int hoveredScrollMax;
+
+    private void noteScrollable(String key, int x, int y, int w, int h,
+                                int contentHeight, double mouseX, double mouseY) {
+        int max = Math.max(0, contentHeight - h);
+        // Clamp every frame: the content can shrink under a scrolled view — an order
+        // fills, a host stops — and a stale offset would leave the panel looking empty.
+        if (scrollOf(key) > max) scrollOffsets.put(key, max);
+        if (mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h) {
+            hoveredScrollKey = key;
+            hoveredScrollMax = max;
+        }
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double amount) {
+        if (!overlays.isEmpty() || navOpen) return true;
+        if (hoveredScrollKey != null && hoveredScrollMax > 0) {
+            int next = (int) (scrollOf(hoveredScrollKey) - amount * 12);
+            scrollOffsets.put(hoveredScrollKey,
+                    Math.max(0, Math.min(hoveredScrollMax, next)));
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, amount);
     }
 
     // ─────────── chrome ───────────
