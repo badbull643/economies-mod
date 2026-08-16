@@ -2014,9 +2014,18 @@ public class MarketScreen extends Screen {
         return a.target >= 0 && a.target != activeScreen;
     }
 
-    /** The text as drawn — the hit region is measured from this, so it is computed once. */
+    /**
+     * The text as drawn — the hit region is measured from this, so it is computed once.
+     *
+     * The "open X" half is a hint about where the answer lives; the other half is the
+     * problem itself. When both will not fit the panel the hint goes, rather than the
+     * message being truncated into something that no longer says what is wrong. The
+     * strip stays clickable either way.
+     */
     private String alertText(Alert a) {
-        return alertLeadsSomewhere(a) ? a.text + "  — open " + SCREEN_NAMES[a.target] : a.text;
+        if (!alertLeadsSomewhere(a)) return a.text;
+        String full = a.text + "  — open " + SCREEN_NAMES[a.target];
+        return this.textRenderer.getWidth(full) + 10 <= listW - 8 ? full : a.text;
     }
 
     /**
@@ -2026,9 +2035,19 @@ public class MarketScreen extends Screen {
      * once disagreed about whether a start offset already included a row height and
      * made an entire list unclickable.
      */
+    /**
+     * Bounded by the left panel it sits in.
+     *
+     * The width used to be the full measured text, which is only the same thing while
+     * the message is short. "2 events behind — connect to catch up — open Network" is
+     * not: it ran out of the panel and across the middle column, where it collided
+     * with the trade controls. Those are widgets at a fixed y from init() and cannot
+     * move aside for it, so the strip is what gives way.
+     */
     private int[] alertRect(int index, String text) {
+        int max = listW - 8;
         return new int[]{listX + 4, alertTop() + index * ALERT_ROW_H,
-                this.textRenderer.getWidth(text) + 10, ALERT_ROW_H};
+                Math.min(this.textRenderer.getWidth(text) + 10, max), ALERT_ROW_H};
     }
 
     private void renderAlerts(MatrixStack m, int mouseX, int mouseY) {
@@ -2045,7 +2064,7 @@ public class MarketScreen extends Screen {
             // rather than a loose red line among the labels around it.
             fill(m, r[0], r[1], r[0] + r[2], r[1] + r[3], hot ? 0xC0000000 : 0x90000000);
             fill(m, r[0], r[1], r[0] + 2, r[1] + r[3], 0xFF000000 | a.colour);
-            label(m, text, r[0] + 6, r[1] + 2, a.colour);
+            label(m, trim(text, r[2] - 10), r[0] + 6, r[1] + 2, a.colour);
         }
     }
 
