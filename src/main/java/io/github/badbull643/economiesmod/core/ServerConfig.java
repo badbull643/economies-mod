@@ -121,6 +121,15 @@ public class ServerConfig {
     public String hostName = "dedicated";
 
     /**
+     * Whether to describe this host as a dedicated server to clients.
+     *
+     * Set by the standalone launcher, not by anything a player can reach. It changes
+     * no behaviour at all — it is the single player-facing signal that this host is
+     * always up and nobody needs to take a turn hosting.
+     */
+    public boolean dedicated = false;
+
+    /**
      * The identity the server signs grants and sequencing with.
      *
      * Null means "derive one and remember it". The old launcher fell back to a

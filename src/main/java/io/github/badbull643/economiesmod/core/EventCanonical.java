@@ -36,6 +36,10 @@ public class EventCanonical {
         } else if (e instanceof Event.KeyRegistered) {
             Event.KeyRegistered kr = (Event.KeyRegistered) e;
             sb.append('|').append(kr.publicKey);
+        } else if (e instanceof Event.MarketPolicy) {
+            // Signed, or a host could rewrite the rate in flight and every replica would
+            // adopt it — this file's whole point is that an omitted field is tamperable.
+            sb.append('|').append(((Event.MarketPolicy) e).taxBps);
         } else if (e instanceof Event.WelcomeGrant) {
             Event.WelcomeGrant wg = (Event.WelcomeGrant) e;
             sb.append('|').append(wg.targetUserId).append('|').append(wg.amount);
