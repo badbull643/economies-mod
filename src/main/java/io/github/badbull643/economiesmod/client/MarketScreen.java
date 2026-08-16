@@ -16,6 +16,7 @@ import net.minecraft.item.Items;
 import net.minecraft.text.LiteralText;
 import net.minecraft.text.OrderedText;
 import net.minecraft.util.WorldSavePath;
+import net.minecraft.util.registry.Registry;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -41,6 +42,7 @@ public class MarketScreen extends Screen {
     private ButtonWidget createButton;
     private ButtonWidget importButton;
     private ButtonWidget migrateButton;
+    private ButtonWidget itemButton;
 
     /** Set from the game thread by button handlers, and from the network thread
      *  by callbacks — hence volatile. */
@@ -252,11 +254,17 @@ public class MarketScreen extends Screen {
         this.amountField.setSuggestion("qty");
         onScreen(SCREEN_TRADING, this.amountField);
 
+        // Built but deliberately NOT registered as a widget. It is now pure storage for
+        // the selection — every handler still reads the item from here, and the slot
+        // and picker write to it, so none of them had to change. Nothing types into it.
         this.itemField = new TextFieldWidget(this.textRenderer,
                 rowX + 50, rowY, 130, FIELD_HEIGHT, new LiteralText("Item"));
         this.itemField.setMaxLength(64);
         this.itemField.setText(savedItem());
-        onScreen(SCREEN_TRADING, this.itemField);
+
+        this.itemButton = onScreen(SCREEN_TRADING,
+                new ButtonWidget(rowX + 50, rowY, 130, FIELD_HEIGHT,
+                        new LiteralText("Choose item..."), b -> openPicker()));
 
         this.priceField = new TextFieldWidget(this.textRenderer,
                 rowX + 185, rowY, 45, FIELD_HEIGHT, new LiteralText("Price"));
@@ -508,6 +516,15 @@ public class MarketScreen extends Screen {
      * before this one.
      */
     private void refreshMarketButtons() {
+        // The picker button says what is currently selected, so the selection is legible
+        // without reading it back off the icon strip.
+        if (itemButton != null) {
+            Item selected = MinecraftIds.itemFromName(itemField.getText().trim());
+            itemButton.setMessage(new LiteralText(selected == Items.AIR
+                    ? "Choose item..."
+                    : this.textRenderer.trimToWidth(selected.getName().getString(), 110)));
+        }
+
         boolean has = MarketStateHolder.hasMarket();
         if (hostButton != null) hostButton.active = hostButton.visible && has;
         if (createButton != null) createButton.active = createButton.visible && !has;
@@ -1014,6 +1031,11 @@ public class MarketScreen extends Screen {
             return button == 0 ? overlayClicked(mouseX, mouseY) : true;
         }
 
+        // The picker is modal, like an overlay.
+        if (pickerOpen) {
+            return button != 0 || pickerClicked(mouseX, mouseY);
+        }
+
         // The nav sits above everything else, so it gets first refusal on a click.
         if (button == 0 && navClicked(mouseX, mouseY)) return true;
 
@@ -1382,6 +1404,7 @@ public class MarketScreen extends Screen {
         // Above the widgets super.render just drew, and below an overlay, which is the
         // only thing that outranks the menu.
         renderNav(matrices, mouseX, mouseY);
+        renderPicker(matrices, mouseX, mouseY);
 
         Overlay overlay = overlays.peekFirst();
         if (overlay != null) renderOverlay(matrices, overlay, mouseX, mouseY);
@@ -1654,6 +1677,18 @@ public class MarketScreen extends Screen {
     }
 
     @Override
+    public boolean charTyped(char chr, int modifiers) {
+        if (pickerOpen) {
+            if (chr >= ' ' && chr != 127) {
+                pickerQuery += chr;
+                scrollOffsets.put("picker", 0);   // a new query, back to the top
+            }
+            return true;
+        }
+        return super.charTyped(chr, modifiers);
+    }
+
+    @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double amount) {
         if (!overlays.isEmpty() || navOpen) return true;
         if (hoveredScrollKey != null && hoveredScrollMax > 0) {
@@ -1663,6 +1698,162 @@ public class MarketScreen extends Screen {
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, amount);
+    }
+
+    // ─────────── item picker ───────────
+    //
+    // The thing that finally retires typing "minecraft:iron_ingot". Search is over the
+    // item's DISPLAY name, so "iron ing" finds Iron Ingot — nobody should have to know
+    // that a registry id exists, let alone what one looks like.
+    //
+    // Its search box is a plain String rather than a TextFieldWidget: widgets are drawn
+    // by super.render at one fixed point, so a registered field would render underneath
+    // the panel it belongs to.
+
+    private boolean pickerOpen = false;
+    private String pickerQuery = "";
+    private String pickerCachedFor = null;
+    private List<Item> pickerCache = Collections.emptyList();
+
+    private static final int PICK_COLS = 9;
+    private static final int PICK_CELL = 20;
+    private static final int PICK_ROWS_VISIBLE = 6;
+
+    private void openPicker() {
+        pickerOpen = true;
+        pickerQuery = "";
+        pickerCachedFor = null;
+        scrollOffsets.put("picker", 0);
+    }
+
+    /**
+     * What to offer.
+     *
+     * With no query, the items this market already trades and the ones you are carrying
+     * — which between them cover almost every real selection, so the common case needs
+     * no typing at all. Only once someone types do we go looking through every item in
+     * the game, capped, because that list is thousands long and nobody scrolls it.
+     */
+    private List<Item> pickerItems() {
+        String q = pickerQuery.trim().toLowerCase(java.util.Locale.ROOT);
+        if (q.equals(pickerCachedFor)) return pickerCache;
+
+        List<Item> out = new ArrayList<>();
+        if (q.isEmpty()) {
+            java.util.LinkedHashSet<Item> seed = new java.util.LinkedHashSet<>();
+            MarketState market = MarketStateHolder.get();
+            if (market != null) {
+                for (String id : market.activeItems()) {
+                    Item it = MinecraftIds.idToItem(id);
+                    if (it != Items.AIR) seed.add(it);
+                }
+            }
+            MinecraftClient mc = MinecraftClient.getInstance();
+            if (mc.player != null) {
+                for (InventoryBridge.Holding h : InventoryBridge.held(mc.player).items) {
+                    seed.add(h.item);
+                }
+            }
+            out.addAll(seed);
+        } else {
+            for (Item it : Registry.ITEM) {
+                if (it == Items.AIR) continue;
+                if (it.getName().getString().toLowerCase(java.util.Locale.ROOT).contains(q)) {
+                    out.add(it);
+                    if (out.size() >= 180) break;
+                }
+            }
+        }
+
+        pickerCachedFor = q;
+        pickerCache = out;
+        return out;
+    }
+
+    private int[] pickerBox() {
+        int w = PICK_COLS * PICK_CELL + 16;
+        int h = PICK_ROWS_VISIBLE * PICK_CELL + 46;
+        return new int[]{(this.width - w) / 2, Math.max(20, (this.height - h) / 2), w, h};
+    }
+
+    private int[] pickerGridRect() {
+        int[] box = pickerBox();
+        return new int[]{box[0] + 8, box[1] + 34, PICK_COLS * PICK_CELL,
+                PICK_ROWS_VISIBLE * PICK_CELL};
+    }
+
+    private void renderPicker(MatrixStack m, int mouseX, int mouseY) {
+        if (!pickerOpen) return;
+
+        fill(m, 0, 0, this.width, this.height, 0xC0101010);
+
+        int[] box = pickerBox();
+        fill(m, box[0] - 1, box[1] - 1, box[0] + box[2] + 1, box[1] + box[3] + 1, 0xFF88CCFF);
+        fill(m, box[0], box[1], box[0] + box[2], box[1] + box[3], 0xFF202020);
+
+        label(m, "Pick an item", box[0] + 8, box[1] + 8, 0x88CCFF);
+
+        // Search box, drawn rather than widgeted.
+        int searchY = box[1] + 20;
+        fill(m, box[0] + 8, searchY, box[0] + box[2] - 8, searchY + 12, 0xFF101010);
+        String shown = pickerQuery.isEmpty() ? "type to search by name..." : pickerQuery;
+        label(m, shown, box[0] + 11, searchY + 2,
+                pickerQuery.isEmpty() ? 0x606060 : 0xFFFFFF);
+
+        List<Item> items = pickerItems();
+        int[] grid = pickerGridRect();
+        int rows = (items.size() + PICK_COLS - 1) / PICK_COLS;
+        noteScrollable("picker", grid[0], grid[1], grid[2], grid[3],
+                rows * PICK_CELL, mouseX, mouseY);
+        int offset = scrollOf("picker");
+
+        if (items.isEmpty()) {
+            label(m, "nothing matches", grid[0], grid[1] + 4, 0x808080);
+        }
+
+        beginClip(grid[0], grid[1], grid[2], grid[3]);
+        for (int i = 0; i < items.size(); i++) {
+            int cx = grid[0] + (i % PICK_COLS) * PICK_CELL;
+            int cy = grid[1] + (i / PICK_COLS) * PICK_CELL - offset;
+            boolean hot = mouseX >= cx && mouseX < cx + 18 && mouseY >= cy && mouseY < cy + 18
+                    && mouseY >= grid[1] && mouseY < grid[1] + grid[3];
+            drawItemCell(m, new ItemStack(items.get(i)), cx, cy, null, hot);
+        }
+        endClip();
+
+        // Name of whatever is under the cursor, so the grid is readable without
+        // clicking things to find out what they are.
+        Item hovered = pickerItemAt(mouseX, mouseY);
+        String footer = hovered != null ? hovered.getName().getString()
+                : items.size() + " item(s) — Esc to cancel";
+        label(m, footer, box[0] + 8, box[1] + box[3] - 14,
+                hovered != null ? 0xFFFFFF : 0x808080);
+    }
+
+    private Item pickerItemAt(double mouseX, double mouseY) {
+        if (!pickerOpen) return null;
+        int[] grid = pickerGridRect();
+        if (mouseX < grid[0] || mouseX >= grid[0] + grid[2]
+                || mouseY < grid[1] || mouseY >= grid[1] + grid[3]) {
+            return null;
+        }
+        List<Item> items = pickerItems();
+        int col = (int) ((mouseX - grid[0]) / PICK_CELL);
+        int row = (int) ((mouseY - grid[1] + scrollOf("picker")) / PICK_CELL);
+        int index = row * PICK_COLS + col;
+        return index >= 0 && index < items.size() ? items.get(index) : null;
+    }
+
+    /** Returns true while the picker is up, which is any click at all. */
+    private boolean pickerClicked(double mouseX, double mouseY) {
+        Item chosen = pickerItemAt(mouseX, mouseY);
+        if (chosen != null) {
+            selectItem(chosen);
+            pickerOpen = false;
+        } else if (!within(mouseX, mouseY, pickerBox())) {
+            pickerOpen = false;   // clicking away cancels
+        }
+        return true;
     }
 
     // ─────────── chrome ───────────
@@ -1967,6 +2158,19 @@ public class MarketScreen extends Screen {
         if (!overlays.isEmpty()) {
             if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
                 overlays.pollFirst();
+            }
+            return true;
+        }
+
+        // The picker eats typing, since its search box isn't a widget and so gets no
+        // key events of its own.
+        if (pickerOpen) {
+            if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
+                pickerOpen = false;
+            } else if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_BACKSPACE
+                    && !pickerQuery.isEmpty()) {
+                pickerQuery = pickerQuery.substring(0, pickerQuery.length() - 1);
+                scrollOffsets.put("picker", 0);
             }
             return true;
         }
