@@ -1292,12 +1292,15 @@ public class MarketTests {
                     ServerConfig.friendGroup(25555).problem() == null ? 1 : 0, 1);
         }
 
-        section("R3: a missing or damaged config still starts a server");
+        section("R3: no config is defaults, an unreadable one is a refusal");
         {
-            // The dedicated server has no operator sitting at it. Refusing to boot over
-            // one mistyped field takes the market down at exactly the moment somebody is
-            // trying to fix it, so a bad file falls back rather than throwing.
-            ServerConfig absent = ServerConfig.load(scratch("test-serverconfig-none.json"));
+            // The two are deliberately not the same. No file means no policy has been
+            // expressed. A file that exists and cannot be parsed means policy WAS
+            // expressed and cannot be seen — and defaulting there would quietly restore
+            // welcomeGrant to 1000, minting money into a log that is never rewritten.
+            Path none = scratch("test-serverconfig-none.json");
+            Files.deleteIfExists(none);
+            ServerConfig absent = ServerConfig.load(none);
             check("absent file gives defaults", absent.port, 25555);
             check("and the default grant", absent.welcomeGrant,
                     ServerConfig.DEFAULT_WELCOME_GRANT);
@@ -1305,8 +1308,27 @@ public class MarketTests {
             Path junk = scratch("test-serverconfig-r3.json");
             Files.deleteIfExists(junk);
             Files.write(junk, "not json at all".getBytes());
-            check("damaged file gives defaults", ServerConfig.load(junk).port, 25555);
+            boolean refused = false;
+            try {
+                ServerConfig.load(junk);
+            } catch (IOException e) {
+                refused = true;
+            }
+            check("damaged file is refused, not defaulted", refused ? 1 : 0, 1);
 
+            Path empty = scratch("test-serverconfig-r3c.json");
+            Files.deleteIfExists(empty);
+            Files.write(empty, "   ".getBytes());
+            boolean emptyRefused = false;
+            try {
+                ServerConfig.load(empty);
+            } catch (IOException e) {
+                emptyRefused = true;
+            }
+            check("an empty file is refused too", emptyRefused ? 1 : 0, 1);
+
+            // A file written by an older build is still valid JSON and still policy —
+            // only the fields it never had fall back.
             Path partial = scratch("test-serverconfig-r3b.json");
             Files.deleteIfExists(partial);
             Files.write(partial, "{\"port\":25611}".getBytes());

@@ -45,6 +45,17 @@ public class ServerConfig {
     /** Refused beyond this, so one host cannot be exhausted by connections alone. */
     public int maxConnections = 64;
 
+    /**
+     * Events a single client may fall behind before it is dropped.
+     *
+     * Fan-out is per-client and asynchronous, so a slow reader backs up in its own
+     * queue instead of stalling the sequencer. That queue has to be bounded, or a
+     * client that has stopped reading becomes an unbounded memory leak on the host.
+     * Deep enough to absorb an ordinary stall, shallow enough that a client which is
+     * genuinely gone is dropped rather than accumulated.
+     */
+    public int outboundQueueDepth = 256;
+
     // ─────────── identity ───────────
 
     public String hostName = "dedicated";
@@ -92,25 +103,47 @@ public class ServerConfig {
     // ─────────── loading ───────────
 
     /**
-     * Reads a config, falling back to defaults for anything absent.
+     * Reads a config. Absent is fine; present and unreadable is not.
      *
-     * A malformed file is reported and then ignored rather than fatal: a server that
-     * refuses to start because one field was mistyped is a server that is down at
-     * exactly the moment somebody is trying to fix it.
+     * The tempting rule is "always fall back to defaults, a server that will not start
+     * is down at exactly the moment somebody is trying to fix it". That is right about
+     * availability and wrong about policy. welcomeGrant is not a preference — it is the
+     * only source of money in the system, and it writes events that can never be
+     * rewritten. An operator who set 50 and whose file later got truncated would get a
+     * server quietly minting 1000 a head into a permanent log. bindAddress fails the
+     * same way, turning a localhost-only server into a public one.
+     *
+     * So the two cases are separated. No file means no policy has been expressed yet
+     * and defaults are the only available answer. A file that exists but cannot be read
+     * means policy was expressed and we cannot see it, and guessing is worse than
+     * stopping — the operator is one corrected file and one restart away either way.
      */
-    public static ServerConfig load(Path file) {
-        ServerConfig cfg = new ServerConfig();
+    public static ServerConfig load(Path file) throws IOException {
+        if (!Files.exists(file)) return new ServerConfig();
+
+        String json;
         try {
-            if (Files.exists(file)) {
-                String json = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
-                ServerConfig loaded = gson.fromJson(json, ServerConfig.class);
-                if (loaded != null) cfg = loaded;
-            }
-        } catch (Exception e) {
-            System.err.println("[host] could not read " + file + " (" + e
-                    + ") — continuing with defaults");
+            json = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IOException("cannot read " + file + " (" + e.getMessage()
+                    + ") — fix it, or move it aside to start with defaults");
         }
-        return cfg;
+
+        ServerConfig loaded;
+        try {
+            loaded = gson.fromJson(json, ServerConfig.class);
+        } catch (Exception e) {
+            throw new IOException(file + " is not valid JSON (" + e.getMessage()
+                    + ") — fix it, or move it aside to start with defaults");
+        }
+
+        // Gson hands back null for an empty or whitespace-only file rather than
+        // complaining, which would otherwise read as "no policy" for a file that
+        // plainly is one.
+        if (loaded == null) {
+            throw new IOException(file + " is empty — delete it to start with defaults");
+        }
+        return loaded;
     }
 
     /** Writes this config out, so an operator has a file to edit rather than a guess. */
@@ -135,6 +168,9 @@ public class ServerConfig {
         }
         if (welcomeGrant < 0) {
             return "welcomeGrant cannot be negative, not " + welcomeGrant;
+        }
+        if (outboundQueueDepth < 1) {
+            return "outboundQueueDepth must be at least 1, not " + outboundQueueDepth;
         }
         return null;
     }
