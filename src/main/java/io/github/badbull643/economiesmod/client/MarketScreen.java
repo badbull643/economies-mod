@@ -469,10 +469,17 @@ public class MarketScreen extends Screen {
                 "You would lose " + MarketStateHolder.describeLoss(me) + "."
                         + " This cannot be undone. If you are rejoining a market you"
                         + " diverged from, everything you did before the split is in"
-                        + " their copy too and comes back when you reconnect.",
+                        + " their copy too and comes back when you reconnect, and any"
+                        + " orders you placed after it are listed afterwards so you can"
+                        + " put them back.",
                 "Discard", () -> {
                     MarketStateHolder.resetLog();
-                    status = "Local history discarded";
+                    // Only claims the list exists when it does — a reset with no fork
+                    // has nothing to offer back and should not imply otherwise.
+                    status = MarketStateHolder.pendingReplace().isEmpty()
+                            ? "Local history discarded"
+                            : "Local history discarded — orders from after the split are"
+                                    + " listed to re-place";
                 });
     }
 
