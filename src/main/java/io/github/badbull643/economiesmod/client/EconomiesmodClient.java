@@ -34,6 +34,8 @@ public class EconomiesmodClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         MarketKeybinds.register();
+        // A second way in, for players who have no reason to know about the keybind.
+        InventoryMarketButton.register();
 
 
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
