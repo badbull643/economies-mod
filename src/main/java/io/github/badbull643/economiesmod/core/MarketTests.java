@@ -1537,6 +1537,94 @@ public class MarketTests {
                     fine.problem() == null ? 1 : 0, 1);
         }
 
+        section("Y1: a market name is a label, not a path");
+        {
+            // These become directory names, so this is the boundary between the two.
+            check("an ordinary name", MarketSlots.isValidName("friends") ? 1 : 0, 1);
+            check("spaces, dashes and digits are fine",
+                    MarketSlots.isValidName("Big Server-2") ? 1 : 0, 1);
+            check("the default is always valid",
+                    MarketSlots.isValidName(MarketSlots.DEFAULT) ? 1 : 0, 1);
+
+            check("parent directories are refused",
+                    MarketSlots.isValidName("..") ? 1 : 0, 0);
+            check("so is anything with a separator",
+                    MarketSlots.isValidName("a/b") ? 1 : 0, 0);
+            check("and a backslash",
+                    MarketSlots.isValidName("a\\b") ? 1 : 0, 0);
+            check("and an absolute path",
+                    MarketSlots.isValidName("C:\\windows") ? 1 : 0, 0);
+            check("and a traversal buried in the middle",
+                    MarketSlots.isValidName("ok/../../etc") ? 1 : 0, 0);
+            check("empty is not a name", MarketSlots.isValidName("  ") ? 1 : 0, 0);
+            check("null is not a name", MarketSlots.isValidName(null) ? 1 : 0, 0);
+
+            // logPath refuses rather than sanitising, so a bad name cannot become a
+            // path that merely looks different from what was asked for.
+            Path world = scratch("test-slots-y1");
+            check("a refused name yields no path",
+                    MarketSlots.logPath(world, "../escape") == null ? 1 : 0, 1);
+        }
+
+        section("Y2: slots are separate markets, and the active one is remembered");
+        {
+            Path world = scratch("test-slots-y2");
+            deleteRecursively(world);
+            Files.createDirectories(world);
+
+            // A slot is a place a world can be, not a place with something in it. The
+            // default is always available, including in a world that has never had a
+            // market — otherwise a freshly made slot would be impossible to switch to.
+            check("an empty world still offers the default",
+                    MarketSlots.list(world).size(), 1);
+            check("and reports it as active",
+                    MarketSlots.DEFAULT.equals(MarketSlots.active(world)) ? 1 : 0, 1);
+            check("with no market in it yet",
+                    MarketSlots.marketNameIn(world, MarketSlots.DEFAULT) == null ? 1 : 0, 1);
+
+            // The default slot stays exactly where a single-market world already keeps
+            // it, so nothing existing has to move.
+            Path def = MarketSlots.logPath(world, MarketSlots.DEFAULT);
+            Files.createDirectories(def.getParent());
+            Files.write(def, "{}".getBytes());
+            check("the default sits where it always did",
+                    def.endsWith(Paths.get("economiesmod", "market.jsonl")) ? 1 : 0, 1);
+
+            Path other = MarketSlots.logPath(world, "big");
+            Files.createDirectories(other.getParent());
+            Files.write(other, "{}".getBytes());
+
+            List<String> slots = MarketSlots.list(world);
+            check("both are listed", slots.size(), 2);
+            check("default first", MarketSlots.DEFAULT.equals(slots.get(0)) ? 1 : 0, 1);
+
+            // Everything a market owns is a sibling of its log, so the slots cannot
+            // share a high-water mark — which would otherwise reset on every switch.
+            check("their files do not collide",
+                    def.resolveSibling("high-water.json")
+                            .equals(other.resolveSibling("high-water.json")) ? 1 : 0, 0);
+
+            MarketSlots.setActive(world, "big");
+            check("the choice survives being written and re-read",
+                    "big".equals(MarketSlots.active(world)) ? 1 : 0, 1);
+
+            // A pointer at a market that no longer exists must leave a usable world.
+            Files.write(world.resolve("economiesmod").resolve("active-slot"),
+                    "../escape".getBytes());
+            check("a hand-edited pointer falls back to the default",
+                    MarketSlots.DEFAULT.equals(MarketSlots.active(world)) ? 1 : 0, 1);
+
+            // A new slot has to be reachable the moment it is made, or the feature has
+            // no way in: a world starts with one and nothing else creates them.
+            String made = MarketSlots.createNext(world);
+            check("a new slot appears immediately",
+                    MarketSlots.list(world).contains(made) ? 1 : 0, 1);
+            check("and holds no market yet",
+                    MarketSlots.marketNameIn(world, made) == null ? 1 : 0, 1);
+            check("making another gives a different name",
+                    made.equals(MarketSlots.createNext(world)) ? 1 : 0, 0);
+        }
+
         section("X1: a fork reset only offers back what the fork actually cost");
         {
             // Orders placed before the divergence point come back on reconnecting,
@@ -1780,6 +1868,24 @@ public class MarketTests {
      * in — so they need somewhere to live that isn't the repo root.
      */
     private static final Path SCRATCH_DIR = Paths.get("build", "test-scratch");
+
+    /**
+     * Clears a scratch world so a run does not inherit slots from the last one.
+     *
+     * Deepest-first, because a directory cannot be removed while it still holds
+     * anything. Failures are ignored: this only ever runs against build/test-scratch.
+     */
+    private static void deleteRecursively(Path root) throws IOException {
+        if (!Files.exists(root)) return;
+        List<Path> paths = new ArrayList<>();
+        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+            walk.forEach(paths::add);
+        }
+        java.util.Collections.sort(paths, java.util.Collections.reverseOrder());
+        for (Path p : paths) {
+            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+        }
+    }
 
     private static Path scratch(String name) {
         try {
