@@ -13,7 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -272,8 +274,56 @@ public class MarketStateHolder {
      */
     private static final Consumer<AppliedEvent> APPLIED = a -> {
         noteApplied(a.event);
+        recordActivity(a.event);
         onApplied.accept(a);
     };
+
+    // ─────────── activity feed ───────────
+    //
+    // The tail of the log, kept in memory so a dashboard panel can show what has been
+    // happening without reading a file every frame. Fed from APPLIED rather than from
+    // either mode's own path, for the same reason everything else here is: LOCAL and
+    // CONNECTED must not be able to drift apart.
+    //
+    // Deliberately not filtered to live events. A synced history is exactly the thing
+    // someone joining wants to see in a "recent activity" panel, and unlike handing over
+    // items, showing an event twice costs nothing.
+
+    private static final int ACTIVITY_MAX = 64;
+
+    /** Guarded by itself: written from the network reader thread, read from the render
+     *  thread. */
+    private static final Deque<SequencedEvent> activity = new ArrayDeque<>();
+
+    private static void recordActivity(SequencedEvent se) {
+        if (se == null || se.event == null) return;
+        synchronized (activity) {
+            activity.addLast(se);
+            while (activity.size() > ACTIVITY_MAX) activity.removeFirst();
+        }
+    }
+
+    /** Fills the feed from a log that was replayed without going through APPLIED. */
+    private static void seedActivity(EventLog log) {
+        synchronized (activity) {
+            activity.clear();
+        }
+        if (log == null) return;
+        try {
+            long from = Math.max(0, log.lastSeq() - ACTIVITY_MAX);
+            for (SequencedEvent se : log.readFrom(from)) recordActivity(se);
+        } catch (IOException e) {
+            // A dashboard panel is not worth failing a world load over.
+            System.err.println("[economiesmod] could not read recent activity: " + e);
+        }
+    }
+
+    /** Most recent last. A copy, so the render thread never iterates a live deque. */
+    public static List<SequencedEvent> recentActivity() {
+        synchronized (activity) {
+            return new ArrayList<>(activity);
+        }
+    }
 
     public static void setOnApplied(Consumer<AppliedEvent> handler) {
         onApplied = handler;
@@ -354,6 +404,10 @@ public class MarketStateHolder {
                 System.err.println("[economiesmod] log unusable: " + damageReason);
             }
             localState = EventApplier.replay(localLog);
+            // Replay here goes straight through EventApplier rather than through APPLIED,
+            // so the feed has to be filled from the log by hand. A synced history does
+            // arrive through APPLIED and fills it on its own.
+            seedActivity(localLog);
             System.out.println("[economiesmod] local: replayed " + localLog.lastSeq() + " events");
         } catch (Exception e) {
             System.err.println("[economiesmod] local log load failed: " + e);
