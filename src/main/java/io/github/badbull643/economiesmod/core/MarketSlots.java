@@ -189,6 +189,39 @@ public final class MarketSlots {
         throw new IOException("this world already holds a great many markets");
     }
 
+    /**
+     * Removes a market from this world entirely, files and all.
+     *
+     * The default slot cannot be removed. It is where a single-market world keeps its
+     * market, so deleting it would mean deleting the thing every other world calls
+     * "the market" — and there would then be no slot guaranteed to exist. Resetting it
+     * empties it, which is the same outcome by the route built for it.
+     *
+     * Everything a market owns is a sibling of its log inside the slot directory, so
+     * this removes the directory rather than hunting for files: a high-water mark or a
+     * pending-ops journal left behind would be picked up by whatever occupied the name
+     * next.
+     */
+    public static void delete(Path worldDir, String slot) throws IOException {
+        if (worldDir == null) throw new IOException("no world open");
+        if (!isValidName(slot)) throw new IOException("not a usable market name: " + slot);
+        if (DEFAULT.equalsIgnoreCase(slot.trim())) {
+            throw new IOException("the first market in a world cannot be removed —"
+                    + " discard its history instead");
+        }
+
+        Path dir = worldDir.resolve(DIR).resolve(slot.trim());
+        if (!Files.isDirectory(dir)) return;
+
+        // Deepest first: a directory cannot go while it still holds anything.
+        List<Path> paths = new ArrayList<>();
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            walk.forEach(paths::add);
+        }
+        Collections.sort(paths, Collections.reverseOrder());
+        for (Path p : paths) Files.deleteIfExists(p);
+    }
+
     /** Remembers which slot this world is using, so it survives a restart. */
     public static void setActive(Path worldDir, String slot) throws IOException {
         if (worldDir == null) return;

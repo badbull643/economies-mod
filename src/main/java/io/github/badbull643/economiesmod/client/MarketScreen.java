@@ -50,6 +50,7 @@ public class MarketScreen extends Screen {
     private TextFieldWidget feeField;
     private ButtonWidget feeButton;
     private ButtonWidget addMarketButton;
+    private ButtonWidget deleteMarketButton;
 
     /**
      * The status line.
@@ -430,6 +431,10 @@ public class MarketScreen extends Screen {
         this.addMarketButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Add another market"), b -> onAddMarket()));
+
+        this.deleteMarketButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
+                        new LiteralText("Remove this market"), b -> onDeleteMarket()));
 
         // ─── SETTINGS ───
         // Every control writes straight through to the persisted settings, which have
@@ -1276,9 +1281,6 @@ public class MarketScreen extends Screen {
                 && situation != MS_DAMAGED;
         boolean reset = situation != MS_NO_MARKET;
 
-        marketNameField.visible = create;
-        marketNameField.active = create;
-
         // Hidden rather than greyed, unlike the Host button on a dedicated market.
         // That one is demoted because every player could plausibly host and the greying
         // teaches why they should not here; this is an action all but one person in any
@@ -1287,7 +1289,20 @@ public class MarketScreen extends Screen {
         boolean canSetFee = amCreator()
                 && situation != MS_NO_MARKET && situation != MS_DAMAGED;
 
+        // One running cursor for everything in this column. The name field used to be
+        // repositioned in a block after the buttons had been placed, which left y
+        // describing a layout that no longer existed — and the next thing placed from
+        // it landed on top of Import.
         int y = rowY + 4;
+
+        marketNameField.visible = create;
+        marketNameField.active = create;
+        if (create) {
+            // Above the button that consumes it.
+            marketNameField.y = y;
+            y += ROW_STEP;
+        }
+
         y = place(createButton, create, y);
         y = place(importButton, importFile, y);
         y = place(exportButton, export, y);
@@ -1299,21 +1314,18 @@ public class MarketScreen extends Screen {
         if (canSetFee) {
             feeField.y = y + 6;
             y = place(feeButton, true, y + 6 + ROW_STEP);
-        } else {
+        }  else {
             y = place(feeButton, false, y);
         }
 
         // Offered wherever there is a world to put one in — including a world with no
         // market at all, since "another" is only ever one more than however many there
         // are. Not offered on a damaged log, where the answer is to fix that first.
-        place(addMarketButton, situation != MS_DAMAGED, y + 6);
+        y = place(addMarketButton, situation != MS_DAMAGED, y + 6);
 
-        if (create) {
-            // The name field sits above the button that consumes it.
-            marketNameField.y = rowY + 4;
-            createButton.y = rowY + 4 + ROW_STEP;
-            importButton.y = rowY + 4 + ROW_STEP * 2;
-        }
+        // Only where there is more than one to choose between, for the same reason the
+        // list itself is hidden then: a world with a single market has nothing to leave.
+        place(deleteMarketButton, MarketStateHolder.availableSlots().size() > 1, y);
     }
 
     /** Whether the player at this keyboard is the identity named in the genesis event. */
@@ -1558,6 +1570,37 @@ public class MarketScreen extends Screen {
                     if (MarketStateHolder.addMarketSlot()) {
                         status = "Now using '" + MarketStateHolder.activeSlot()
                                 + "' — empty until you create or join a market";
+                        refreshMarketButtons();
+                    }
+                });
+    }
+
+    /**
+     * Removes the market in use from this world.
+     *
+     * DANGER rather than CONFIRM, and worded around what is lost rather than what is
+     * removed: this destroys a history that cannot be recovered from anywhere unless
+     * somebody else is holding it, which is the same thing Discard does and deserves
+     * the same treatment.
+     */
+    private void onDeleteMarket() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return;
+        UUID me = MinecraftIds.userIdOf(mc.player);
+
+        String slot = MarketStateHolder.activeSlot();
+        String name = MarketStateHolder.slotMarketName(slot);
+
+        showDanger("Remove " + (name == null ? "this empty market" : "'" + name + "'")
+                        + " from this world?",
+                "You would lose " + MarketStateHolder.describeLoss(me) + ", and this"
+                        + " world's copy of its history goes with it. If somebody else"
+                        + " still hosts this market you can join them again and get"
+                        + " everything back; if nobody does, it is gone. Your other"
+                        + " markets in this world are untouched.",
+                "Remove", () -> {
+                    if (MarketStateHolder.deleteActiveMarketSlot()) {
+                        status = "Removed — back on the first market in this world";
                         refreshMarketButtons();
                     }
                 });

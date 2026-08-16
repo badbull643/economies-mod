@@ -835,6 +835,15 @@ public class MarketStateHolder {
         }
 
         try {
+            // Stamped before validation, not after it. checkGenesis refuses any event
+            // whose marketId is not this market's, so stamping afterwards meant every
+            // non-genesis event submitted locally was validated with a null id and
+            // refused as belonging to a different market. Genesis carries its own id.
+            // See MarketClient.propose for the mirror of this.
+            if (!(event instanceof Event.MarketCreated)) {
+                event.marketId = get().marketId();
+            }
+
             // Validate before logging — a rejected event must not enter history.
             SequencedEvent probe = new SequencedEvent();
             probe.seq = localLog.lastSeq() + 1;
@@ -848,11 +857,6 @@ public class MarketStateHolder {
             // genesis event is written through here, and an unsigned line would make
             // the whole log unverifiable to anyone who later imports it.
             if (keys == null) return Submission.failed("no identity loaded");
-            // Genesis carries its own id; everything else is stamped with the market
-            // it is being written into. See MarketClient.propose for the mirror.
-            if (!(event instanceof Event.MarketCreated)) {
-                event.marketId = get().marketId();
-            }
             String signature;
             try {
                 signature = keys.sign(EventCanonical.canonicalPayload(event));
@@ -1068,6 +1072,55 @@ public class MarketStateHolder {
      * so the player lands on exactly the Create, Import and Connect choices that a
      * market-to-be needs, with no new flow to learn.
      */
+    /**
+     * Removes the market currently in use and falls back to the default slot.
+     *
+     * Only ever the active one, so what is about to be destroyed is what the screen is
+     * describing — deleting a market from a list, while looking at a different one's
+     * balances, is how the wrong thing gets deleted.
+     */
+    public static boolean deleteActiveMarketSlot() {
+        if (currentWorldDir == null) {
+            onRejected.accept("no world open");
+            return false;
+        }
+        String doomed = activeSlot;
+        if (MarketSlots.DEFAULT.equalsIgnoreCase(doomed)) {
+            onRejected.accept("the first market in a world cannot be removed —"
+                    + " use Discard to empty it instead");
+            return false;
+        }
+
+        // Nothing may be holding the files open when they go.
+        if (hostServer != null) stopHosting();
+        disconnectIfConnected();
+        localLog = null;
+        localState = null;
+
+        try {
+            MarketSlots.delete(currentWorldDir, doomed);
+        } catch (IOException e) {
+            onRejected.accept("could not remove that market: " + e.getMessage());
+            loadLocal(currentWorldDir);
+            return false;
+        }
+
+        activeSlot = MarketSlots.DEFAULT;
+        try {
+            MarketSlots.setActive(currentWorldDir, activeSlot);
+        } catch (IOException e) {
+            System.err.println("[economiesmod] could not remember the active market: " + e);
+        }
+
+        divergence = null;
+        checkedHeads.clear();
+        pendingReplace = new ArrayList<>();
+
+        loadLocal(currentWorldDir);
+        System.out.println("[economiesmod] removed market slot '" + doomed + "'");
+        return true;
+    }
+
     public static boolean addMarketSlot() {
         if (currentWorldDir == null) {
             onRejected.accept("no world open");
