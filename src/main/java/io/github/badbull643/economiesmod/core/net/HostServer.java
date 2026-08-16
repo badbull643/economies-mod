@@ -30,6 +30,32 @@ public class HostServer {
     /** Everything the two hosting modes disagree about. Never null. */
     private final ServerConfig config;
 
+    /**
+     * How much each identity has handed this host lately. Off unless configured.
+     *
+     * Host-side rather than in EventApplier, and necessarily so — its answer depends on
+     * when it is asked, so a replica replaying later would judge a window that has
+     * passed and refuse events the market legitimately holds. See DepositLimiter.
+     */
+    private final DepositLimiter depositLimiter;
+
+    /**
+     * Items this event would add to the depositor's balance, or 0 if it is not a
+     * deposit.
+     *
+     * DepositAndList counts the same as Deposit: the goods enter the market either way,
+     * and a cap that only watched one of them would be a cap on which button was used.
+     */
+    private static long depositUnitsOf(Event event) {
+        if (event instanceof Event.Deposit) {
+            return ((Event.Deposit) event).quantity;
+        }
+        if (event instanceof Event.DepositAndList) {
+            return ((Event.DepositAndList) event).quantity;
+        }
+        return 0;
+    }
+
     private final int port;
     private final EventLog log;
     private final MarketState state;
@@ -215,6 +241,8 @@ public class HostServer {
         }
 
         this.config = config;
+        this.depositLimiter = new DepositLimiter(config.maxDepositUnitsPerWindow,
+                config.depositWindowMinutes * 60_000L);
         this.welcomeGrantAmount = config.welcomeGrant;
         this.port = config.port;
         this.hostName = config.hostName;
@@ -1022,11 +1050,36 @@ public class HostServer {
             return;
         }
 
+        // After validate, so an event refused for some other reason costs nobody any of
+        // their allowance, and before append, because this is the last point at which
+        // declining is free.
+        long depositUnits = depositUnitsOf(event);
+        if (depositUnits > 0 && !depositLimiter.allows(event.userId, depositUnits,
+                System.currentTimeMillis())) {
+            long remaining = depositLimiter.remainingFor(event.userId,
+                    System.currentTimeMillis());
+            // The refusal an operator actually wants to see. Nothing else here reports
+            // a client behaving implausibly rather than incorrectly.
+            System.out.println("[host] deposit cap: " + event.userId + " tried "
+                    + depositUnits + ", has " + remaining + " left of "
+                    + depositLimiter.maxUnits());
+            reject(p.from, msg.clientEventId, "deposit limit reached — this server"
+                    + " accepts " + depositLimiter.maxUnits() + " items per identity"
+                    + " per " + config.depositWindowMinutes + " minutes, and you have "
+                    + remaining + " left");
+            return;
+        }
+
         // Valid — now it becomes history. The signature is stored alongside the event
         // so anyone replaying this log later can check authorship without having been
         // present when it was written.
         SequencedEvent se = log.append(event, msg.signature);
         EventApplier.Result result = EventApplier.apply(state, se);
+
+        // Counted only once it is genuinely in the log.
+        if (result.accepted && depositUnits > 0) {
+            depositLimiter.record(event.userId, depositUnits, System.currentTimeMillis());
+        }
 
         if (result.accepted) {
             System.out.println("[host] seq " + se.seq + " " + msg.eventType);
