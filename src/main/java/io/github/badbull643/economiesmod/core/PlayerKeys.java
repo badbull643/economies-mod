@@ -50,7 +50,14 @@ public class PlayerKeys {
         }
         PlayerKeys keys = generate();
         keys.save(keyFile);
-        System.out.println("[keys] generated new identity, saved to " + keyFile.toAbsolutePath());
+        // Loud, because this file is the identity — not a cache of it. A player who
+        // moves to another computer without it arrives as a stranger to every market
+        // they were part of, with the same name and no way to prove it.
+        System.out.println("[keys] ─────────────────────────────────────────────");
+        System.out.println("[keys] generated a NEW identity: " + keyFile.toAbsolutePath());
+        System.out.println("[keys] this file IS your identity in every market.");
+        System.out.println("[keys] copy it to move to another computer; never share it.");
+        System.out.println("[keys] ─────────────────────────────────────────────");
         return keys;
     }
 

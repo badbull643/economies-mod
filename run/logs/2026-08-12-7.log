@@ -1,0 +1,13 @@
+[00:04:31] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[00:04:31] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[00:04:31] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[00:04:31] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[00:04:31] [Server thread/INFO] (Minecraft) Alice lost connection: Disconnected
+[00:04:31] [Server thread/INFO] (Minecraft) Alice left the game
+[00:04:31] [Server thread/INFO] (Minecraft) Stopping singleplayer server as player logged out
+[00:04:31] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] world stopping — shutting down
+[00:04:31] [Server thread/INFO] (Minecraft) Stopping server
+[00:04:31] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
+[00:04:31] [Server thread/INFO] (Minecraft) Saving players
+[00:04:31] [Server thread/INFO] (Minecraft) Saving worlds
+[00:04:31] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
