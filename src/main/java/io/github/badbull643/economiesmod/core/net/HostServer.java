@@ -537,6 +537,16 @@ public class HostServer {
             return false;
         }
 
+        // Before the sync, which is the expensive part: an identity that is not welcome
+        // should cost this server one comparison, not a whole history read and send.
+        String notWelcome = config.refuses(hello.userId);
+        if (notWelcome != null) {
+            System.out.println("[host] refused " + hello.displayName + " ("
+                    + hello.userId + ") — " + notWelcome);
+            sendError(channel, Refusal.NOT_ADMITTED, notWelcome);
+            return false;
+        }
+
         // Admission is decided by the log, not by known-keys.json. Two TOFU registries
         // that can disagree is the same hazard D1 removed from event verification: here
         // it locked a player out of their own market whenever the side file went stale,
@@ -670,6 +680,18 @@ public class HostServer {
     private void handleMigrate(MessageChannel channel, Message.MigrateRequest first) {
         Message.MigrateResult reply = new Message.MigrateResult();
         try {
+            // Migration is a pre-handshake exchange that writes a MigrateBalance and
+            // credits the sender. Gating only the handshake would leave the admission
+            // policy bypassable by the one path that hands out money.
+            String notWelcome = config.refuses(first.userId);
+            if (notWelcome != null) {
+                System.out.println("[host] refused migration from " + first.userId
+                        + " — " + notWelcome);
+                reply.reason = notWelcome;
+                channel.send(reply);
+                return;
+            }
+
             // A whole history can arrive as several chunks — see MessageChannel's
             // CHUNK_BUDGET_BYTES — so keep reading until the sender marks the last one,
             // accumulating before the expensive verify runs once over all of it.
@@ -799,6 +821,19 @@ public class HostServer {
     private void handleCatchUp(MessageChannel channel, Message.CatchUp req) {
         Message.CatchUpResult reply = new Message.CatchUpResult();
         try {
+            // Also pre-handshake, and also a write: it appends the offered events to
+            // this log. The events are verified and must fast-forward cleanly, so this
+            // is not a hole in the trust model — but who may append to this server's
+            // copy is exactly the question admission exists to answer.
+            String notWelcome = config.refuses(req.userId);
+            if (notWelcome != null) {
+                System.out.println("[host] refused catch-up from " + req.userId
+                        + " — " + notWelcome);
+                reply.reason = notWelcome;
+                channel.send(reply);
+                return;
+            }
+
             // Chunked like a migration, and for the same reason: there is no bound on
             // how far a host can have fallen behind its own market.
             final List<String> offered = accumulateChunks(channel, req.logLines, req.complete,
@@ -1158,6 +1193,15 @@ public class HostServer {
         public static final String NO_IDENTITY      = "no_identity";
         /** Right identity, wrong signing key — usually a moved or lost key file. */
         public static final String KEY_MISMATCH     = "key_mismatch";
+        /**
+         * Turned away by this server's admission policy.
+         *
+         * Nothing is wrong with the client's history, so unlike every other code here
+         * there is no remedy it can carry out — the answer is with whoever runs the
+         * server. Safe to add without a protocol bump: code is an existing field and a
+         * client that does not know this value falls back to showing the reason text.
+         */
+        public static final String NOT_ADMITTED     = "not_admitted";
         private Refusal() {}
     }
 
