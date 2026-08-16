@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Everything that differs between a rotating host and a dedicated server.
@@ -55,6 +57,64 @@ public class ServerConfig {
      * genuinely gone is dropped rather than accumulated.
      */
     public int outboundQueueDepth = 256;
+
+    // ─────────── admission ───────────
+
+    /**
+     * "open" to admit anyone, "allowlist" to admit only listed identities.
+     *
+     * Server-local, deliberately: refusing a connection is not a market fact. It writes
+     * no event, needs no signature, and two hosts of the same market may reasonably
+     * disagree about who they will talk to. Putting it in the ledger would make every
+     * replica replay one operator's guest list as if it were history.
+     *
+     * This is also the honest limit of what admission buys. It cannot tell whether a
+     * player's items were legitimately obtained — their world is theirs, and depositing
+     * goods from a creative-mode world uses the completely honest client path. What it
+     * buys is the ability to impose conditions as a price of entry, which is a different
+     * and smaller claim than anti-cheat.
+     */
+    public String admission = OPEN;
+
+    public static final String OPEN = "open";
+    public static final String ALLOWLIST = "allowlist";
+
+    /** Identities admitted when admission is "allowlist". Ignored when open. */
+    public List<String> allow = new ArrayList<>();
+
+    /** Identities refused regardless of admission mode. Checked first. */
+    public List<String> deny = new ArrayList<>();
+
+    /**
+     * Why this identity is not welcome, or null when it is.
+     *
+     * Deny beats allow, which is the conventional order and the safe one: an identity
+     * that appears on both lists is being argued about, and refusing is the reading you
+     * can undo. Case-insensitive because a UUID is hex and reaches the config file by
+     * being typed or pasted by a human.
+     */
+    public String refuses(String userId) {
+        if (userId == null || userId.trim().isEmpty()) {
+            return "no identity presented";
+        }
+        String id = userId.trim();
+
+        if (listed(deny, id)) {
+            return "that identity is not allowed on this server";
+        }
+        if (ALLOWLIST.equalsIgnoreCase(admission) && !listed(allow, id)) {
+            return "this server admits invited identities only";
+        }
+        return null;
+    }
+
+    private static boolean listed(List<String> list, String id) {
+        if (list == null) return false;
+        for (String entry : list) {
+            if (entry != null && entry.trim().equalsIgnoreCase(id)) return true;
+        }
+        return false;
+    }
 
     // ─────────── identity ───────────
 
@@ -171,6 +231,17 @@ public class ServerConfig {
         }
         if (outboundQueueDepth < 1) {
             return "outboundQueueDepth must be at least 1, not " + outboundQueueDepth;
+        }
+        // A misspelt mode must not quietly read as "open". An operator who typed
+        // "allowlist " or "allow-list" and got an open server would have no way to tell
+        // from the outside until the wrong person connected.
+        if (!OPEN.equalsIgnoreCase(admission) && !ALLOWLIST.equalsIgnoreCase(admission)) {
+            return "admission must be \"" + OPEN + "\" or \"" + ALLOWLIST
+                    + "\", not \"" + admission + "\"";
+        }
+        if (ALLOWLIST.equalsIgnoreCase(admission) && (allow == null || allow.isEmpty())) {
+            return "admission is \"" + ALLOWLIST + "\" but allow is empty —"
+                    + " that server would refuse everyone, including you";
         }
         return null;
     }
