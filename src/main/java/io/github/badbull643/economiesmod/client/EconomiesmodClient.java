@@ -1,6 +1,7 @@
 package io.github.badbull643.economiesmod.client;
 
 import io.github.badbull643.economiesmod.core.Event;
+import io.github.badbull643.economiesmod.core.Fill;
 import io.github.badbull643.economiesmod.core.PendingOps;
 import io.github.badbull643.economiesmod.core.SequencedEvent;
 import net.fabricmc.api.ClientModInitializer;
@@ -13,6 +14,7 @@ import net.minecraft.item.Items;
 import net.minecraft.util.WorldSavePath;
 
 import java.nio.file.Path;
+import java.util.UUID;
 
 public class EconomiesmodClient implements ClientModInitializer {
 
@@ -25,6 +27,9 @@ public class EconomiesmodClient implements ClientModInitializer {
      * to hand them to. So it waits for the first tick where one is actually there.
      */
     private static boolean pendingOpsSettled = false;
+
+    /** Owns the rate-limiting window, so it has to outlive any one event. */
+    private static final FillNotifier FILLS = new FillNotifier();
 
     @Override
     public void onInitializeClient() {
@@ -57,6 +62,10 @@ public class EconomiesmodClient implements ClientModInitializer {
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(mc -> {
+            // Batched fills wait for their window to close, so something has to come
+            // back and flush them.
+            FILLS.tick();
+
             if (pendingOpsSettled) return;
             if (mc.player == null || mc.getServer() == null) return;
             pendingOpsSettled = true;
@@ -71,11 +80,27 @@ public class EconomiesmodClient implements ClientModInitializer {
             if (!applied.live) return;
 
             SequencedEvent se = applied.event;
+            MinecraftClient mc = MinecraftClient.getInstance();
+            if (mc.player == null) return;
+
+            // Fills reach a client for events it did not author — that is how you learn
+            // a resting order of yours traded while you were doing something else, and
+            // it is the only place that information exists on this side.
+            if (applied.result != null && !applied.result.fills.isEmpty()) {
+                UUID me = MinecraftIds.userIdOf(mc.player);
+                // Whoever authored the event is the aggressor; anyone else in a fill was
+                // sitting on the book.
+                boolean iAggressed = me.equals(se.event.userId);
+                mc.execute(() -> {
+                    for (Fill fill : applied.result.fills) {
+                        FILLS.onFill(fill, me, !iAggressed);
+                    }
+                });
+            }
+
             if (!(se.event instanceof Event.Withdraw)) return;
 
             Event.Withdraw w = (Event.Withdraw) se.event;
-            MinecraftClient mc = MinecraftClient.getInstance();
-            if (mc.player == null) return;
 
             // Only grant for our own withdrawals — everyone else's are just ledger changes.
             if (!w.userId.equals(MinecraftIds.userIdOf(mc.player))) return;
