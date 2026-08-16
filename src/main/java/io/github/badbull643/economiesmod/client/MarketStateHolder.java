@@ -1051,6 +1051,11 @@ public class MarketStateHolder {
         disconnectIfConnected();
 
         if (currentWorldDir == null) return;
+
+        // Before anything is deleted, and before divergence is cleared below — both are
+        // needed to work out which orders this reset actually costs.
+        List<OldOrder> lost = ordersLostToReset();
+
         try {
             Path log = logPathFor(currentWorldDir);
             Files.deleteIfExists(log);
@@ -1067,9 +1072,58 @@ public class MarketStateHolder {
             checkedHeads.clear();
             loadLocal(currentWorldDir);
             System.out.println("[economiesmod] local history discarded");
+
+            // Offered after the reset rather than before, so the list belongs to the
+            // market being rejoined rather than the one just discarded.
+            if (!lost.isEmpty()) {
+                pendingReplace = lost;
+                System.out.println("[economiesmod] " + lost.size()
+                        + " orders held for re-placing after the reset");
+            }
         } catch (IOException e) {
             System.err.println("[economiesmod] reset failed: " + e);
         }
+    }
+
+    /**
+     * Orders a reset would destroy without offering them back.
+     *
+     * Only meaningful after a fork. Everything up to the divergence point is history
+     * this market shares with the host, so it comes back on reconnecting and needs no
+     * help; only what was placed on our own branch afterwards is genuinely lost.
+     * Migration snapshots every order instead, and that difference is not an
+     * inconsistency — migration abandons the whole market, so every order goes with it.
+     *
+     * A reset with no fork returns nothing. There is no host holding a shared history
+     * to rejoin, so an offer to re-place would be an offer to re-place them into
+     * nothing.
+     */
+    private static List<OldOrder> ordersLostToReset() {
+        List<OldOrder> out = new ArrayList<>();
+
+        Divergence split = divergence;
+        if (split == null || currentWorldDir == null) return out;
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return out;
+        UUID me = MinecraftIds.userIdOf(mc.player);
+
+        try {
+            // The arithmetic lives in core so it can be tested without Minecraft; all
+            // that belongs here is knowing whose keyboard this is.
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            for (Order o : BranchDiff.ordersOnlyAfter(log, split.seq, me)) {
+                out.add(new OldOrder(o.itemID(), o.value(), o.volume(), o.isBid()));
+            }
+        } catch (Exception e) {
+            // The reset itself must go ahead regardless. Losing the convenience of a
+            // checklist is not a reason to leave somebody stuck on a forked branch.
+            System.err.println("[economiesmod] could not work out which orders the reset"
+                    + " would cost: " + e);
+            return new ArrayList<>();
+        }
+
+        return out;
     }
 
 
