@@ -1336,6 +1336,53 @@ public class MarketScreen extends Screen {
                 y += 10;
             }
         }
+
+        renderMarketFacts(m, x, y + 10);
+    }
+
+    /**
+     * What this market charges and who runs it.
+     *
+     * Here because a fee that exists and is never shown makes the first fill a nasty
+     * surprise — the tax could not ship without somewhere to read it. Below the
+     * guidance rather than above it: when something is wrong, the thing that is wrong
+     * outranks the reference card.
+     */
+    private void renderMarketFacts(MatrixStack m, int x, int y) {
+        MarketState market = MarketStateHolder.get();
+        if (market == null || market.marketId() == null) return;
+        if (y > panelBottom() - 40) return;      // no room; guidance took the panel
+
+        label(m, "About this market", x, y, 0xFFDD66);
+        y += 12;
+
+        label(m, trim("Name: " + market.marketName(), listW - 8), x, y, 0xAAAAAA);
+        y += 10;
+
+        // Rotating or dedicated. Only known while connected — a Sync is where it is
+        // told — so the offline case says nothing rather than guessing "rotating".
+        if (MarketStateHolder.isConnected()) {
+            label(m, MarketStateHolder.hostIsDedicated()
+                            ? "Host: dedicated server — always up, nobody takes turns"
+                            : "Host: another player's game — up while they are",
+                    x, y, 0xAAAAAA);
+            y += 10;
+        }
+
+        int bps = market.taxBps();
+        if (bps <= 0) {
+            label(m, "Trading fee: none", x, y, 0xAAAAAA);
+        } else {
+            // Both forms, because the rate is set in basis points and felt in credits.
+            label(m, "Trading fee: " + formatBps(bps) + " of each sale, taken from the"
+                    + " seller and destroyed", x, y, 0xFFAA55);
+        }
+    }
+
+    /** 250 reads as "2.5%", 100 as "1%". Trailing ".0" is noise on a fee. */
+    private static String formatBps(int bps) {
+        if (bps % 100 == 0) return (bps / 100) + "%";
+        return String.format("%.2f%%", bps / 100.0).replace(".00", "");
     }
 
     /**
@@ -1510,8 +1557,13 @@ public class MarketScreen extends Screen {
             boolean joinable = myMarket == null || myMarket.equals(h.reply.marketId);
             String marketLabel = h.reply.marketName != null ? h.reply.marketName : "unnamed";
 
+            // A dedicated host is one that will still be there tomorrow and needs
+            // nobody to take a turn hosting. That is the only thing the two modes
+            // differ on from here, and it is worth knowing before choosing rather
+            // than after connecting.
             String line = "  " + h.reply.hostName
                     + (isSelf ? " (you)" : "")
+                    + (h.reply.dedicated ? " [server]" : "")
                     + "  [" + marketLabel + "]"
                     + (joinable ? "" : " (different market)")
                     + "  (" + h.reply.lastSeq + " events, "
