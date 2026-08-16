@@ -1403,6 +1403,101 @@ public class MarketTests {
             check("a usable allowlist is accepted", fine.problem() == null ? 1 : 0, 1);
         }
 
+        section("T1: the rounding rule, pinned");
+        {
+            // Every replica computes this independently and must agree to the credit.
+            check("1% of 1000", MarketState.taxOn(1000, 100), 10);
+            check("2.5% of 1000", MarketState.taxOn(1000, 250), 25);
+            check("50% of 1000", MarketState.taxOn(1000, MarketState.MAX_TAX_BPS), 500);
+            check("no rate, no tax", MarketState.taxOn(1000, 0), 0);
+            check("a negative rate cannot pay anyone", MarketState.taxOn(1000, -100), 0);
+
+            // Rounds down, so small trades are taxed nothing rather than
+            // disproportionately. 1% of 99 is 0.99.
+            check("rounds down, not up", MarketState.taxOn(99, 100), 0);
+            check("and at the boundary", MarketState.taxOn(100, 100), 1);
+            check("199 at 1%", MarketState.taxOn(199, 100), 1);
+
+            check("nothing is taxed on nothing", MarketState.taxOn(0, 500), 0);
+            check("the tax never exceeds the trade",
+                    MarketState.taxOn(1, MarketState.MAX_TAX_BPS), 0);
+
+            // Large but realistic: 100k units at 100k each would overflow a naive
+            // int multiply long before this.
+            check("large fills do not overflow",
+                    MarketState.taxOn(1_000_000_000L, 100), 10_000_000L);
+        }
+
+        section("T2: the tax comes off the seller, and is burned");
+        {
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 10);
+            m.wallets().setBalance(BOB, 1000L);
+            m.setTaxBps(1000);              // 10%
+
+            long supplyBefore = m.wallets().getBalance(ALICE) + m.wallets().getBalance(BOB);
+
+            // Order is (id, price, item, volume, isBid, who) — price before volume.
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));   // ask 10 @ 50
+            m.submitOrder(new Order(2, 50, IRON, 10, true, BOB));      // buy 10 @ 50
+
+            // 10 units at 50 = 500. 10% of 500 = 50.
+            check("seller is credited net of tax", m.wallets().getBalance(ALICE), 450);
+            check("buyer pays the full price", m.wallets().getBalance(BOB), 500);
+            check("buyer gets the goods", m.itemBalances().getBalance(BOB, IRON), 10);
+
+            long supplyAfter = m.wallets().getBalance(ALICE) + m.wallets().getBalance(BOB);
+            check("the tax left the system entirely", supplyBefore - supplyAfter, 50);
+        }
+
+        section("T3: a rate change is not retroactive");
+        {
+            // Replay gives this for free — fills settle against the rate in force when
+            // they were applied, and nothing in the code says so. Which is exactly why
+            // it is worth a test: it is correctness by construction that a later
+            // refactor could remove without any other check noticing.
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 20);
+            m.wallets().setBalance(BOB, 2000L);
+
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));
+            m.submitOrder(new Order(2, 50, IRON, 10, true, BOB));
+            check("untaxed while the rate was zero", m.wallets().getBalance(ALICE), 500);
+
+            m.setTaxBps(1000);              // 10%, from here on
+
+            m.submitOrder(new Order(3, 50, IRON, 10, false, ALICE));
+            m.submitOrder(new Order(4, 50, IRON, 10, true, BOB));
+            // Second trade: 500 gross, 50 tax, 450 net. First trade keeps its full 500.
+            check("only the later trade is taxed", m.wallets().getBalance(ALICE), 950);
+        }
+
+        section("T4: only the creator sets policy, and only within bounds");
+        {
+            // Bounds live in EventApplier because that is the gate every replica passes
+            // through. A rate the UI refused but the applier accepted would be a rate
+            // one client could still write and everyone else would replay.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "policy market", ALICE);
+            // Authorship precedes everything else in validate, so both have to exist in
+            // the market before the policy rule is the thing being tested.
+            m.registerKey(ALICE, "alice-key");
+            m.registerKey(BOB, "bob-key");
+
+            check("the creator may set a rate",
+                    policyRejection(m, ALICE, 250) == null ? 1 : 0, 1);
+            check("someone else may not",
+                    policyRejection(m, BOB, 250) != null ? 1 : 0, 1);
+            check("above the ceiling is refused",
+                    policyRejection(m, ALICE, MarketState.MAX_TAX_BPS + 1) != null ? 1 : 0, 1);
+            check("the ceiling itself is allowed",
+                    policyRejection(m, ALICE, MarketState.MAX_TAX_BPS) == null ? 1 : 0, 1);
+            check("negative is refused",
+                    policyRejection(m, ALICE, -1) != null ? 1 : 0, 1);
+            check("zero is allowed — it turns the tax off",
+                    policyRejection(m, ALICE, 0) == null ? 1 : 0, 1);
+        }
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");
@@ -1435,6 +1530,28 @@ public class MarketTests {
 
     private static void section(String name) {
         System.out.println("  [" + name + "]");
+    }
+
+    /**
+     * Why EventApplier would refuse this policy change, or null if it would accept it.
+     *
+     * Goes through validate rather than testing the bounds directly, because the bounds
+     * only mean anything at the gate every replica passes through — checking them
+     * anywhere else would prove something no client actually relies on.
+     */
+    private static String policyRejection(MarketState state, UUID author, int bps) {
+        Event.MarketPolicy mp = new Event.MarketPolicy();
+        mp.userId = author;
+        mp.marketId = state.marketId();
+        mp.taxBps = bps;
+        mp.timestamp = 1L;
+
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 2;
+        se.event = mp;
+
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
     }
 
     private static void check(String label, long actual, long expected) {

@@ -682,6 +682,16 @@ public class MarketStateHolder {
     }
 
     /**
+     * Whether the host we are connected to is a dedicated server.
+     *
+     * False when not connected, which callers must read as "unknown" rather than "no" —
+     * it is only ever learned from a Sync.
+     */
+    public static boolean hostIsDedicated() {
+        return client != null && client.hostIsDedicated();
+    }
+
+    /**
      * Drops back to LOCAL when the link died without an explicit Disconnect.
      *
      * Without this, mode stays CONNECTED after the host goes away: trading is still

@@ -81,6 +81,16 @@ public class MarketClient {
 
     public MarketState state() { return state; }
     public boolean isConnected() { return connected; }
+
+    /**
+     * Whether the host we synced from calls itself a dedicated server.
+     *
+     * Self-reported and only knowable once connected, which is why nothing offline
+     * claims the opposite — "not dedicated" and "not yet known" are different answers
+     * and only one of them is safe to draw.
+     */
+    private volatile boolean hostDedicated = false;
+    public boolean hostIsDedicated() { return hostDedicated; }
     public EventLog log() { return log; }
     public long lastSeq() { return appliedSeq; }
 
@@ -136,6 +146,7 @@ public class MarketClient {
         }
 
         Message.Sync sync = (Message.Sync) reply;
+        hostDedicated = sync.dedicated;
 
         // The host already refused a mismatch, but check our own copy too — a client
         // should not adopt events into a log whose identity it did not agree to.
