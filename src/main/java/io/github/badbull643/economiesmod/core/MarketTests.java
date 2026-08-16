@@ -1505,11 +1505,21 @@ public class MarketTests {
             // Off by default: a friend group has no cheating problem worth a ceiling,
             // and a limit that surprises people mid-session is worse than none.
             DepositLimiter off = new DepositLimiter(0, 60_000L);
-            check("disabled", off.enabled() ? 1 : 0, 0);
+            check("no ceiling is enforced", off.enabled() ? 1 : 0, 0);
             check("allows an absurd deposit",
                     off.allows(ALICE, 1_000_000_000L, 1L) ? 1 : 0, 1);
-            off.record(ALICE, 1_000_000_000L, 1L);
-            check("and records nothing", off.usedBy(ALICE, 1L), 0);
+
+            // Counting and enforcing are separate switches. The attestation check needs
+            // a running total even with no ceiling set, or it would compare each deposit
+            // alone against claimed play time and never a sum — which is a hundred units
+            // as often as you like.
+            off.record(ALICE, 500, 1L);
+            check("but deposits are still counted", off.usedBy(ALICE, 1L), 500);
+
+            DepositLimiter untracked = new DepositLimiter(0, 0L);
+            check("with no window, nothing is kept", untracked.tracking() ? 1 : 0, 0);
+            untracked.record(ALICE, 500, 1L);
+            check("and nothing is counted", untracked.usedBy(ALICE, 1L), 0);
 
             check("a default config has no cap",
                     ServerConfig.friendGroup(25555).maxDepositUnitsPerWindow, 0);
@@ -1525,6 +1535,68 @@ public class MarketTests {
             fine.maxDepositUnitsPerWindow = 500;
             check("a cap with the default window is fine",
                     fine.problem() == null ? 1 : 0, 1);
+        }
+
+        section("W1: an attestation is judged by contradiction, not belief");
+        {
+            // Nothing here can be verified. What can be done is to notice that two
+            // statements cannot both be true — the same shape as catching a client that
+            // claims to be vanilla while registering plugin channels.
+            ServerConfig cfg = ServerConfig.friendGroup(25555);
+            cfg.maxDepositUnitsPerPlayHour = 100;
+
+            WorldAttestation young = new WorldAttestation();
+            young.gameMode = "survival";
+            young.worldAgeTicks = WorldAttestation.TICKS_PER_HOUR / 2;   // half an hour
+
+            check("half an hour reads as half an hour",
+                    (long) Math.round(young.claimedHours() * 10), 5);
+            check("a plausible haul passes",
+                    young.objections(cfg, 40).isEmpty() ? 1 : 0, 1);
+            check("more than that half hour could yield does not",
+                    young.objections(cfg, 400).isEmpty() ? 1 : 0, 0);
+
+            // Claiming a longer history lifts the ceiling — which is the point. The lie
+            // is not prevented, it is made specific and recorded.
+            WorldAttestation old = new WorldAttestation();
+            old.gameMode = "survival";
+            old.worldAgeTicks = WorldAttestation.TICKS_PER_HOUR * 40;
+            check("forty claimed hours affords the same haul",
+                    old.objections(cfg, 400).isEmpty() ? 1 : 0, 1);
+
+            // Off unless configured, like everything else in this area.
+            ServerConfig noPolicy = ServerConfig.friendGroup(25555);
+            check("no policy, no objection",
+                    young.objections(noPolicy, 1_000_000).isEmpty() ? 1 : 0, 1);
+        }
+
+        section("W2: the claims that stand on their own");
+        {
+            ServerConfig strict = ServerConfig.friendGroup(25555);
+            strict.refuseCreativeWorlds = true;
+            strict.refuseCheatWorlds = true;
+
+            WorldAttestation creative = new WorldAttestation();
+            creative.gameMode = "creative";
+            check("a creative world is objected to",
+                    creative.objections(strict, 0).isEmpty() ? 1 : 0, 0);
+            check("and it is recognised as creative", creative.isCreative() ? 1 : 0, 1);
+
+            WorldAttestation cheats = new WorldAttestation();
+            cheats.gameMode = "survival";
+            cheats.commandsAllowed = true;
+            check("so is one with commands enabled",
+                    cheats.objections(strict, 0).isEmpty() ? 1 : 0, 0);
+
+            WorldAttestation plain = new WorldAttestation();
+            plain.gameMode = "survival";
+            check("an ordinary survival world is not",
+                    plain.objections(strict, 0).isEmpty() ? 1 : 0, 1);
+
+            // A host that has not asked for any of this must not start refusing people.
+            ServerConfig lax = ServerConfig.friendGroup(25555);
+            check("and neither is refused by a host that did not ask",
+                    creative.objections(lax, 0).isEmpty() ? 1 : 0, 1);
         }
 
         section("U1: a welcome grant must be the amount this market publishes");

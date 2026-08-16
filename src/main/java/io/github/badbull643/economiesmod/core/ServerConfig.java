@@ -77,6 +77,39 @@ public class ServerConfig {
     /** How far back the deposit cap counts. */
     public int depositWindowMinutes = 60;
 
+    // ─────────── world attestation ───────────
+    //
+    // Everything below acts on what a client says about its own world, which it can
+    // lie about freely. See WorldAttestation: the value is in catching the casual case
+    // and in making two claims contradict each other, never in believing either one.
+    // All off by default, because a policy this soft should be a deliberate choice.
+
+    /** Turn away clients that decline to describe their world, or are too old to. */
+    public boolean requireAttestation = false;
+
+    /** Turn away worlds reporting creative mode. */
+    public boolean refuseCreativeWorlds = false;
+
+    /**
+     * Turn away worlds reporting commands enabled.
+     *
+     * Blunter than it looks: plenty of honest players enable cheats to set the time or
+     * fix a mistake, so this refuses a large number of people who have not fabricated
+     * anything. Off by default for that reason, and worth pairing with a message the
+     * operator can explain.
+     */
+    public boolean refuseCheatWorlds = false;
+
+    /**
+     * Items per claimed hour of play that this server finds plausible. Zero disables.
+     *
+     * The contradiction check, and the only one here that costs a liar anything. It
+     * cannot tell whether a world is really as old as it says — but it makes a young
+     * world a small allowance and an old one a specific, recorded claim. See
+     * WorldAttestation.
+     */
+    public long maxDepositUnitsPerPlayHour = 0;
+
     // ─────────── admission ───────────
 
     /**

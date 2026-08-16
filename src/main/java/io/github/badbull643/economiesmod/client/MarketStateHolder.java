@@ -583,6 +583,9 @@ public class MarketStateHolder {
                     peerCache, myHostPort);
             c.setOnRejected(onRejected);
             c.setOnApplied(APPLIED);
+            // Describes the world we are actually in. Honest, which is why it catches
+            // only people who are also being honest — see WorldAttestation.
+            c.setAttestation(WorldFacts.of(MinecraftClient.getInstance().getServer()));
             c.connect(host, port);
 
             client = c;

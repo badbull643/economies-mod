@@ -40,6 +40,16 @@ public class HostServer {
     private final DepositLimiter depositLimiter;
 
     /**
+     * What each identity said about its world when it connected.
+     *
+     * Kept only for as long as this host runs, and only to be contradicted: the value
+     * is in comparing a claim against what the identity subsequently did, which is the
+     * one thing here the host observed rather than was told. Never written to the log —
+     * a claim nobody can verify has no business in a history everybody replays.
+     */
+    private final Map<UUID, WorldAttestation> attestations = new ConcurrentHashMap<>();
+
+    /**
      * Items this event would add to the depositor's balance, or 0 if it is not a
      * deposit.
      *
@@ -241,8 +251,13 @@ public class HostServer {
         }
 
         this.config = config;
+        // Counting is switched on by either feature. The cap needs a total to compare
+        // against a ceiling; the attestation check needs one to compare against claimed
+        // play time. With neither configured the window is zero and nothing is kept.
+        boolean needsCounting = config.maxDepositUnitsPerWindow > 0
+                || config.maxDepositUnitsPerPlayHour > 0;
         this.depositLimiter = new DepositLimiter(config.maxDepositUnitsPerWindow,
-                config.depositWindowMinutes * 60_000L);
+                needsCounting ? config.depositWindowMinutes * 60_000L : 0L);
         this.welcomeGrantAmount = config.welcomeGrant;
         this.port = config.port;
         this.hostName = config.hostName;
@@ -579,6 +594,34 @@ public class HostServer {
                     + hello.userId + ") — " + notWelcome);
             sendError(channel, Refusal.NOT_ADMITTED, notWelcome);
             return false;
+        }
+
+        if (config.requireAttestation && hello.attestation == null) {
+            System.out.println("[host] refused " + hello.displayName
+                    + " — described no world");
+            sendError(channel, Refusal.NOT_ADMITTED, "this server asks connecting"
+                    + " players to describe their world, and yours did not");
+            return false;
+        }
+
+        if (hello.attestation != null) {
+            // Nothing has been deposited yet this session, so only the claims that stand
+            // on their own can be judged here. The one worth having — deposits against
+            // claimed play time — needs something to compare against and is checked as
+            // deposits arrive.
+            List<String> objections = hello.attestation.objections(config, 0);
+            if (!objections.isEmpty()) {
+                System.out.println("[host] refused " + hello.displayName + " — "
+                        + String.join("; ", objections));
+                sendError(channel, Refusal.NOT_ADMITTED, String.join("; ", objections));
+                return false;
+            }
+            attestations.put(claimedUser, hello.attestation);
+            System.out.println("[host] " + hello.displayName + " reports "
+                    + String.format("%.1f", hello.attestation.claimedHours())
+                    + "h in a " + hello.attestation.gameMode + " world"
+                    + (hello.attestation.commandsAllowed ? " with commands enabled" : "")
+                    + " (" + hello.attestation.worldIdHash + ")");
         }
 
         // Admission is decided by the log, not by known-keys.json. Two TOFU registries
@@ -1068,6 +1111,25 @@ public class HostServer {
                     + " per " + config.depositWindowMinutes + " minutes, and you have "
                     + remaining + " left");
             return;
+        }
+
+        // The contradiction check, at the only moment both halves of it exist: a claim
+        // made at handshake, and a quantity this host has now actually been handed.
+        // Neither is checkable alone; together they can be impossible.
+        if (depositUnits > 0) {
+            WorldAttestation claim = attestations.get(event.userId);
+            if (claim != null) {
+                long already = depositLimiter.usedBy(event.userId,
+                        System.currentTimeMillis());
+                List<String> objections = claim.objections(config, already + depositUnits);
+                if (!objections.isEmpty()) {
+                    String why = String.join("; ", objections);
+                    System.out.println("[host] implausible deposit from " + event.userId
+                            + ": " + why);
+                    reject(p.from, msg.clientEventId, why);
+                    return;
+                }
+            }
         }
 
         // Valid — now it becomes history. The signature is stored alongside the event
