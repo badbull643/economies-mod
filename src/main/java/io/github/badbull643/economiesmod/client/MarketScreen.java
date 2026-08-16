@@ -123,8 +123,18 @@ public class MarketScreen extends Screen {
     // hung out of the panels drawn around it — the panel and the thing inside it were
     // measured from different origins. These are the single source for both.
 
-    private int frameTop() { return rowY - 6; }
-    private int frameH() { return contentH - 18; }
+    /**
+     * Top of the panels, pushed down by the alert band when there is one.
+     *
+     * The tab row measures from here too, so tabs and panels move together and the
+     * alerts land in the strip the tabs vacate — space already known to be clear of
+     * the header, which is what makes this safe on a short window. Putting the band
+     * anywhere else above the tabs would have had about 10px of clearance at the
+     * minimum layout and overlapped the credit lines.
+     */
+    private int frameTop() { return rowY - 6 + alertBandH(); }
+    /** Shrinks by the same band, so a panel never runs off the bottom of the box. */
+    private int frameH() { return contentH - 18 - alertBandH(); }
     /**
      * First usable row inside a panel, below the alert band.
      *
@@ -134,7 +144,7 @@ public class MarketScreen extends Screen {
      * unreadable rather than one. They get reserved space instead, and because every
      * panel's contents already measure from here, they all move down together.
      */
-    private int panelTop() { return frameTop() + 5 + alertBandH(); }
+    private int panelTop() { return frameTop() + 5; }
     /** One past the last usable row inside a panel. */
     private int panelBottom() { return frameTop() + frameH() - 5; }
 
@@ -894,8 +904,8 @@ public class MarketScreen extends Screen {
         // Same frame line the other screens use, so switching between them does not
         // shift everything by a few pixels — via the helpers rather than repeating
         // their arithmetic, which is what left Home's titles under the alert band.
-        int top = frameTop() + alertBandH();
-        int height = frameH() - alertBandH();
+        int top = frameTop();
+        int height = frameH();
         int total = contentW;
 
         int sideW = (total - gap * 2) / 3;
@@ -1407,6 +1417,23 @@ public class MarketScreen extends Screen {
      */
     private static final int REPLACE_ROW_H = 20;
 
+    /**
+     * The third column when there is one, the left panel when there is not.
+     *
+     * Every destination but Trading leaves that column empty, and the list is at its
+     * most relevant right after a migration — which lands you on Market, where it was
+     * covering the guidance explaining what just happened. Trading is the one screen
+     * whose third column is occupied, and there the inventory is the thing you would
+     * be reading while re-placing, so it keeps it and the list falls back to the left.
+     */
+    private boolean replaceInSideColumn() {
+        return invX >= 0 && activeScreen != SCREEN_TRADING;
+    }
+
+    private int replaceBoxX() { return replaceInSideColumn() ? invX : listX; }
+
+    private int replaceBoxW() { return replaceInSideColumn() ? invW : listW; }
+
     private int replaceBoxTop() { return panelTop(); }
 
     private int replaceBoxH() {
@@ -1424,13 +1451,18 @@ public class MarketScreen extends Screen {
         List<MarketStateHolder.OldOrder> old = MarketStateHolder.pendingReplace();
         if (old.isEmpty()) return;
 
-        vanillaPanel(matrices, listX, replaceBoxTop(), listW, replaceBoxH());
+        int boxX = replaceBoxX();
+        int boxW = replaceBoxW();
+        vanillaPanel(matrices, boxX, replaceBoxTop(), boxW, replaceBoxH());
 
-        int textX = listX + 26;
-        int textW = listW - 32;
+        int textX = boxX + 26;
+        int textW = boxW - 32;
 
-        label(matrices, "Old orders — click to re-place, header to dismiss",
-                listX + 6, replaceBoxTop() + 8, 0xFFDD66);
+        // The title row doubles as dismiss, so it carries a close mark rather than
+        // spelling that out — the column is too narrow for the sentence it replaced.
+        label(matrices, trim("Old orders — click to re-place", boxW - 24),
+                boxX + 6, replaceBoxTop() + 8, 0xFFDD66);
+        label(matrices, "x", boxX + boxW - 12, replaceBoxTop() + 8, 0xFFDD66);
 
         MarketState s = MarketStateHolder.get();
         List<MarketOldRow> rows = replaceRows();
@@ -1440,7 +1472,7 @@ public class MarketScreen extends Screen {
             if (y + REPLACE_ROW_H > panelBottom()) break;
 
             drawIcon(matrices, new ItemStack(MinecraftIds.idToItem(o.itemId)),
-                    listX + 6, y, "");
+                    boxX + 6, y, "");
 
             label(matrices, trim((o.isBid ? "Buy " : "Sell ") + o.volume + " "
                     + shortItem(o.itemId) + " @ " + o.price, textW),
@@ -1569,8 +1601,10 @@ public class MarketScreen extends Screen {
                     + "  (" + h.reply.lastSeq + " events, "
                     + h.reply.clientCount + " online)";
 
+            // Trimmed to the panel. A host name, a market name and a badge is more text
+            // than the column holds, and it ran off the edge into the controls beside it.
             int colour = isSelf ? 0xAAAAAA : (joinable ? 0x88CCFF : 0x996666);
-            label(matrices, line, x, y, colour);
+            label(matrices, trim(line, listW - 12), x, y, colour);
             y += DISCOVERY_ROW_HEIGHT;
         }
     }
@@ -1619,7 +1653,8 @@ public class MarketScreen extends Screen {
         if (button == 0 && !MarketStateHolder.pendingReplace().isEmpty()) {
             int boxTop = replaceBoxTop();
             int boxBottom = boxTop + replaceBoxH();
-            boolean inBox = mouseX >= listX && mouseX < listX + listW
+            boolean inBox = mouseX >= replaceBoxX()
+                    && mouseX < replaceBoxX() + replaceBoxW()
                     && mouseY >= boxTop && mouseY < boxBottom;
 
             // Header doubles as dismiss — the list is a convenience, not an obligation.
@@ -1992,14 +2027,15 @@ public class MarketScreen extends Screen {
     private static final int ALERT_ROW_H = 12;
 
     /**
-     * A band just inside the top of the panel, below the tab row.
+     * A band above the tab row, spanning the whole content box.
      *
-     * The header is full and the tab row took the space above the panel, so these live
-     * inside it — but in space reserved for them via panelTop rather than painted over
-     * the content that was already there. Measured from frameTop so the band follows
-     * the box when the window resizes.
+     * Sits exactly where the tabs would be with no alerts; frameTop pushes the tabs and
+     * panels down to make room. That keeps it clear of the header at every window size,
+     * which is what stopped it going here the first time, and it gets the full box
+     * width rather than one column — the messages are sentences, and the left panel was
+     * too narrow to hold one without the text running across the trade controls.
      */
-    private int alertTop() { return frameTop() + 8; }
+    private int alertTop() { return rowY - 6 - TAB_H - 2; }
 
     /**
      * Height reserved at the top of every panel for the alerts, or 0 when there are
@@ -2077,7 +2113,7 @@ public class MarketScreen extends Screen {
     private String alertText(Alert a) {
         if (!alertLeadsSomewhere(a)) return a.text;
         String full = a.text + "  — open " + SCREEN_NAMES[a.target];
-        return this.textRenderer.getWidth(full) + 10 <= listW - 8 ? full : a.text;
+        return this.textRenderer.getWidth(full) + 10 <= contentW - 8 ? full : a.text;
     }
 
     /**
@@ -2087,17 +2123,9 @@ public class MarketScreen extends Screen {
      * once disagreed about whether a start offset already included a row height and
      * made an entire list unclickable.
      */
-    /**
-     * Bounded by the left panel it sits in.
-     *
-     * The width used to be the full measured text, which is only the same thing while
-     * the message is short. "2 events behind — connect to catch up — open Network" is
-     * not: it ran out of the panel and across the middle column, where it collided
-     * with the trade controls. Those are widgets at a fixed y from init() and cannot
-     * move aside for it, so the strip is what gives way.
-     */
+    /** Bounded by the content box, which is the whole width available up here. */
     private int[] alertRect(int index, String text) {
-        int max = listW - 8;
+        int max = contentW - 8;
         return new int[]{listX + 4, alertTop() + index * ALERT_ROW_H,
                 Math.min(this.textRenderer.getWidth(text) + 10, max), ALERT_ROW_H};
     }
