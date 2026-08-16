@@ -72,7 +72,18 @@ public class DepositLimiter {
         this.windowMillis = windowMillis;
     }
 
+    /** Whether a ceiling is being enforced. */
     public boolean enabled() { return maxUnits > 0 && windowMillis > 0; }
+
+    /**
+     * Whether deposits are being counted at all, which is not the same question.
+     *
+     * The attestation check needs a running total whether or not a ceiling is set — it
+     * compares what an identity has handed over against the play time it claims, and
+     * with counting tied to the cap it would have seen each deposit alone and never a
+     * sum. Somebody could then hand over a hundred units as often as they liked.
+     */
+    public boolean tracking() { return windowMillis > 0; }
 
     public long maxUnits() { return maxUnits; }
 
@@ -91,14 +102,14 @@ public class DepositLimiter {
 
     /** Notes a deposit that was actually written. */
     public synchronized void record(UUID userId, long units, long nowMillis) {
-        if (!enabled() || userId == null || units <= 0) return;
+        if (!tracking() || userId == null || units <= 0) return;
         recent.computeIfAbsent(userId, k -> new ArrayDeque<>())
                 .addLast(new Entry(nowMillis, units));
     }
 
     /** Units this identity has deposited inside the window. */
     public synchronized long usedBy(UUID userId, long nowMillis) {
-        if (!enabled() || userId == null) return 0;
+        if (!tracking() || userId == null) return 0;
 
         Deque<Entry> entries = recent.get(userId);
         if (entries == null) return 0;
