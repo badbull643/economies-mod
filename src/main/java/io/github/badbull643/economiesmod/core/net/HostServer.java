@@ -1428,6 +1428,15 @@ public class HostServer {
             if ("--config".equals(args[i])) configFile = Paths.get(args[i + 1]);
         }
 
+        // Said out loud, because a server quietly running on defaults is how an operator
+        // ends up enforcing a policy they did not choose. Absent is a legitimate state —
+        // a first run has no file — but it is not one to discover from the outside when
+        // somebody who should have been refused walks in.
+        if (!Files.exists(configFile)) {
+            System.out.println("[host] no " + configFile + " — starting on defaults:"
+                    + " open admission, no deposit cap, no world checks");
+        }
+
         ServerConfig cfg;
         try {
             cfg = ServerConfig.load(configFile);
