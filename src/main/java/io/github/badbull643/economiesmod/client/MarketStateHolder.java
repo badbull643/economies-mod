@@ -1057,6 +1057,57 @@ public class MarketStateHolder {
         }
     }
 
+    /**
+     * The policy this world hosts under.
+     *
+     * Friend-group defaults unless the world holds a host-config.json, which nothing
+     * creates and everything ignores when absent — so the ordinary case is exactly what
+     * it was, and somebody who wants admission rules, deposit caps or world checks on a
+     * market they host from their own game can have them without running a separate
+     * server.
+     *
+     * Deliberately not server-config.json. That file belongs to the dedicated launcher
+     * and lives beside it; a market hosted from a world keeps its settings with that
+     * world, so copying a save takes its rules along.
+     *
+     * Port, name and identity are facts about this session rather than settings, so they
+     * are imposed on whatever the file said.
+     */
+    private static ServerConfig hostPolicyFor(Path worldDir, int port, String playerName,
+                                              UUID userId) {
+        Path file = worldDir.resolve("economiesmod").resolve("host-config.json");
+
+        ServerConfig cfg;
+        try {
+            cfg = ServerConfig.load(file);
+            if (Files.exists(file)) {
+                System.out.println("[economiesmod] hosting under the rules in " + file);
+            }
+        } catch (IOException e) {
+            // Unreadable rather than absent. Refusing to host would strand somebody
+            // over a file they may not know exists, so this says so and carries on
+            // with the defaults every other world uses.
+            System.err.println("[economiesmod] could not read " + file + " (" + e
+                    + ") — hosting with the usual friend-group settings");
+            cfg = ServerConfig.friendGroup(port);
+        }
+
+        cfg.port = port;
+        cfg.hostName = playerName;
+        cfg.hostUserId = userId.toString();
+        cfg.dedicated = false;
+
+        String bad = cfg.problem();
+        if (bad != null) {
+            System.err.println("[economiesmod] " + file + " is not usable (" + bad
+                    + ") — hosting with the usual friend-group settings");
+            cfg = ServerConfig.friendGroup(port);
+            cfg.hostName = playerName;
+            cfg.hostUserId = userId.toString();
+        }
+        return cfg;
+    }
+
     public static void startHosting(Path worldDir, int port, UUID userId, String playerName) {
         currentWorldDir = worldDir;
         myHostPort = port;
@@ -1065,8 +1116,8 @@ public class MarketStateHolder {
         localState = null;
 
         try {
-            hostServer = new HostServer(port, logPathFor(worldDir), playerName,
-                    userId.toString(), keys, peerCache);
+            hostServer = new HostServer(hostPolicyFor(worldDir, port, playerName, userId),
+                    logPathFor(worldDir), keys, peerCache);
             hostThread = new Thread(() -> {
                 try {
                     hostServer.start();
