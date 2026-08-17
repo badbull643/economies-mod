@@ -567,6 +567,21 @@ public class HostServer {
                         String why = String.join("; ", objections);
                         System.out.println("[host] " + hello.displayName
                                 + " no longer passes: " + why);
+
+                        // Banned only here, never at the door. Arriving with cheats is
+                        // refused already and needs no permanent record; being admitted
+                        // under one description and then changing the thing that was
+                        // checked is the only case that looks like a decision.
+                        if (config.banOnWorldChange && config.ban(liveUser.toString())) {
+                            System.out.println("[host] banned " + liveUser
+                                    + " — remove them from deny in the config to undo it");
+                            sendError(channel, Refusal.NOT_ADMITTED, why
+                                    + " — this server bans identities that change their"
+                                    + " world after connecting, so speak to whoever runs"
+                                    + " it");
+                            break;
+                        }
+
                         sendError(channel, Refusal.NOT_ADMITTED, why);
                         break;
                     }
