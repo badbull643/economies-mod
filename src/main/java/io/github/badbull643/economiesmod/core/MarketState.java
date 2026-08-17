@@ -118,6 +118,30 @@ public class MarketState {
      */
     public static final long MAX_WELCOME_GRANT = 1_000_000L;
 
+    /**
+     * Flat credits charged for placing an order. Zero, and off, until policy says
+     * otherwise.
+     *
+     * Charged on both sides. A sell costs credits even though it offers goods, which is
+     * the one genuinely awkward consequence: somebody holding items and no money cannot
+     * list at all. That is the real cost of pricing order placement rather than order
+     * value, and the reason this wants to stay small next to the welcome grant.
+     */
+    private volatile long listingFee = 0;
+
+    public long listingFee() { return listingFee; }
+
+    void setListingFee(long fee) { this.listingFee = fee; }
+
+    /**
+     * The most a market may charge to list.
+     *
+     * Low on purpose. This prices the number of orders, and a fee big enough to feel
+     * like a tax is big enough to stop people repricing — which costs a market more
+     * than the spam it was reached for.
+     */
+    public static final long MAX_LISTING_FEE = 1_000L;
+
     /** Basis points are per ten thousand. Named so the 10000 is never a loose literal. */
     public static final int BPS_DIVISOR = 10_000;
 
@@ -248,6 +272,12 @@ public class MarketState {
         SubmitResult check = canSubmit(order);
         if (!check.accepted) return check;
 
+        // Charged on placement, kept on cancellation, and burned like the trading fee.
+        // Refunding it would deter nothing, which is the only thing it is for.
+        if (listingFee > 0) {
+            wallets.adjust(order.userID(), -listingFee);
+        }
+
         // Reserve
         if (!order.isBid()) {
             itemBalances.adjust(order.userID(), order.itemID(), -order.volume());
@@ -304,15 +334,27 @@ public class MarketState {
             if (available < order.volume()) {
                 return SubmitResult.reject("insufficient item balance");
             }
+            // A sell offers goods but still pays to be listed, so it needs credits it
+            // is not otherwise spending. Checked here rather than discovered during
+            // settlement, where the order would already have been accepted.
+            if (listingFee > 0 && wallets.getBalance(order.userID()) < listingFee) {
+                return SubmitResult.reject("listing costs " + listingFee
+                        + " credits and you have "
+                        + wallets.getBalance(order.userID()));
+            }
         } else {
             long maxCost;
             try {
-                maxCost = Math.multiplyExact(order.volume(), order.value());
+                maxCost = Math.addExact(
+                        Math.multiplyExact(order.volume(), order.value()), listingFee);
             } catch (ArithmeticException e) {
                 return SubmitResult.reject("order value too large");
             }
             if (wallets.getBalance(order.userID()) < maxCost) {
-                return SubmitResult.reject("insufficient credits");
+                return SubmitResult.reject(listingFee > 0
+                        ? "insufficient credits — this costs " + maxCost
+                                + " including the " + listingFee + " listing fee"
+                        : "insufficient credits");
             }
         }
 
