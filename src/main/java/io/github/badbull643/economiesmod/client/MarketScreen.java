@@ -2163,6 +2163,10 @@ public class MarketScreen extends Screen {
         e.timestamp = System.currentTimeMillis();
         e.clientEventId = clientEventId;
 
+        // Read before submitting. In LOCAL mode the event applies synchronously, so
+        // asking afterwards would describe a book this order has already changed.
+        String outlook = outlookFor(req.itemId, req.price, req.qty, false);
+
         MarketStateHolder.Submission s = MarketStateHolder.submit(e);
         // A submission that fails outright never becomes an event, so nothing will ever
         // clear this entry — settle it here rather than leaving a false refund waiting.
@@ -2170,7 +2174,8 @@ public class MarketScreen extends Screen {
             journal.clearDeposit(clientEventId);
             InventoryBridge.give(mc.player, req.item, (int) req.qty);
         }
-        report(s, "Listed " + req.qty + " at " + req.price, "Sell sent...");
+        report(s, "Listed " + req.qty + " at " + req.price + outlook,
+                "Sell sent" + outlook);
     }
 
     private void onBuy() {
@@ -2186,8 +2191,10 @@ public class MarketScreen extends Screen {
         order.isBid = true;
         order.timestamp = System.currentTimeMillis();
 
+        String outlook = outlookFor(req.itemId, req.price, req.qty, true);
         report(MarketStateHolder.submit(order),
-                "Bid placed for " + req.qty + " at " + req.price, "Buy sent...");
+                "Bid placed for " + req.qty + " at " + req.price + outlook,
+                "Buy sent" + outlook);
     }
 
     private void onWithdraw() {
@@ -2268,6 +2275,45 @@ public class MarketScreen extends Screen {
         } else {
             status = "Rejected: " + s.reason;
         }
+    }
+
+    /**
+     * What an order is about to do, said before it is sent.
+     *
+     * Connected and hosting both answer "pending" and never come back, so the status
+     * line stops at "Sell sent..." whatever happens next. That reads identically for an
+     * order that traded and one that will sit in the book for a week, which is how
+     * somebody ends up watching their credits and wondering whether the market is
+     * broken.
+     *
+     * A prediction, not a promise: the host sequences, and the book here may be a moment
+     * stale. Worded as an expectation for that reason. It is drawn from the same replica
+     * the order book on screen is drawn from, so it can never contradict what the player
+     * is looking at.
+     */
+    private String outlookFor(String itemId, long price, long qty, boolean isBid) {
+        MarketState market = MarketStateHolder.get();
+        if (market == null) return "";
+
+        OrderBook book = market.peekBook(itemId);
+        if (book == null) return " — nothing on the other side yet, so it will wait";
+
+        List<Order> other = isBid ? book.restingAsks() : book.restingBids();
+        if (other.isEmpty()) {
+            return isBid
+                    ? " — nobody is selling yet, so it will wait for one"
+                    : " — nobody is buying yet, so it will wait for one";
+        }
+
+        long best = other.get(0).value();
+        boolean crosses = isBid ? best <= price : best >= price;
+        if (crosses) return " — should trade now";
+
+        return isBid
+                ? " — best ask is " + best + ", so it waits until someone sells at "
+                        + price + " or less"
+                : " — best bid is " + best + ", so it waits until someone buys at "
+                        + price + " or more";
     }
 
     // ─────────── rendering ───────────
