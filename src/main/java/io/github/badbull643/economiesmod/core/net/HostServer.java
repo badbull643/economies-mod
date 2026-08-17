@@ -547,7 +547,20 @@ public class HostServer {
                     WorldAttestation now = ((Message.Attest) msg).attestation;
                     if (now == null) continue;
 
-                    attestations.put(liveUser, now);
+                    WorldAttestation was = attestations.put(liveUser, now);
+
+                    // Logged whether or not policy acts on it. An operator who has not
+                    // switched on refuseCheatWorlds still wants to know that somebody
+                    // turned cheats on mid-session — that is the whole anomaly signal,
+                    // and silence would leave "nothing happened" and "the policy is off"
+                    // looking identical from the console.
+                    boolean newlyCheating = now.cheatsAvailable()
+                            && (was == null || !was.cheatsAvailable());
+                    if (newlyCheating) {
+                        System.out.println("[host] " + hello.displayName
+                                + " enabled commands in their world"
+                                + (now.cheatsEnabledLater() ? " after creating it" : ""));
+                    }
 
                     List<String> objections = now.objections(config, 0);
                     if (!objections.isEmpty()) {
