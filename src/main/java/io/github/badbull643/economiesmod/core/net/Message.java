@@ -154,6 +154,22 @@ public abstract class Message {
         public CatchUpResult() { type = "CatchUpResult"; }
     }
 
+    /**
+     * "What I said about my world has changed."
+     *
+     * Sent after the handshake, because the handshake is a photograph and the thing it
+     * describes can change underneath it. Connecting from a clean world and then opening
+     * it to LAN with cheats enabled would otherwise leave the host holding a description
+     * that stopped being true a minute after it was given.
+     *
+     * Unsigned, like the attestation on Hello and for the same reason: signing would
+     * prove who said it, which nobody doubts, and imply a guarantee that does not exist.
+     */
+    public static class Attest extends Message {
+        public WorldAttestation attestation;
+        public Attest() { type = "Attest"; }
+    }
+
     /** Lightweight liveness/status probe. No handshake, no state. */
     public static class Query extends Message {
         public String protocolVersion;

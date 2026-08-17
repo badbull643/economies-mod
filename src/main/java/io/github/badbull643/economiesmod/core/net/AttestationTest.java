@@ -51,6 +51,15 @@ public class AttestationTest {
     private static Path dir;
     private static PlayerKeys hostKeys;
 
+    /**
+     * One key for the joiner across the whole run.
+     *
+     * A fresh keypair per connection meant the second time this identity appeared the
+     * market already held a different key for it, and the handshake refused it as a
+     * moved-computer case long before any attestation was read.
+     */
+    private static PlayerKeys joinerKeys;
+
     public static void main(String[] args) throws Exception {
         dir = Paths.get("build", "test-scratch");
         Files.createDirectories(dir);
@@ -60,12 +69,14 @@ public class AttestationTest {
         }
 
         hostKeys = PlayerKeys.generate();
+        joinerKeys = PlayerKeys.generate();
         Path hostLog = dir.resolve("att-host.jsonl");
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST, "attestation test market", hostKeys);
 
         creativeWorldRefusedAtHandshake(hostLog);
         contradictionRefusedAtDeposit(hostLog);
+        cheatsEnabledAfterConnectingAreCaught(hostLog);
 
         System.out.println();
         if (failures == 0) {
@@ -163,6 +174,53 @@ public class AttestationTest {
         }
     }
 
+    /**
+     * A3 — the handshake is a photograph, and the world can change after it.
+     *
+     * Connect from a world with no cheats, then open it to LAN with cheats enabled. The
+     * description the host is holding stopped being true, and checking only at the
+     * handshake would leave that as a more comfortable way in than the one the
+     * attestation was built to close.
+     */
+    private static void cheatsEnabledAfterConnectingAreCaught(Path hostLog)
+            throws Exception {
+        System.out.println("  [A3: cheats switched on after connecting are caught]");
+
+        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        cfg.hostUserId = HOST.toString();
+        cfg.refuseCheatWorlds = true;
+
+        HostServer host = serve(cfg, hostLog);
+        try {
+            WorldAttestation clean = new WorldAttestation();
+            clean.gameMode = "survival";
+            clean.worldAgeTicks = WorldAttestation.TICKS_PER_HOUR * 5;
+
+            MarketClient client = client();
+            client.setAttestation(clean);
+            client.connect("127.0.0.1", cfg.port);
+            check("a clean world gets in", client.isConnected() ? 1 : 0, 1);
+
+            // Exactly what Open to LAN does: the saved settings still say no cheats,
+            // the running server says otherwise.
+            WorldAttestation opened = new WorldAttestation();
+            opened.gameMode = "survival";
+            opened.worldAgeTicks = WorldAttestation.TICKS_PER_HOUR * 5;
+            opened.commandsAllowed = false;
+            opened.cheatsLive = true;
+            client.reattest(opened);
+
+            long deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline && client.isConnected()) {
+                Thread.sleep(25);
+            }
+            check("and is dropped once cheats appear",
+                    client.isConnected() ? 1 : 0, 0);
+        } finally {
+            host.stop();
+        }
+    }
+
     // ─────────── helpers ───────────
 
     private static HostServer serve(ServerConfig cfg, Path hostLog) throws Exception {
@@ -182,7 +240,7 @@ public class AttestationTest {
     private static MarketClient client() throws Exception {
         Path p = dir.resolve("att-client.jsonl");
         Files.deleteIfExists(p);
-        return new MarketClient(JOINER, "Joiner", PlayerKeys.generate(),
+        return new MarketClient(JOINER, "Joiner", joinerKeys,
                 new EventLog(p), true,
                 new PeerCache(dir.resolve("att-client-peers.json")), 0);
     }

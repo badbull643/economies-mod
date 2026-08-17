@@ -89,6 +89,7 @@ public class MessageChannel implements AutoCloseable {
             case "Query":       return Message.Query.class;
             case "MigrateRequest": return Message.MigrateRequest.class;
             case "MigrateResult":  return Message.MigrateResult.class;
+            case "Attest":         return Message.Attest.class;
             case "CatchUp":        return Message.CatchUp.class;
             case "CatchUpResult":  return Message.CatchUpResult.class;
             default: throw new IllegalStateException("Unknown message type: " + type);

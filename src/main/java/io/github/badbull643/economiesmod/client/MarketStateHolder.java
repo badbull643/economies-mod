@@ -592,7 +592,14 @@ public class MarketStateHolder {
             c.setOnApplied(APPLIED);
             // Describes the world we are actually in. Honest, which is why it catches
             // only people who are also being honest — see WorldAttestation.
-            c.setAttestation(WorldFacts.of(MinecraftClient.getInstance().getServer()));
+            WorldAttestation described = WorldFacts.of(
+                    MinecraftClient.getInstance().getServer());
+            c.setAttestation(described);
+            // Remembered as the baseline, so the first poll after connecting does not
+            // re-send what the handshake has just said.
+            lastToldCheats = described != null && described.cheatsAvailable();
+            lastToldGameMode = described == null || described.gameMode == null
+                    ? "" : described.gameMode;
             c.connect(host, port);
 
             client = c;
@@ -771,11 +778,51 @@ public class MarketStateHolder {
         }
     }
 
+    /**
+     * What we last told a host about this world, so a change can be noticed.
+     *
+     * Only the parts a rule can turn on: the world's age is always changing and saying
+     * so every tick would be noise.
+     */
+    private static boolean lastToldCheats;
+    private static String lastToldGameMode;
+
+    /**
+     * Re-describes this world to the host when it stops matching what was said.
+     *
+     * The handshake happens once, and Open to LAN with cheats enabled happens whenever
+     * somebody feels like it — including immediately after connecting from a world that
+     * was clean at the time. Without this the host would be holding a description that
+     * stopped being true, which is a more comfortable hole than the one it was built to
+     * close.
+     *
+     * Cheap enough to run every frame: it reads two fields off the running server and
+     * only sends when one of them differs.
+     */
+    private static void reattestIfChanged() {
+        if (client == null || !client.isConnected()) return;
+
+        WorldAttestation now = WorldFacts.of(MinecraftClient.getInstance().getServer());
+        if (now == null) return;
+
+        boolean cheats = now.cheatsAvailable();
+        String gameMode = now.gameMode == null ? "" : now.gameMode;
+
+        if (cheats == lastToldCheats && gameMode.equals(lastToldGameMode)) return;
+
+        lastToldCheats = cheats;
+        lastToldGameMode = gameMode;
+        client.reattest(now);
+        System.out.println("[economiesmod] world changed — telling the host ("
+                + gameMode + (cheats ? ", commands enabled" : "") + ")");
+    }
+
     public static void pollConnection() {
         if (mode == Mode.LOCAL) return;
         if (client == null) return;
 
         if (client.isConnected()) {
+            reattestIfChanged();
             // A gapped client is still connected — it is receiving broadcasts and
             // discarding every one of them — so this has to be checked before the
             // healthy-connection early return, not after it.
