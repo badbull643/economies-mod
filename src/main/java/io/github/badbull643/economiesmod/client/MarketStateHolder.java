@@ -6,6 +6,7 @@ import io.github.badbull643.economiesmod.core.net.MarketClient;
 import io.github.badbull643.economiesmod.core.net.Message;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.server.MinecraftServer;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -799,16 +800,21 @@ public class MarketStateHolder {
      * Cheap enough to run every frame: it reads two fields off the running server and
      * only sends when one of them differs.
      */
-    private static void reattestIfChanged() {
+    public static void reattestIfChanged() {
         if (client == null || !client.isConnected()) return;
 
-        WorldAttestation now = WorldFacts.of(MinecraftClient.getInstance().getServer());
-        if (now == null) return;
+        // The cheap read first. This runs every client tick, and building a full
+        // attestation hashes the world seed — not something to do sixty times a second
+        // to answer a question that is two field reads.
+        MinecraftServer server = MinecraftClient.getInstance().getServer();
+        if (server == null) return;
 
-        boolean cheats = now.cheatsAvailable();
-        String gameMode = now.gameMode == null ? "" : now.gameMode;
-
+        boolean cheats = WorldFacts.cheatsAvailable(server);
+        String gameMode = WorldFacts.gameModeOf(server);
         if (cheats == lastToldCheats && gameMode.equals(lastToldGameMode)) return;
+
+        WorldAttestation now = WorldFacts.of(server);
+        if (now == null) return;
 
         lastToldCheats = cheats;
         lastToldGameMode = gameMode;
@@ -822,7 +828,6 @@ public class MarketStateHolder {
         if (client == null) return;
 
         if (client.isConnected()) {
-            reattestIfChanged();
             // A gapped client is still connected — it is receiving broadcasts and
             // discarding every one of them — so this has to be checked before the
             // healthy-connection early return, not after it.

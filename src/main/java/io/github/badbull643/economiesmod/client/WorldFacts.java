@@ -21,6 +21,39 @@ public final class WorldFacts {
     private WorldFacts() {}
 
     /**
+     * Whether commands are available right now, by either route, cheaply.
+     *
+     * Separate from {@link #of} so it can be asked every tick. of() hashes the world
+     * seed, which is not something to do sixty times a second to answer a question that
+     * is two field reads.
+     */
+    public static boolean cheatsAvailable(MinecraftServer server) {
+        if (server == null) return false;
+        try {
+            if (server.getPlayerManager() != null
+                    && server.getPlayerManager().areCheatsAllowed()) {
+                return true;
+            }
+            SaveProperties props = server.getSaveProperties();
+            return props != null && props.areCommandsAllowed();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** The world's game mode right now, or "" when there is no world. Cheap. */
+    public static String gameModeOf(MinecraftServer server) {
+        if (server == null) return "";
+        try {
+            SaveProperties props = server.getSaveProperties();
+            if (props == null || props.getGameMode() == null) return "";
+            return props.getGameMode().getName();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
      * Describes the world this player is in, or null when there is not one.
      *
      * Null is a real answer, not a failure: a client between worlds has nothing to
