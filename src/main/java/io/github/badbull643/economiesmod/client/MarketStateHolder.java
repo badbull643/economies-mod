@@ -386,6 +386,39 @@ public class MarketStateHolder {
         if (client != null) client.setOnRejected(handler);
     }
 
+    /**
+     * Deposits the host turned down, waiting to be handed back.
+     *
+     * A refusal arrives on the reader thread and giving items back touches the player's
+     * inventory, which belongs to the game thread — so the id is parked here and the
+     * tick does the work. Concurrent because those are two different threads.
+     */
+    private static final java.util.Queue<String> refusedDeposits =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    static void noteRefusedProposal(String clientEventId) {
+        if (clientEventId != null) refusedDeposits.add(clientEventId);
+    }
+
+    /** The next refused deposit to hand back, or null. Drains one per call. */
+    public static PendingOps.Op nextRefundDue() {
+        String id;
+        while ((id = refusedDeposits.poll()) != null) {
+            if (pendingOps == null) continue;
+            for (PendingOps.Op op : pendingOps.all()) {
+                if (op.isDeposit() && id.equals(op.clientEventId)) {
+                    // Cleared before the items are handed over rather than after. The
+                    // journal exists so a crash mid-refund is recoverable, and an entry
+                    // that survives a completed refund would pay it out twice on the
+                    // next startup — which is the one direction this must never fail in.
+                    pendingOps.clearDeposit(id);
+                    return op;
+                }
+            }
+        }
+        return null;
+    }
+
     public static Mode mode() { return mode; }
 
     public static MarketState get() {
@@ -591,6 +624,7 @@ public class MarketStateHolder {
             MarketClient c = new MarketClient(userId, displayName, keys, log, persist,
                     peerCache, myHostPort);
             c.setOnRejected(onRejected);
+            c.setOnProposalRefused(MarketStateHolder::noteRefusedProposal);
             c.setOnApplied(APPLIED);
             // Describes the world we are actually in. Honest, which is why it catches
             // only people who are also being honest — see WorldAttestation.
