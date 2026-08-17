@@ -262,6 +262,10 @@ public class MarketScreen extends Screen {
 
         MarketStateHolder.setOnRejected(reason -> status = "Rejected: " + reason);
 
+        // Widgets are about to be rebuilt at their unshifted positions, so whatever the
+        // band was before this counts for nothing.
+        laidOutForBand = 0;
+
         screenWidgets.clear();
         for (int i = 0; i < SCREEN_NAMES.length; i++) {
             screenWidgets.add(new ArrayList<>());
@@ -1305,7 +1309,11 @@ public class MarketScreen extends Screen {
         // repositioned in a block after the buttons had been placed, which left y
         // describing a layout that no longer existed — and the next thing placed from
         // it landed on top of Import.
-        int y = rowY + 4;
+        // Band-aware, unlike the widgets placed once in init(): this runs every frame
+        // and sets absolute positions, so it has to arrive at the same answer the shift
+        // in reflowForAlerts gives everything else. Two rules for one column is how the
+        // buttons ended up through the tab row.
+        int y = rowY + 4 + alertBandH();
 
         marketNameField.visible = create;
         marketNameField.active = create;
@@ -2417,6 +2425,13 @@ public class MarketScreen extends Screen {
         // A dropped host is noticed on a network thread; fold it into the mode here so
         // the rest of the UI isn't reading state from a connection that's gone.
         MarketStateHolder.pollConnection();
+
+        // Before anything positions a widget. The band decides where the panels start,
+        // and a layout computed from last frame's answer is a layout that disagrees with
+        // what is about to be drawn.
+        frameAlerts = alerts();
+        reflowForAlerts();
+
         refreshMarketButtons();
 
         // Re-poll on a timer. Without this the host list only ever reflects the moment
@@ -2428,10 +2443,6 @@ public class MarketScreen extends Screen {
         // Cleared before the panels re-register, or a region the cursor has since left
         // keeps eating the scroll wheel.
         hoveredScrollKey = null;
-
-        // Before anything measures from panelTop, which reserves room for these. Held
-        // for the rest of the frame and for the clicks that follow it.
-        frameAlerts = alerts();
 
         renderHeader(matrices);
 
@@ -2573,6 +2584,31 @@ public class MarketScreen extends Screen {
      * follows it, which is the same class of bug as discoveryStartY's.
      */
     private List<Alert> frameAlerts = new ArrayList<>();
+
+    /**
+     * The alert band the widgets are currently laid out for.
+     *
+     * Every widget's y is set once in init(), from rowY, and rowY does not know about
+     * alerts. The band moves frameTop — and therefore the panels and the tab row — so
+     * without this the panels slid down when an alert appeared and the controls stayed
+     * where they were, which on the Market tab put the buttons through the tabs.
+     *
+     * Shifting them by the difference keeps one layout rather than two: init still owns
+     * where things sit relative to each other, and this owns only how far the whole
+     * column has moved.
+     */
+    private int laidOutForBand = 0;
+
+    private void reflowForAlerts() {
+        int band = alertBandH();
+        if (band == laidOutForBand) return;
+
+        int delta = band - laidOutForBand;
+        laidOutForBand = band;
+        for (List<ClickableWidget> widgets : screenWidgets) {
+            for (ClickableWidget w : widgets) w.y += delta;
+        }
+    }
 
     /**
      * Full text for a row the cursor is over, drawn at the very end of the frame.
