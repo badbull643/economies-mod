@@ -49,6 +49,8 @@ public class MarketScreen extends Screen {
     private ButtonWidget resetButton;
     private TextFieldWidget feeField;
     private ButtonWidget feeButton;
+    private TextFieldWidget listingFeeField;
+    private ButtonWidget listingFeeButton;
     private ButtonWidget addMarketButton;
     private ButtonWidget deleteMarketButton;
 
@@ -427,6 +429,16 @@ public class MarketScreen extends Screen {
         this.feeButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Set trading fee"), b -> onSetFee()));
+
+        this.listingFeeField = new TextFieldWidget(this.textRenderer,
+                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Listing fee"));
+        this.listingFeeField.setMaxLength(6);
+        hint(this.listingFeeField, "listing fee in credits");
+        onScreen(SCREEN_MARKET, this.listingFeeField);
+
+        this.listingFeeButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
+                        new LiteralText("Set listing fee"), b -> onSetListingFee()));
 
         this.addMarketButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
@@ -1311,11 +1323,16 @@ public class MarketScreen extends Screen {
 
         feeField.visible = canSetFee;
         feeField.active = canSetFee;
+        listingFeeField.visible = canSetFee;
+        listingFeeField.active = canSetFee;
         if (canSetFee) {
             feeField.y = y + 6;
             y = place(feeButton, true, y + 6 + ROW_STEP);
+            listingFeeField.y = y + 6;
+            y = place(listingFeeButton, true, y + 6 + ROW_STEP);
         }  else {
             y = place(feeButton, false, y);
+            y = place(listingFeeButton, false, y);
         }
 
         // Offered wherever there is a world to put one in — including a world with no
@@ -1410,7 +1427,8 @@ public class MarketScreen extends Screen {
         }
 
         showConfirm(bps == 0 ? "Remove the trading fee?" : "Set the trading fee to "
-                + formatBps(bps) + "?", body, "Set fee", () -> submitFee(bps));
+                + formatBps(bps) + "?", body, "Set fee",
+                () -> submitPolicy(bps, market == null ? 0 : market.listingFee()));
     }
 
     /**
@@ -1435,7 +1453,71 @@ public class MarketScreen extends Screen {
         return values.get(values.size() / 2);
     }
 
-    private void submitFee(int bps) {
+    /**
+     * Sets the flat charge for placing an order.
+     *
+     * Confirmed like the trading fee, and for a sharper reason: this one is not
+     * refunded when an order is cancelled, so it is the only charge here that can be
+     * paid for nothing. The confirmation says so rather than leaving it to be
+     * discovered.
+     */
+    private void onSetListingFee() {
+        String raw = listingFeeField.getText().trim();
+        if (raw.isEmpty()) {
+            status = "Type a listing fee first, in credits";
+            return;
+        }
+
+        long fee;
+        try {
+            fee = Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            status = "Listing fee must be a whole number of credits";
+            return;
+        }
+        if (fee < 0) {
+            status = "A listing fee cannot be negative";
+            return;
+        }
+        if (fee > MarketState.MAX_LISTING_FEE) {
+            status = "The most a market may charge to list is "
+                    + MarketState.MAX_LISTING_FEE;
+            return;
+        }
+
+        MarketState market = MarketStateHolder.get();
+        long current = market == null ? 0 : market.listingFee();
+        if (fee == current) {
+            status = "The listing fee is already " + fee;
+            return;
+        }
+
+        String body = fee == 0
+                ? "Placing orders will be free again from the next one onward."
+                : "Placing an order will cost " + fee + " credits, whether it is a buy"
+                        + " or a sell, and whether or not it ever trades. It is not"
+                        + " returned if the order is cancelled — that is what makes it"
+                        + " discourage flooding the book, and also what makes it cost"
+                        + " something to reprice, so keep it small. Sellers pay it too,"
+                        + " so anyone holding goods and no credits will not be able to"
+                        + " list at all.";
+
+        showConfirm(fee == 0 ? "Remove the listing fee?"
+                : "Charge " + fee + " credits to place an order?",
+                body, "Set fee", () -> submitPolicy(
+                        market == null ? 0 : market.taxBps(), fee));
+    }
+
+    /**
+     * Writes the market's whole policy, with one field changed.
+     *
+     * A MarketPolicy event carries every setting, so both controls go through here
+     * rather than each building their own — leaving a field at its zero default would
+     * turn off whatever it governs as a side effect of changing something else, which
+     * would have set the welcome grant to nothing every time somebody edited a fee.
+     * One place to restate them means one place to get that right.
+     */
+    private void submitPolicy(int bps, long listingFee) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) { status = "No player"; return; }
 
@@ -1445,18 +1527,19 @@ public class MarketScreen extends Screen {
         Event.MarketPolicy policy = new Event.MarketPolicy();
         policy.userId = MinecraftIds.userIdOf(mc.player);
         policy.taxBps = bps;
-        // A policy event carries the whole policy, so the fields this control does not
-        // touch have to be restated. Leaving grantAmount at its zero default would set
-        // the welcome grant to nothing as a side effect of changing the fee.
+        policy.listingFee = listingFee;
+        // Not editable from here at all — see onSetFee for why there is no control for
+        // it — so it is carried across untouched.
         policy.grantAmount = market.welcomeGrant();
         policy.timestamp = System.currentTimeMillis();
 
         MarketStateHolder.Submission s = MarketStateHolder.submit(policy);
         if (s.pending) {
-            status = "Fee change sent...";
+            status = "Policy change sent...";
         } else if (s.accepted) {
-            status = "Trading fee is now " + formatBps(bps);
+            status = "Trading fee " + formatBps(bps) + ", listing fee " + listingFee;
             feeField.setText("");
+            listingFeeField.setText("");
         } else {
             status = "Rejected: " + s.reason;
         }
@@ -1586,6 +1669,12 @@ public class MarketScreen extends Screen {
             y = wrapped(m, "Takes nothing from sales under "
                     + MarketState.smallestTaxableSale(bps) + " credits.",
                     x, y, 0x909090);
+        }
+
+        long listing = market.listingFee();
+        if (listing > 0) {
+            y = wrapped(m, "Listing fee: " + listing + " credits to place any order,"
+                    + " kept even if you cancel", x, y, 0xFFAA55);
         }
 
         // Says who can change it, to whoever cannot. Without this the fee reads as a

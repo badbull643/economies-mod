@@ -89,6 +89,21 @@ public abstract class Event {
          * happened to be online.
          */
         public long grantAmount;
+
+        /**
+         * Flat credits charged for placing an order, whichever way it goes.
+         *
+         * Flat and not a percentage, because what it exists to discourage is the number
+         * of orders rather than their size — a percentage would let somebody paper the
+         * book with hundreds of one-credit orders for almost nothing, which is the
+         * behaviour being priced.
+         *
+         * Not refunded when an order is cancelled. A refundable fee deters nothing. The
+         * cost of that is real and is the reason this should stay small: cancelling and
+         * relisting at a better price pays it twice, and repricing is something a
+         * healthy market wants people doing.
+         */
+        public long listingFee;
     }
 
     /**

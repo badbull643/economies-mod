@@ -40,7 +40,8 @@ public class EventCanonical {
             // Signed, or a host could rewrite the rate in flight and every replica would
             // adopt it — this file's whole point is that an omitted field is tamperable.
             Event.MarketPolicy mp = (Event.MarketPolicy) e;
-            sb.append('|').append(mp.taxBps).append('|').append(mp.grantAmount);
+            sb.append('|').append(mp.taxBps).append('|').append(mp.grantAmount)
+                    .append('|').append(mp.listingFee);
         } else if (e instanceof Event.WelcomeGrant) {
             Event.WelcomeGrant wg = (Event.WelcomeGrant) e;
             sb.append('|').append(wg.targetUserId).append('|').append(wg.amount);

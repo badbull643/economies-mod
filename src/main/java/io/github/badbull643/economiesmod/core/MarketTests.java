@@ -1451,6 +1451,65 @@ public class MarketTests {
             }
         }
 
+        section("T1c: a listing fee prices orders, not order value");
+        {
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 100);
+            m.wallets().setBalance(ALICE, 1000L);
+            m.setListingFee(25);
+
+            long before = m.wallets().getBalance(ALICE);
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));
+            check("a sell pays to be listed", m.wallets().getBalance(ALICE), before - 25);
+            check("and still reserves its goods",
+                    m.itemBalances().getBalance(ALICE, IRON), 90);
+
+            // Flat, so ten small orders cost ten times what one does. That is the whole
+            // point: what is being discouraged is the count, not the value.
+            long beforeSmall = m.wallets().getBalance(ALICE);
+            m.submitOrder(new Order(2, 1, IRON, 1, false, ALICE));
+            check("a tiny order costs the same",
+                    m.wallets().getBalance(ALICE), beforeSmall - 25);
+
+            // Not refunded. A refundable fee deters nothing, and this is the only
+            // charge in the market that can be paid for an order that never traded.
+            long beforeCancel = m.wallets().getBalance(ALICE);
+            m.cancelOrder(1, IRON, false, ALICE);
+            check("cancelling returns the goods",
+                    m.itemBalances().getBalance(ALICE, IRON), 99);
+            check("but not the listing fee",
+                    m.wallets().getBalance(ALICE), beforeCancel);
+        }
+
+        section("T1d: an order that cannot pay to be listed is refused");
+        {
+            // The awkward consequence of pricing placement: a seller holding goods and
+            // no credits cannot list at all. Refused up front rather than discovered
+            // during settlement, where the order would already have been accepted.
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 100);
+            m.wallets().setBalance(ALICE, 10L);
+            m.setListingFee(25);
+
+            check("a seller who cannot pay the fee is refused",
+                    m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE)).accepted ? 1 : 0, 0);
+            check("and keeps their goods",
+                    m.itemBalances().getBalance(ALICE, IRON), 100);
+            check("and their credits", m.wallets().getBalance(ALICE), 10);
+
+            // A buy has to cover both its reservation and the fee, or it would be
+            // accepted and then be unable to pay for itself.
+            MarketState b = new MarketState();
+            b.wallets().setBalance(BOB, 100L);
+            b.setListingFee(25);
+            check("a buy needing 100 plus the fee is refused",
+                    b.submitOrder(new Order(1, 10, IRON, 10, true, BOB)).accepted ? 1 : 0, 0);
+            check("one that leaves room for it is not",
+                    b.submitOrder(new Order(2, 7, IRON, 10, true, BOB)).accepted ? 1 : 0, 1);
+            check("paying reservation and fee together",
+                    b.wallets().getBalance(BOB), 100 - 70 - 25);
+        }
+
         section("T2: the tax comes off the seller, and is burned");
         {
             MarketState m = new MarketState();
@@ -1936,6 +1995,18 @@ public class MarketTests {
                     policyRejection(m, ALICE, -1) != null ? 1 : 0, 1);
             check("zero is allowed — it turns the tax off",
                     policyRejection(m, ALICE, 0) == null ? 1 : 0, 1);
+
+            // The listing fee is bounded low on purpose: a charge big enough to feel
+            // like a tax is big enough to stop people repricing.
+            check("a sane listing fee is allowed",
+                    policyRejection(m, ALICE, 0, m.welcomeGrant(), 25) == null ? 1 : 0, 1);
+            check("zero is allowed — it turns listing fees off",
+                    policyRejection(m, ALICE, 0, m.welcomeGrant(), 0) == null ? 1 : 0, 1);
+            check("negative is refused",
+                    policyRejection(m, ALICE, 0, m.welcomeGrant(), -1) != null ? 1 : 0, 1);
+            check("above the ceiling is refused",
+                    policyRejection(m, ALICE, 0, m.welcomeGrant(),
+                            MarketState.MAX_LISTING_FEE + 1) != null ? 1 : 0, 1);
         }
 
         System.out.println();
@@ -2021,11 +2092,17 @@ public class MarketTests {
 
     private static String policyRejection(MarketState state, UUID author, int bps,
                                           long grant) {
+        return policyRejection(state, author, bps, grant, state.listingFee());
+    }
+
+    private static String policyRejection(MarketState state, UUID author, int bps,
+                                          long grant, long listingFee) {
         Event.MarketPolicy mp = new Event.MarketPolicy();
         mp.userId = author;
         mp.marketId = state.marketId();
         mp.taxBps = bps;
         mp.grantAmount = grant;
+        mp.listingFee = listingFee;
         mp.timestamp = 1L;
 
         SequencedEvent se = new SequencedEvent();
