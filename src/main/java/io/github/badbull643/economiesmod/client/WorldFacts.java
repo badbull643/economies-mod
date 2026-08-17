@@ -62,7 +62,22 @@ public final class WorldFacts {
             Item item = MinecraftIds.idToItem(itemId);
             if (item == null || item == Items.AIR) return 0;
 
-            long total = stats.getStat(Stats.PICKED_UP.getOrCreateStat(item));
+            // Picked up minus dropped, never below zero.
+            //
+            // Picking an item up increments PICKED_UP whatever its origin — including
+            // an item you threw on the ground a second earlier. So /give, drop,
+            // collect launders anything into the statistic that was supposed to be
+            // evidence against it, and each cycle can be repeated. Subtracting DROPPED
+            // closes that exactly, because the two move together: eighteen thrown and
+            // eighteen collected nets nothing.
+            //
+            // Mining is unaffected — an ore drops an item nobody dropped, so PICKED_UP
+            // rises and DROPPED does not. Giving items to a friend under-counts the
+            // giver, which is the safe direction and what the margin is for.
+            long pickedUp = stats.getStat(Stats.PICKED_UP.getOrCreateStat(item));
+            long dropped = stats.getStat(Stats.DROPPED.getOrCreateStat(item));
+
+            long total = Math.max(0, pickedUp - dropped);
             total += stats.getStat(Stats.CRAFTED.getOrCreateStat(item));
 
             // Mined is per block, not per item, so it only exists for things that are
