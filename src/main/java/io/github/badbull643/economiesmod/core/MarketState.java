@@ -366,8 +366,32 @@ public class MarketState {
         long available = itemBalances.getBalance(userId, itemId);
         if (available < qty) return false;
         itemBalances.adjust(userId, itemId, -qty);
+        withdrawn.merge(userId + " " + itemId, qty, Long::sum);
         return true;
     }
+
+    /**
+     * How much of an item this market has ever handed to somebody.
+     *
+     * Only grows, and derived from the log like everything else here, so every replica
+     * agrees on it.
+     *
+     * Exists for one reason: a withdrawal puts items in a player's inventory through
+     * insertStack, which increments no statistic — exactly as /give does. Without this,
+     * the deposit rules that weigh a player against their own statistics would refuse
+     * them the goods this market gave them, which is the one case where their
+     * provenance is not in doubt at all: it was in the ledger a moment ago.
+     */
+    public long withdrawnBy(UUID userId, String itemId) {
+        if (userId == null || itemId == null) return 0;
+        Long n = withdrawn.get(userId + " " + itemId);
+        return n == null ? 0 : n;
+    }
+
+    // "<uuid> <itemId>" rather than a nested map: nothing ever iterates one half of it.
+    // A space is safe as the join — a UUID is hex and dashes, an item id is a namespaced
+    // path, and neither can contain one.
+    private final Map<String, Long> withdrawn = new ConcurrentHashMap<>();
 
     private long buyerOrderPrice(Order incoming, Fill f) {
         // If the incoming order is the buyer, use its price.

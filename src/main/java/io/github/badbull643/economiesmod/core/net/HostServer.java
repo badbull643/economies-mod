@@ -1192,8 +1192,19 @@ public class HostServer {
             String itemId = depositItemOf(event);
             if (claim != null && itemId != null) {
                 long handled = claim.handledOf(itemId);
-                long allowed = Math.multiplyExact(handled,
-                        (long) config.maxDepositMultipleOfHandled);
+
+                // Plus whatever this market has already given them. A withdrawal lands
+                // in an inventory through insertStack, which increments no statistic —
+                // the same reason /give leaves no trace — so without this the rule would
+                // refuse somebody re-depositing goods it handed out itself, which is the
+                // one case where provenance is not in question: it was in the ledger a
+                // moment ago. Read from state rather than the claim, so it is the
+                // market's own record and not the depositor's account of it.
+                long fromThisMarket = state.withdrawnBy(event.userId, itemId);
+                long allowed = Math.addExact(
+                        Math.multiplyExact(handled,
+                                (long) config.maxDepositMultipleOfHandled),
+                        fromThisMarket);
                 long already = depositLimiter.usedBy(event.userId, itemId,
                         System.currentTimeMillis());
 
@@ -1204,7 +1215,10 @@ public class HostServer {
                     reject(p.from, msg.clientEventId, "you have handled " + handled + " "
                             + itemId + " by your own statistics, and this server accepts"
                             + " deposits up to " + config.maxDepositMultipleOfHandled
-                            + " times that");
+                            + " times that"
+                            + (fromThisMarket > 0
+                                    ? ", plus the " + fromThisMarket
+                                            + " this market gave you" : ""));
                     return;
                 }
             }
