@@ -49,6 +49,15 @@ public class HostServer {
      */
     private final Map<UUID, WorldAttestation> attestations = new ConcurrentHashMap<>();
 
+    /** Which item a deposit is of, or null if the event is not one. */
+    private static String depositItemOf(Event event) {
+        if (event instanceof Event.Deposit) return ((Event.Deposit) event).itemId;
+        if (event instanceof Event.DepositAndList) {
+            return ((Event.DepositAndList) event).itemId;
+        }
+        return null;
+    }
+
     /**
      * Items this event would add to the depositor's balance, or 0 if it is not a
      * deposit.
@@ -1170,6 +1179,37 @@ public class HostServer {
         // The contradiction check, at the only moment both halves of it exist: a claim
         // made at handshake, and a quantity this host has now actually been handed.
         // Neither is checkable alone; together they can be impossible.
+        // Against the player's own statistics, which they did not write. Minecraft
+        // counts what is mined, crafted and picked up, and /give increments none of it,
+        // so a deposit far beyond that total is a contradiction in a record the
+        // depositor cannot quietly restate.
+        //
+        // A generous multiple, not a limit: the count is a floor, since smelted output
+        // and anything taken from a chest never touch PICKED_UP. The case worth catching
+        // is out by hundreds, not by three.
+        if (depositUnits > 0 && config.maxDepositMultipleOfHandled > 0) {
+            WorldAttestation claim = attestations.get(event.userId);
+            String itemId = depositItemOf(event);
+            if (claim != null && itemId != null) {
+                long handled = claim.handledOf(itemId);
+                long allowed = Math.multiplyExact(handled,
+                        (long) config.maxDepositMultipleOfHandled);
+                long already = depositLimiter.usedBy(event.userId, itemId,
+                        System.currentTimeMillis());
+
+                if (already + depositUnits > allowed) {
+                    System.out.println("[host] implausible deposit from " + event.userId
+                            + ": " + (already + depositUnits) + " " + itemId
+                            + " against statistics showing " + handled + " ever handled");
+                    reject(p.from, msg.clientEventId, "you have handled " + handled + " "
+                            + itemId + " by your own statistics, and this server accepts"
+                            + " deposits up to " + config.maxDepositMultipleOfHandled
+                            + " times that");
+                    return;
+                }
+            }
+        }
+
         if (depositUnits > 0) {
             WorldAttestation claim = attestations.get(event.userId);
             if (claim != null) {
@@ -1194,7 +1234,8 @@ public class HostServer {
 
         // Counted only once it is genuinely in the log.
         if (result.accepted && depositUnits > 0) {
-            depositLimiter.record(event.userId, depositUnits, System.currentTimeMillis());
+            depositLimiter.record(event.userId, depositItemOf(event), depositUnits,
+                    System.currentTimeMillis());
         }
 
         if (result.accepted) {

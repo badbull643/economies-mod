@@ -17,6 +17,7 @@ import java.security.GeneralSecurityException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -870,7 +871,45 @@ public class MarketStateHolder {
      * In CONNECTED mode it returns a "pending" result; the real outcome arrives
      * later via the state-changed callback or onRejected.
      */
+    /**
+     * Tells the host what Minecraft's statistics say about an item, before depositing it.
+     *
+     * Sent per item at the moment it is needed rather than as a whole inventory at the
+     * handshake: the host wants one number to judge one deposit, and shipping every
+     * item anybody has ever touched to answer that would be absurd.
+     *
+     * Ordering holds because both travel the same channel and the host reads an Attest
+     * inline on the connection thread while a proposal goes to the sequencer queue — so
+     * the figure is always filed before the deposit it belongs to is judged.
+     */
+    private static void tellHostWhatWeHandled(Event event) {
+        if (client == null || !client.isConnected()) return;
+
+        String itemId;
+        if (event instanceof Event.Deposit) {
+            itemId = ((Event.Deposit) event).itemId;
+        } else if (event instanceof Event.DepositAndList) {
+            itemId = ((Event.DepositAndList) event).itemId;
+        } else {
+            return;
+        }
+        if (itemId == null) return;
+
+        MinecraftServer server = MinecraftClient.getInstance().getServer();
+        if (server == null) return;
+
+        WorldAttestation now = WorldFacts.of(server);
+        if (now == null) return;
+
+        now.handledByItem = new HashMap<>();
+        now.handledByItem.put(itemId, WorldFacts.handledCountOf(server, itemId));
+        client.reattest(now);
+    }
+
     public static Submission submit(Event event) {
+        // Before the proposal, so the host has the figure when it judges it.
+        tellHostWhatWeHandled(event);
+
 
         //the local branch only for testing though
         if (mode != Mode.LOCAL) {

@@ -2,6 +2,7 @@ package io.github.badbull643.economiesmod.core;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * What a client says about the world it is trading from.
@@ -104,6 +105,32 @@ public class WorldAttestation {
      * is for, which is noticing that two identities are trading from the same world.
      */
     public String worldIdHash;
+
+    /**
+     * Item id to how much of it this player has ever mined, crafted or picked up.
+     *
+     * Minecraft's own statistics, which it keeps during ordinary play and which /give
+     * does not touch — GiveCommand increments nothing, an item picked up off the floor
+     * goes through ItemEntity and increments PICKED_UP. That makes this the only figure
+     * here the player did not author and cannot quietly restate, and the only one that
+     * survives the mod being switched off, because the game maintains it regardless.
+     *
+     * Sent per item, immediately before depositing that item, rather than as a whole
+     * inventory at the handshake: the host needs one number at one moment, and shipping
+     * a map of every item anybody has ever touched to answer it would be absurd.
+     *
+     * Undercounts by design. Smelted output and anything taken from a chest never touch
+     * PICKED_UP, so the number is a floor on what somebody has handled rather than a
+     * measure of it — which is why the rule built on it is a generous multiple.
+     */
+    public Map<String, Long> handledByItem;
+
+    /** What this attestation claims for one item, or 0 when it says nothing about it. */
+    public long handledOf(String itemId) {
+        if (handledByItem == null || itemId == null) return 0;
+        Long n = handledByItem.get(itemId);
+        return n == null ? 0 : n;
+    }
 
     public static final long TICKS_PER_HOUR = 72_000L;   // 20/s * 3600
 
