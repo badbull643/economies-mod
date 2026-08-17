@@ -620,7 +620,10 @@ public class HostServer {
             System.out.println("[host] " + hello.displayName + " reports "
                     + String.format("%.1f", hello.attestation.claimedHours())
                     + "h in a " + hello.attestation.gameMode + " world"
-                    + (hello.attestation.commandsAllowed ? " with commands enabled" : "")
+                    + (hello.attestation.cheatsEnabledLater()
+                            ? " with commands switched on this session"
+                            : hello.attestation.cheatsAvailable()
+                                    ? " with commands enabled" : "")
                     + " (" + hello.attestation.worldIdHash + ")");
         }
 
