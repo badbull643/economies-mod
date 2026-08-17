@@ -1900,11 +1900,26 @@ public class MarketTests {
             check("both count as cheats being available",
                     lan.cheatsAvailable() && cheats.cheatsAvailable() ? 1 : 0, 1);
 
+            // Enable cheats, take what you want, quit to the title, come back. Minecraft
+            // clears the LAN flag on reload and never wrote anything to the save, so the
+            // world truthfully reports having never had commands while the goods are
+            // still in the inventory. The only thing that knows better is the note the
+            // mod wrote at the time.
+            WorldAttestation reloaded = new WorldAttestation();
+            reloaded.gameMode = "survival";
+            reloaded.commandsAllowed = false;
+            reloaded.cheatsLive = false;
+            reloaded.cheatsEverSeen = true;
+            check("a world reloaded to clear the flag is still caught",
+                    reloaded.objections(strict, 0).isEmpty() ? 1 : 0, 0);
+            check("and is not mistaken for one that has them right now",
+                    reloaded.cheatsEnabledLater() ? 1 : 0, 0);
+
             WorldAttestation plain = new WorldAttestation();
             plain.gameMode = "survival";
             check("an ordinary survival world is not",
                     plain.objections(strict, 0).isEmpty() ? 1 : 0, 1);
-            check("and has no cheats by either route",
+            check("and has no cheats by any route",
                     plain.cheatsAvailable() ? 1 : 0, 0);
 
             // A host that has not asked for any of this must not start refusing people.

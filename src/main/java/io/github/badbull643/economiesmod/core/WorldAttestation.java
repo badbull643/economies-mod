@@ -66,9 +66,24 @@ public class WorldAttestation {
      */
     public boolean cheatsLive;
 
-    /** Either route to commands. What every rule about cheating should actually ask. */
+    /**
+     * Whether this world has ever been seen with commands enabled, at any point.
+     *
+     * Neither of the fields above survives a reload. Open to LAN sets a runtime flag
+     * and writes nothing to the save, so quitting to the title and coming back leaves a
+     * world that honestly reports having never had commands — while whatever was taken
+     * with them is still in the player's inventory. Enable, take, reload, connect was
+     * the whole bypass.
+     *
+     * Recorded by the client into the world's own folder the first time it sees them,
+     * and only ever added to. Deletable by anyone who goes looking, which is the same
+     * ceiling as everything else here.
+     */
+    public boolean cheatsEverSeen;
+
+    /** Every route to commands, including one the world no longer admits to. */
     public boolean cheatsAvailable() {
-        return commandsAllowed || cheatsLive;
+        return commandsAllowed || cheatsLive || cheatsEverSeen;
     }
 
     /** Cheats switched on for this session in a world that was not made with them. */
@@ -122,9 +137,17 @@ public class WorldAttestation {
             // with cheats is usually somebody who ticked a box a year ago; cheats
             // switched on mid-session, in a world that did not have them, is the shape
             // of somebody who wanted something.
-            out.add(cheatsEnabledLater()
-                    ? "commands were switched on in this world after it was created"
-                    : "this world has commands enabled");
+            String how;
+            if (cheatsEnabledLater()) {
+                how = "commands were switched on in this world after it was created";
+            } else if (commandsAllowed) {
+                how = "this world has commands enabled";
+            } else {
+                // Neither flag is set, so the world would describe itself as clean; the
+                // only reason we know otherwise is that it was seen earlier.
+                how = "this world has had commands enabled at some point";
+            }
+            out.add(how);
         }
 
         // The contradiction check. Not "have you cheated" — unanswerable — but "is what
