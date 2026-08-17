@@ -110,6 +110,22 @@ public class ServerConfig {
      */
     public long maxDepositUnitsPerPlayHour = 0;
 
+    /**
+     * How many times a player's own statistics they may deposit. Zero disables.
+     *
+     * Minecraft counts what you mine, craft and pick up, and /give increments none of
+     * it. So somebody handing over four thousand diamonds having picked up twelve is
+     * contradicting a record they did not write and cannot restate — the strongest
+     * signal available here, and the only one that outlives the mod being switched off.
+     *
+     * A multiple rather than a limit, because the count is a floor and not a measure:
+     * smelted output and anything taken from a chest never touch PICKED_UP, so an
+     * honest player's real total is always higher than their statistics say. Three is
+     * generous enough for that and still catches the case worth catching, where the gap
+     * is not a factor of three but of hundreds.
+     */
+    public int maxDepositMultipleOfHandled = 0;
+
     // ─────────── admission ───────────
 
     /**
