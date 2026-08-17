@@ -75,6 +75,21 @@ public class EconomiesmodClient implements ClientModInitializer {
             // reload; the mod does not.
             WorldFacts.noteCheatsIfSeen(mc.getServer());
 
+            // A deposit the host refused took the items out of the inventory before it
+            // was proposed. Handing them back here, on the thread that owns the
+            // inventory, rather than leaving the journal to settle it at next startup —
+            // which is what happened until now, and meant a refused deposit cost you
+            // your items until you restarted the game.
+            if (mc.player != null) {
+                PendingOps.Op refund;
+                while ((refund = MarketStateHolder.nextRefundDue()) != null) {
+                    InventoryBridge.give(mc.player, MinecraftIds.idToItem(refund.itemId),
+                            (int) refund.quantity);
+                    System.out.println("[economiesmod] returned " + refund.quantity + " "
+                            + refund.itemId + " — the host refused that deposit");
+                }
+            }
+
             // Here rather than in the market screen's render, which is where it started
             // and where it could never have worked: Open to LAN is reached from the
             // pause menu, so the screen that was doing the checking is closed at exactly

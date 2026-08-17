@@ -122,6 +122,21 @@ public class MarketClient {
     public long lastSeq() { return appliedSeq; }
 
     public void setOnRejected(Consumer<String> handler) { this.onRejected = handler; }
+
+    /**
+     * Called with the clientEventId of a proposal the host turned down.
+     *
+     * Split from onRejected, which exists to put words on a screen. This one exists
+     * because a refused deposit has already taken the items out of somebody's
+     * inventory, and until this fired they came back only on the next startup, when the
+     * journal was settled against the log — a rejected deposit meant losing your items
+     * until you restarted the game.
+     */
+    private Consumer<String> onProposalRefused = id -> {};
+
+    public void setOnProposalRefused(Consumer<String> handler) {
+        this.onProposalRefused = handler;
+    }
     public void setOnStateChanged(Runnable handler) { this.onStateChanged = handler; }
 
 
@@ -369,7 +384,14 @@ public class MarketClient {
                     onStateChanged.run();
                     if (!ok) break;
                 } else if (msg instanceof Message.Rejected) {
-                    onRejected.accept(((Message.Rejected) msg).reason);
+                    Message.Rejected r = (Message.Rejected) msg;
+                    onRejected.accept(r.reason);
+                    // Separately from the message, because a refusal is not only
+                    // something to say: a deposit takes the items out of the inventory
+                    // before proposing, so somebody has to give them back.
+                    if (r.clientEventId != null) {
+                        onProposalRefused.accept(r.clientEventId);
+                    }
                 } else if (msg instanceof Message.Error) {
                     onRejected.accept("host error: " + ((Message.Error) msg).reason);
                     break;
