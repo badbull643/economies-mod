@@ -70,6 +70,12 @@ public class EconomiesmodClient implements ClientModInitializer {
             // back and flush them.
             FILLS.tick();
 
+            // Here rather than in the market screen's render, which is where it started
+            // and where it could never have worked: Open to LAN is reached from the
+            // pause menu, so the screen that was doing the checking is closed at exactly
+            // the moment the world changes. A tick happens whether anyone is looking.
+            MarketStateHolder.reattestIfChanged();
+
             if (pendingOpsSettled) return;
             if (mc.player == null || mc.getServer() == null) return;
             pendingOpsSettled = true;
