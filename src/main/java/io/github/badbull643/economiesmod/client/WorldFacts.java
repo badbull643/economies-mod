@@ -4,7 +4,12 @@ import io.github.badbull643.economiesmod.core.WorldAttestation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.SaveProperties;
 
+import net.minecraft.util.WorldSavePath;
+
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 
 /**
@@ -19,6 +24,71 @@ import java.security.MessageDigest;
 public final class WorldFacts {
 
     private WorldFacts() {}
+
+    /**
+     * Remembers that this world has had commands enabled, once it ever does.
+     *
+     * Minecraft does not. Open to LAN sets a flag on the running PlayerManager and
+     * writes nothing to the save, so quitting to the title and loading the world again
+     * clears it — verified in the jar: setCheatsAllowed is called from openToLan and
+     * from nowhere else, and nothing seeds it at startup. Enable cheats, take what you
+     * want, quit, come back, and the world truthfully describes itself as never having
+     * had them.
+     *
+     * So the mod keeps its own note. It only grows: once seen, a world carries it, and
+     * the file sits beside the market data for that world.
+     *
+     * Deletable by anybody who goes looking, which is the same ceiling everything else
+     * here has — a modified client would not write it in the first place. What it closes
+     * is the version of the trick that needs nothing but the vanilla menus and the
+     * patience to reload a world.
+     */
+    public static void noteCheatsIfSeen(MinecraftServer server) {
+        if (server == null) return;
+
+        Path marker = cheatMarker(server);
+        if (marker == null) return;
+
+        // One filesystem check per world rather than one per tick.
+        if (!marker.equals(checkedMarker)) {
+            checkedMarker = marker;
+            alreadyNoted = Files.exists(marker);
+        }
+        if (alreadyNoted || !cheatsAvailable(server)) return;
+
+        try {
+            Files.createDirectories(marker.getParent());
+            Files.write(marker, "commands were enabled in this world"
+                    .getBytes(StandardCharsets.UTF_8));
+            alreadyNoted = true;
+            System.out.println("[economiesmod] noting that this world has had commands"
+                    + " enabled — hosts will be told");
+        } catch (IOException e) {
+            // Worth saying: silently failing to record this is the one outcome that
+            // looks exactly like the world being clean.
+            System.err.println("[economiesmod] could not record that commands were"
+                    + " enabled: " + e);
+        }
+    }
+
+    /** Whether this world has ever been seen with commands enabled. */
+    public static boolean cheatsEverSeen(MinecraftServer server) {
+        Path marker = cheatMarker(server);
+        return marker != null && Files.exists(marker);
+    }
+
+    private static Path checkedMarker;
+    private static boolean alreadyNoted;
+
+    private static Path cheatMarker(MinecraftServer server) {
+        if (server == null) return null;
+        try {
+            return server.getSavePath(WorldSavePath.ROOT)
+                    .resolve("economiesmod").resolve("commands-were-enabled");
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     /**
      * Whether commands are available right now, by either route, cheaply.
@@ -84,6 +154,10 @@ public final class WorldFacts {
             // PlayerManager.setCheatsAllowed and touches nothing else.
             a.cheatsLive = server.getPlayerManager() != null
                     && server.getPlayerManager().areCheatsAllowed();
+
+            // Whether this world has ever had them, which Minecraft forgets and the mod
+            // does not. Without it, quitting and reloading launders a world clean.
+            a.cheatsEverSeen = cheatsEverSeen(server);
             a.hardcore = props.isHardcore();
             a.gameMode = props.getGameMode() != null
                     ? props.getGameMode().getName() : "unknown";

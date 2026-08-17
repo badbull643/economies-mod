@@ -809,7 +809,10 @@ public class MarketStateHolder {
         MinecraftServer server = MinecraftClient.getInstance().getServer();
         if (server == null) return;
 
-        boolean cheats = WorldFacts.cheatsAvailable(server);
+        // The sticky note counts too, so a world that has been reloaded to clear the
+        // live flag still differs from what a clean one would report.
+        boolean cheats = WorldFacts.cheatsAvailable(server)
+                || WorldFacts.cheatsEverSeen(server);
         String gameMode = WorldFacts.gameModeOf(server);
         if (cheats == lastToldCheats && gameMode.equals(lastToldGameMode)) return;
 

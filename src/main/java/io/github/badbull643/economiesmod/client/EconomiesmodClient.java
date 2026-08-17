@@ -70,6 +70,11 @@ public class EconomiesmodClient implements ClientModInitializer {
             // back and flush them.
             FILLS.tick();
 
+            // Noted whether or not a market is open, because the interesting order is
+            // to enable cheats first and connect afterwards. Minecraft forgets this on
+            // reload; the mod does not.
+            WorldFacts.noteCheatsIfSeen(mc.getServer());
+
             // Here rather than in the market screen's render, which is where it started
             // and where it could never have worked: Open to LAN is reached from the
             // pause menu, so the screen that was doing the checking is closed at exactly
