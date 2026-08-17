@@ -102,6 +102,22 @@ public class MarketClient {
     private volatile WorldAttestation attestation;
 
     public void setAttestation(WorldAttestation a) { this.attestation = a; }
+
+    /**
+     * Tells the host the world has changed since the handshake described it.
+     *
+     * The handshake is a photograph, and connecting from a clean world before opening
+     * it to LAN with cheats enabled would otherwise leave the host acting on a
+     * description that stopped being true a minute later. Sent only when something
+     * actually differs — see MarketStateHolder, which does the comparing.
+     */
+    public void reattest(WorldAttestation a) {
+        if (a == null || !connected || channel == null) return;
+        this.attestation = a;
+        Message.Attest msg = new Message.Attest();
+        msg.attestation = a;
+        channel.send(msg);
+    }
     public EventLog log() { return log; }
     public long lastSeq() { return appliedSeq; }
 

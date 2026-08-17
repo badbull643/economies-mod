@@ -503,9 +503,15 @@ public class HostServer {
             // buried the real ones.
             System.out.println("[host] connection from " + channel.remoteAddress());
 
-            if (!handshake(channel, (Message.Hello) first)) {
+            Message.Hello hello = (Message.Hello) first;
+            if (!handshake(channel, hello)) {
                 return;   // handshake sent its own Error
             }
+
+            // Held for the rest of the connection: an attestation update arriving later
+            // has to be filed against the identity that made the original claim, and
+            // the Hello is the only place that is stated.
+            UUID liveUser = UUID.fromString(hello.userId);
 
             // Synced clients may sit idle indefinitely.
             socket.setSoTimeout(0);
@@ -533,6 +539,23 @@ public class HostServer {
                         r.clientEventId = prop.clientEventId;
                         r.reason = "server busy";
                         channel.send(r);
+                    }
+                } else if (msg instanceof Message.Attest) {
+                    // The handshake described a world that has since changed. Re-judged
+                    // against the same policy, because a description that was acceptable
+                    // when given is not a licence for whatever the world becomes.
+                    WorldAttestation now = ((Message.Attest) msg).attestation;
+                    if (now == null) continue;
+
+                    attestations.put(liveUser, now);
+
+                    List<String> objections = now.objections(config, 0);
+                    if (!objections.isEmpty()) {
+                        String why = String.join("; ", objections);
+                        System.out.println("[host] " + hello.displayName
+                                + " no longer passes: " + why);
+                        sendError(channel, Refusal.NOT_ADMITTED, why);
+                        break;
                     }
                 } else if (msg instanceof Message.Ping) {
                     channel.send(new Message.Pong());
