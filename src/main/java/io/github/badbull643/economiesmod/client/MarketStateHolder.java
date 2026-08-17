@@ -1082,6 +1082,14 @@ public class MarketStateHolder {
             cfg = ServerConfig.load(file);
             if (Files.exists(file)) {
                 System.out.println("[economiesmod] hosting under the rules in " + file);
+            } else {
+                // Said out loud for the same reason the launcher says it: silence makes
+                // "no rules" and "rules that did not fire" look identical. The file also
+                // belongs to whoever hosts, which is easy to get wrong when two worlds
+                // are involved and only one of them is serving.
+                System.out.println("[economiesmod] no " + file
+                        + " — hosting with friend-group settings: open admission,"
+                        + " no deposit caps, no world checks");
             }
         } catch (IOException e) {
             // Unreadable rather than absent. Refusing to host would strand somebody
