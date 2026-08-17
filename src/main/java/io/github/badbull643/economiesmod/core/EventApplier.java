@@ -135,6 +135,7 @@ public class EventApplier {
             Event.MarketPolicy applied = (Event.MarketPolicy) e;
             state.setTaxBps(applied.taxBps);
             state.setWelcomeGrant(applied.grantAmount);
+            state.setListingFee(applied.listingFee);
             return Result.ok(Collections.emptyList());
         }
 
@@ -293,6 +294,13 @@ public class EventApplier {
             if (mp.grantAmount > MarketState.MAX_WELCOME_GRANT) {
                 return Result.reject("welcome grant may not exceed "
                         + MarketState.MAX_WELCOME_GRANT);
+            }
+            if (mp.listingFee < 0) {
+                return Result.reject("listing fee cannot be negative");
+            }
+            if (mp.listingFee > MarketState.MAX_LISTING_FEE) {
+                return Result.reject("listing fee may not exceed "
+                        + MarketState.MAX_LISTING_FEE);
             }
 
             // Creator-signed. The market's own genesis names who may set its policy,
