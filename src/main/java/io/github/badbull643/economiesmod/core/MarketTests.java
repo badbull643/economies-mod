@@ -1863,6 +1863,40 @@ public class MarketTests {
                     lim.usedBy(ALICE, IRON, t), 600);
         }
 
+        section("W4: what the market gave you, you can always give back");
+        {
+            // A withdrawal reaches an inventory through insertStack, which increments no
+            // statistic — the same reason /give leaves no trace. So without counting
+            // them, the statistics rule would refuse somebody re-depositing the very
+            // goods this market handed them, which is the one case where provenance is
+            // not in question at all.
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 100);
+
+            check("nothing withdrawn yet", m.withdrawnBy(ALICE, IRON), 0);
+
+            check("withdrawing succeeds", m.withdraw(ALICE, IRON, 40) ? 1 : 0, 1);
+            check("and is remembered", m.withdrawnBy(ALICE, IRON), 40);
+
+            check("withdrawing again adds to it",
+                    m.withdraw(ALICE, IRON, 25) ? 1 : 0, 1);
+            check("cumulatively", m.withdrawnBy(ALICE, IRON), 65);
+
+            // Only grows. Putting items back does not reduce what was handed out, or
+            // the allowance would evaporate the moment it was used.
+            m.deposit(ALICE, IRON, 65);
+            check("depositing does not undo it", m.withdrawnBy(ALICE, IRON), 65);
+
+            // Per person and per item, since it stands in for provenance of one thing
+            // in one pair of hands.
+            check("another item is separate", m.withdrawnBy(ALICE, DIAMOND), 0);
+            check("another person is separate", m.withdrawnBy(BOB, IRON), 0);
+
+            // A refused withdrawal must not count — it never left the ledger.
+            check("overdrawing fails", m.withdraw(BOB, IRON, 10) ? 1 : 0, 0);
+            check("and records nothing", m.withdrawnBy(BOB, IRON), 0);
+        }
+
         section("W1: an attestation is judged by contradiction, not belief");
         {
             // Nothing here can be verified. What can be done is to notice that two
