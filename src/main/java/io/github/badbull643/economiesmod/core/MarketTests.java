@@ -1882,10 +1882,30 @@ public class MarketTests {
             check("so is one with commands enabled",
                     cheats.objections(strict, 0).isEmpty() ? 1 : 0, 0);
 
+            // The Open to LAN route: a world created without cheats, with "Allow
+            // Cheats" ticked afterwards. openToLan calls PlayerManager.setCheatsAllowed
+            // and leaves the saved settings alone, so the world goes on reporting
+            // commandsAllowed false for the rest of its life while /give works. Reading
+            // only the saved flag made this the obvious way past every rule here.
+            WorldAttestation lan = new WorldAttestation();
+            lan.gameMode = "survival";
+            lan.commandsAllowed = false;
+            lan.cheatsLive = true;
+            check("cheats enabled after creation are caught too",
+                    lan.objections(strict, 0).isEmpty() ? 1 : 0, 0);
+            check("and are reported as the later switch they are",
+                    lan.cheatsEnabledLater() ? 1 : 0, 1);
+            check("unlike a world that always had them",
+                    cheats.cheatsEnabledLater() ? 1 : 0, 0);
+            check("both count as cheats being available",
+                    lan.cheatsAvailable() && cheats.cheatsAvailable() ? 1 : 0, 1);
+
             WorldAttestation plain = new WorldAttestation();
             plain.gameMode = "survival";
             check("an ordinary survival world is not",
                     plain.objections(strict, 0).isEmpty() ? 1 : 0, 1);
+            check("and has no cheats by either route",
+                    plain.cheatsAvailable() ? 1 : 0, 0);
 
             // A host that has not asked for any of this must not start refusing people.
             ServerConfig lax = ServerConfig.friendGroup(25555);
