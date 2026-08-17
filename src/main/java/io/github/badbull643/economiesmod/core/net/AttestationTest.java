@@ -189,6 +189,9 @@ public class AttestationTest {
         ServerConfig cfg = ServerConfig.friendGroup(freePort());
         cfg.hostUserId = HOST.toString();
         cfg.refuseCheatWorlds = true;
+        cfg.banOnWorldChange = true;
+        cfg.sourceFile = dir.resolve("att-banned-config.json");
+        Files.deleteIfExists(cfg.sourceFile);
 
         HostServer host = serve(cfg, hostLog);
         try {
@@ -216,6 +219,30 @@ public class AttestationTest {
             }
             check("and is dropped once cheats appear",
                     client.isConnected() ? 1 : 0, 0);
+
+            // A ban that lasts until the next restart is not what the word describes,
+            // so it has to reach the config file.
+            check("the identity is now denied",
+                    cfg.refuses(JOINER.toString()) != null ? 1 : 0, 1);
+            check("and the ban was written down",
+                    Files.exists(cfg.sourceFile) ? 1 : 0, 1);
+            check("so it survives a restart",
+                    ServerConfig.load(cfg.sourceFile)
+                            .refuses(JOINER.toString()) != null ? 1 : 0, 1);
+
+            // Reconnecting with a spotless world must not get them back in — a ban that
+            // is undone by fixing the thing you were caught for is a kick.
+            WorldAttestation spotless = new WorldAttestation();
+            spotless.gameMode = "survival";
+            spotless.worldAgeTicks = WorldAttestation.TICKS_PER_HOUR * 5;
+
+            String reason = null;
+            try {
+                connected(cfg.port, spotless);
+            } catch (IOException e) {
+                reason = e.getMessage();
+            }
+            check("and a clean world does not undo it", reason != null ? 1 : 0, 1);
         } finally {
             host.stop();
         }
