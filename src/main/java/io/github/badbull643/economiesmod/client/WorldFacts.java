@@ -1,7 +1,13 @@
 package io.github.badbull643.economiesmod.client;
 
 import io.github.badbull643.economiesmod.core.WorldAttestation;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.Item;
+import net.minecraft.item.Items;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.stat.ServerStatHandler;
+import net.minecraft.stat.Stats;
 import net.minecraft.world.SaveProperties;
 
 import net.minecraft.util.WorldSavePath;
@@ -24,6 +30,56 @@ import java.security.MessageDigest;
 public final class WorldFacts {
 
     private WorldFacts() {}
+
+    /**
+     * How much of one item this player has ever handled, by Minecraft's own reckoning.
+     *
+     * Mined plus crafted plus picked up. Vanilla maintains these during ordinary play
+     * and writes them to the world's stats folder, and — this is the part that matters —
+     * /give increments none of them: GiveCommand calls insertStack and touches no
+     * statistic, while an item picked up off the ground goes through ItemEntity, which
+     * does. Checked in the jar rather than assumed.
+     *
+     * So this is the closest thing to a provenance record that exists without anybody
+     * building one. It survives world reloads, and unlike the mod's own note it survives
+     * the mod being switched off, because the game keeps it either way.
+     *
+     * It undercounts on purpose-built routes — smelted output and anything taken from a
+     * chest never touch PICKED_UP — which is why what is done with it is a generous
+     * multiple rather than a limit.
+     */
+    public static long handledCountOf(MinecraftServer server, String itemId) {
+        if (server == null || itemId == null) return 0;
+        try {
+            if (server.getPlayerManager() == null
+                    || server.getPlayerManager().getPlayerList().isEmpty()) {
+                return 0;
+            }
+            ServerPlayerEntity player = server.getPlayerManager().getPlayerList().get(0);
+            ServerStatHandler stats = player.getStatHandler();
+            if (stats == null) return 0;
+
+            Item item = MinecraftIds.idToItem(itemId);
+            if (item == null || item == Items.AIR) return 0;
+
+            long total = stats.getStat(Stats.PICKED_UP.getOrCreateStat(item));
+            total += stats.getStat(Stats.CRAFTED.getOrCreateStat(item));
+
+            // Mined is per block, not per item, so it only exists for things that are
+            // one. An ore that drops something else — diamond ore to diamonds — counts
+            // under the block it came from, which this deliberately does not chase: the
+            // margin is what covers the difference.
+            if (item instanceof BlockItem) {
+                total += stats.getStat(
+                        Stats.MINED.getOrCreateStat(((BlockItem) item).getBlock()));
+            }
+            return total;
+        } catch (Exception e) {
+            // A missing statistic is not worth failing a deposit over. Zero reads as
+            // "nothing known", and the host decides what to do with that.
+            return 0;
+        }
+    }
 
     /**
      * Remembers that this world has had commands enabled, once it ever does.

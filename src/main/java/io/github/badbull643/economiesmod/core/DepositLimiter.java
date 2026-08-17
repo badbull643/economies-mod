@@ -51,10 +51,13 @@ public class DepositLimiter {
     private static final class Entry {
         final long atMillis;
         final long units;
+        /** Which item, so a rule about one of them can ask about one of them. */
+        final String itemId;
 
-        Entry(long atMillis, long units) {
+        Entry(long atMillis, long units, String itemId) {
             this.atMillis = atMillis;
             this.units = units;
+            this.itemId = itemId;
         }
     }
 
@@ -101,10 +104,31 @@ public class DepositLimiter {
     }
 
     /** Notes a deposit that was actually written. */
-    public synchronized void record(UUID userId, long units, long nowMillis) {
+    public synchronized void record(UUID userId, String itemId, long units,
+                                    long nowMillis) {
         if (!tracking() || userId == null || units <= 0) return;
         recent.computeIfAbsent(userId, k -> new ArrayDeque<>())
-                .addLast(new Entry(nowMillis, units));
+                .addLast(new Entry(nowMillis, units, itemId));
+    }
+
+    /**
+     * Units of one item this identity has deposited inside the window.
+     *
+     * Per item, because the rule it serves is per item — and because a check on a single
+     * deposit would be answered by making two of them.
+     */
+    public synchronized long usedBy(UUID userId, String itemId, long nowMillis) {
+        if (!tracking() || userId == null || itemId == null) return 0;
+
+        Deque<Entry> entries = recent.get(userId);
+        if (entries == null) return 0;
+        prune(entries, nowMillis);
+
+        long total = 0;
+        for (Entry e : entries) {
+            if (itemId.equals(e.itemId)) total += e.units;
+        }
+        return total;
     }
 
     /** Units this identity has deposited inside the window. */
@@ -113,22 +137,24 @@ public class DepositLimiter {
 
         Deque<Entry> entries = recent.get(userId);
         if (entries == null) return 0;
-
-        // Dropped on read rather than on a timer: there is no thread here, and an
-        // identity that stopped depositing should stop costing memory the next time
-        // anyone asks about it.
-        long cutoff = nowMillis - windowMillis;
-        while (!entries.isEmpty() && entries.peekFirst().atMillis <= cutoff) {
-            entries.removeFirst();
-        }
-        if (entries.isEmpty()) {
-            recent.remove(userId);
-            return 0;
-        }
+        prune(entries, nowMillis);
 
         long total = 0;
         for (Entry e : entries) total += e.units;
         return total;
+    }
+
+    /**
+     * Drops what has aged out.
+     *
+     * On read rather than on a timer: there is no thread here, and an identity that
+     * stopped depositing should stop costing memory the next time anyone asks about it.
+     */
+    private void prune(Deque<Entry> entries, long nowMillis) {
+        long cutoff = nowMillis - windowMillis;
+        while (!entries.isEmpty() && entries.peekFirst().atMillis <= cutoff) {
+            entries.removeFirst();
+        }
     }
 
     /** What this identity may still deposit right now. */

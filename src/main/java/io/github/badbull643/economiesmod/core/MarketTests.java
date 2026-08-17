@@ -1563,7 +1563,7 @@ public class MarketTests {
             long t = 1_000_000L;
 
             check("under the cap is allowed", lim.allows(ALICE, 60, t) ? 1 : 0, 1);
-            lim.record(ALICE, 60, t);
+            lim.record(ALICE, IRON, 60, t);
             check("and is counted", lim.usedBy(ALICE, t), 60);
             check("what is left", lim.remainingFor(ALICE, t), 40);
 
@@ -1595,12 +1595,12 @@ public class MarketTests {
             // a running total even with no ceiling set, or it would compare each deposit
             // alone against claimed play time and never a sum — which is a hundred units
             // as often as you like.
-            off.record(ALICE, 500, 1L);
+            off.record(ALICE, IRON, 500, 1L);
             check("but deposits are still counted", off.usedBy(ALICE, 1L), 500);
 
             DepositLimiter untracked = new DepositLimiter(0, 0L);
             check("with no window, nothing is kept", untracked.tracking() ? 1 : 0, 0);
-            untracked.record(ALICE, 500, 1L);
+            untracked.record(ALICE, IRON, 500, 1L);
             check("and nothing is counted", untracked.usedBy(ALICE, 1L), 0);
 
             check("a default config has no cap",
@@ -1829,6 +1829,38 @@ public class MarketTests {
             // And a fork at genesis costs every order placed since.
             check("a fork at the very start costs all four",
                     BranchDiff.ordersOnlyAfter(log, 1, ALICE).size(), 4);
+        }
+
+        section("W3: deposits are weighed against the player's own statistics");
+        {
+            // The one figure here the player did not write. Minecraft counts mined,
+            // crafted and picked up during ordinary play; /give increments none of them,
+            // so somebody handing over far more than they have ever handled is
+            // contradicting a record they cannot quietly restate.
+            WorldAttestation a = new WorldAttestation();
+            a.gameMode = "survival";
+            a.handledByItem = new java.util.HashMap<>();
+            a.handledByItem.put(IRON, 500L);
+
+            check("what it says about that item", a.handledOf(IRON), 500);
+            check("and nothing about others", a.handledOf(DIAMOND), 0);
+            check("or about an item it was never given",
+                    new WorldAttestation().handledOf(IRON), 0);
+
+            // Per item, so a large haul of one thing says nothing about another.
+            DepositLimiter lim = new DepositLimiter(0, 60_000L);
+            long t = 1_000L;
+            lim.record(ALICE, IRON, 300, t);
+            lim.record(ALICE, DIAMOND, 40, t);
+            check("iron is counted as iron", lim.usedBy(ALICE, IRON, t), 300);
+            check("diamonds separately", lim.usedBy(ALICE, DIAMOND, t), 40);
+            check("and together for the overall cap", lim.usedBy(ALICE, t), 340);
+
+            // Splitting a deposit must not get round it, which is why the running total
+            // is what the rule reads rather than the single event.
+            lim.record(ALICE, IRON, 300, t);
+            check("a second deposit adds to the first",
+                    lim.usedBy(ALICE, IRON, t), 600);
         }
 
         section("W1: an attestation is judged by contradiction, not belief");
