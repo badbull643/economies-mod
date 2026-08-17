@@ -119,9 +119,15 @@ public class WorldAttestation {
      * inventory at the handshake: the host needs one number at one moment, and shipping
      * a map of every item anybody has ever touched to answer it would be absurd.
      *
+     * Picked up counts net of dropped, because picking something up raises the figure
+     * regardless of where it came from — including an item thrown on the ground a
+     * second earlier. Give, drop, collect would otherwise launder anything into the
+     * statistic meant to be evidence against it, once per cycle and repeatable.
+     *
      * Undercounts by design. Smelted output and anything taken from a chest never touch
-     * PICKED_UP, so the number is a floor on what somebody has handled rather than a
-     * measure of it — which is why the rule built on it is a generous multiple.
+     * PICKED_UP, and handing items to a friend counts against the giver, so the number
+     * is a floor on what somebody has handled rather than a measure of it — which is
+     * why the rule built on it is a generous multiple.
      */
     public Map<String, Long> handledByItem;
 
