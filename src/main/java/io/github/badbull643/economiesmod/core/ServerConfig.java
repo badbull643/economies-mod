@@ -138,6 +138,60 @@ public class ServerConfig {
     public List<String> deny = new ArrayList<>();
 
     /**
+     * Add an identity to deny when it is caught changing its world after being admitted.
+     *
+     * Only that case. Arriving with cheats already on is refused at the door and needs
+     * no permanent record — exclusion has already happened, and banning somebody for a
+     * world they told you about honestly punishes the honesty. Being admitted under one
+     * description and then changing the thing that was checked is a different act, and
+     * the only one here that looks like a decision rather than a state.
+     *
+     * Off by default, and worth thinking about before switching on: the evidence is a
+     * self-report, so this bans people who told the truth about themselves and never
+     * touches anyone running a modified client. It is a rule for a server whose players
+     * are honest and whose operator wants a hard line, not a defence against cheating.
+     */
+    public boolean banOnWorldChange = false;
+
+    /**
+     * Where this config was read from, so a ban can be written back.
+     *
+     * Transient: it is a fact about this run, not a setting, and Gson would otherwise
+     * write a machine-specific path into a file an operator may well copy elsewhere.
+     */
+    public transient Path sourceFile;
+
+    /**
+     * Adds an identity to the deny list and writes it down. True if it was not already
+     * there.
+     *
+     * Synchronized with {@link #refuses}, which walks the same list from every
+     * connection thread — a ban arriving mid-iteration would otherwise throw rather
+     * than refuse anybody.
+     *
+     * Persisted immediately, because a ban that only lasts until the next restart is
+     * not the thing the word describes. Left in the file for an operator to remove,
+     * which is the only way back.
+     */
+    public synchronized boolean ban(String userId) {
+        if (userId == null || userId.trim().isEmpty()) return false;
+        if (deny == null) deny = new ArrayList<>();
+        if (listed(deny, userId.trim())) return false;
+
+        deny.add(userId.trim());
+        if (sourceFile != null) {
+            try {
+                save(sourceFile);
+            } catch (IOException e) {
+                // The ban still holds for this run; it just will not survive a restart.
+                System.err.println("[host] banned " + userId + " but could not write it"
+                        + " to " + sourceFile + ": " + e.getMessage());
+            }
+        }
+        return true;
+    }
+
+    /**
      * Why this identity is not welcome, or null when it is.
      *
      * Deny beats allow, which is the conventional order and the safe one: an identity
@@ -145,7 +199,7 @@ public class ServerConfig {
      * can undo. Case-insensitive because a UUID is hex and reaches the config file by
      * being typed or pasted by a human.
      */
-    public String refuses(String userId) {
+    public synchronized String refuses(String userId) {
         if (userId == null || userId.trim().isEmpty()) {
             return "no identity presented";
         }
@@ -240,7 +294,13 @@ public class ServerConfig {
      * stopping — the operator is one corrected file and one restart away either way.
      */
     public static ServerConfig load(Path file) throws IOException {
-        if (!Files.exists(file)) return new ServerConfig();
+        if (!Files.exists(file)) {
+            // Still records where it would live, so a ban on a first run has somewhere
+            // to be written rather than lasting only until the next restart.
+            ServerConfig fresh = new ServerConfig();
+            fresh.sourceFile = file;
+            return fresh;
+        }
 
         String json;
         try {
@@ -264,6 +324,7 @@ public class ServerConfig {
         if (loaded == null) {
             throw new IOException(file + " is empty — delete it to start with defaults");
         }
+        loaded.sourceFile = file;
         return loaded;
     }
 
