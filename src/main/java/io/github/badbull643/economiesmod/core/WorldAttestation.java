@@ -44,8 +44,37 @@ public class WorldAttestation {
     /** Total world age in ticks, as the client reports it. 20 ticks is one second. */
     public long worldAgeTicks;
 
-    /** Whether commands are enabled for this world right now. */
+    /**
+     * Whether the world was created with cheats enabled, from its saved settings.
+     *
+     * Not the whole answer on its own — see {@link #cheatsLive}.
+     */
     public boolean commandsAllowed;
+
+    /**
+     * Whether commands are available right now, whatever the world was created with.
+     *
+     * Open to LAN with "Allow Cheats" ticked calls PlayerManager.setCheatsAllowed and
+     * never touches the saved level settings, so a world created without cheats reports
+     * commandsAllowed false for the rest of its life while /give works perfectly well.
+     * Checking only the saved flag would have made that the obvious way past every
+     * cheat-related rule here.
+     *
+     * Read from the running server rather than the save, which is why both exist: the
+     * pair also distinguishes "always had cheats" from "turned them on this session",
+     * and the second is the more interesting one to see in a log.
+     */
+    public boolean cheatsLive;
+
+    /** Either route to commands. What every rule about cheating should actually ask. */
+    public boolean cheatsAvailable() {
+        return commandsAllowed || cheatsLive;
+    }
+
+    /** Cheats switched on for this session in a world that was not made with them. */
+    public boolean cheatsEnabledLater() {
+        return cheatsLive && !commandsAllowed;
+    }
 
     /** The world's game mode, as a plain string: "survival", "creative", ... */
     public String gameMode;
@@ -88,8 +117,14 @@ public class WorldAttestation {
         if (config.refuseCreativeWorlds && isCreative()) {
             out.add("this world is in creative mode");
         }
-        if (config.refuseCheatWorlds && commandsAllowed) {
-            out.add("this world has commands enabled");
+        if (config.refuseCheatWorlds && cheatsAvailable()) {
+            // Named separately, because the two are not equally suspicious. A world made
+            // with cheats is usually somebody who ticked a box a year ago; cheats
+            // switched on mid-session, in a world that did not have them, is the shape
+            // of somebody who wanted something.
+            out.add(cheatsEnabledLater()
+                    ? "commands were switched on in this world after it was created"
+                    : "this world has commands enabled");
         }
 
         // The contradiction check. Not "have you cheated" — unanswerable — but "is what

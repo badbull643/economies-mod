@@ -43,6 +43,14 @@ public final class WorldFacts {
                     ? server.getOverworld().getTime() : 0;
 
             a.commandsAllowed = props.areCommandsAllowed();
+
+            // The live answer, which the saved one does not give. Open to LAN with
+            // "Allow Cheats" sets this and leaves the world's saved settings alone, so
+            // reading only the save would report no cheats in a world where /give
+            // works. Verified against the remapped jar: openToLan calls
+            // PlayerManager.setCheatsAllowed and touches nothing else.
+            a.cheatsLive = server.getPlayerManager() != null
+                    && server.getPlayerManager().areCheatsAllowed();
             a.hardcore = props.isHardcore();
             a.gameMode = props.getGameMode() != null
                     ? props.getGameMode().getName() : "unknown";
