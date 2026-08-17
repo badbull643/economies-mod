@@ -17,6 +17,7 @@ below assumes they pass.
   correctly declining a non-fast-forward
 - Dedicated launcher: `--help`, `--write-config`, bootstrap, `--creator-key`, bad port,
   unknown argument, busy port
+- **A1** `/trade` queries, **A2** multiple markets, **A3** the trading fee control
 
 ---
 
@@ -24,38 +25,28 @@ below assumes they pass.
 
 Cheapest group. Nothing here needs a second window.
 
-### A1. `/trade` queries — never run at all
+### A5. Listing fee — new, never exercised
 
-- `/trade` — lists the three subcommands
-- `/trade balance` — credits and holdings, or "Holding nothing in the market"
-- `/trade orders` — your resting orders, or the "nothing resting" line
-- `/trade price ` then **Tab** — completion should offer item ids
-- `/trade price minecraft:iron_ingot` — best bid, best ask, last traded
-- Run any of them in a world with **no** market — expect "No market here yet", not a crash
+Creator only, on the Market tab beside the trading fee.
 
-### A2. Multiple markets per world — never exercised
+- Set a listing fee of `5` → `About this market` gains a line saying it is kept even if
+  you cancel
+- Place an order → credits drop by 5 immediately, whether buy or sell
+- **Cancel that order** → the reservation comes back, the 5 does not. That is the whole
+  mechanism; if it is refunded, it deters nothing
+- Place a **tiny** order → still costs 5. Flat is the point: it prices the number of
+  orders, not their value
+- Spend down to under 5 credits and try to sell → refused, naming the amount. A seller
+  offering goods still needs credits to list, which is the awkward part worth seeing
+- Set it back to `0`
 
-- Market tab → **Add another market** → confirm
-- Expect: status says you are now in an empty slot, and the screen offers Create /
-  Import / Connect
-- Create a market in it, then check the **Markets in this world** list appears with two
-  rows, the active one marked `>`
-- Click the other row → it switches, and the header/credits change to that market
-- **The one that matters:** switch back and confirm balances and orders are intact.
-  Switching must not cost anything.
-- Quit the world entirely, rejoin → it should still be on the slot you left it on
+### A6. Removing a market — new
 
-### A3. Fee control — never seen, creator only
-
-Needs a market **you** created (check `About this market` shows no "Set by whoever
-created this market" line).
-
-- Market tab → a fee field and **Set trading fee** button should appear
-- Type `2.5` → confirm → `About this market` should read `2.5%`
-- Type `abc`, `-1`, `60` → each refused with a specific message, nothing changed
-- Then **sell something to another player** and check the seller receives less than the
-  gross. This is the only way to confirm the tax actually settles.
-- Set it back to `0` → the fee line reads "none"
+- With two markets in the world, switch to the **second** one → **Remove this market**
+- The DANGER text should say what is lost and that your other markets are untouched
+- After removing, you should be back on the first market with it intact
+- Switch to the **first** market → the Remove button should be gone. It cannot be
+  removed; discarding its history is the route for that
 
 ### A4. Fork-reset re-place checklist — never live
 
@@ -79,6 +70,16 @@ Needs a fork (see B2), then:
 
 - Alice hosts, Bob connects, place matching orders
 - Both should get a fill notice; the seller's credit should be net of any fee
+- **Make the sale big enough for the fee to exist.** At 2.5% nothing is taken below a
+  40-credit sale, so trade e.g. 10 at 10 rather than 10 at 2. `About this market` states
+  the threshold
+
+### B4. What an order is about to do — new
+
+- Place a sell far above the best bid → the status line should say what it is waiting
+  for and at what price, not just "Sell sent..."
+- Place one that crosses → it should say it should trade now
+- Place the first order on an untouched item → "nobody is buying yet"
 
 ### B2. Fork, then reset
 
@@ -138,6 +139,20 @@ Each item needs a `server-config.json` change and a restart. Group them into one
 - Connect from a creative world → refused
 - Connect from a survival world → admitted
 - Console logs `reports Nh in a survival world (<hash>)` on connect
+
+**C5. The two cheat routes — new, and the ones worth most here.**
+
+```json
+{ "refuseCheatWorlds": true, "refuseCreativeWorlds": false }
+```
+
+- Survival world **created with cheats on** → refused
+- Survival world **created without cheats**, then **Open to LAN → Allow Cheats**, then
+  connect → refused, and the reason should say commands were switched on after the
+  world was created rather than that it has them
+- **The one that matters:** connect from a clean world first, get in, and only *then*
+  Open to LAN with cheats. You should be dropped mid-session. The handshake is a
+  photograph, and this is the check that the picture is re-taken
 
 ```json
 { "maxDepositUnitsPerPlayHour": 100, "refuseCreativeWorlds": false }
