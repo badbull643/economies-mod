@@ -1075,7 +1075,11 @@ public class MarketStateHolder {
      */
     private static ServerConfig hostPolicyFor(Path worldDir, int port, String playerName,
                                               UUID userId) {
-        Path file = worldDir.resolve("economiesmod").resolve("host-config.json");
+        // Normalised, because the world directory arrives with a trailing "." from
+        // getSavePath and the raw form prints as saves\world\.\economiesmod\... — which
+        // is the path an operator is about to go and create a file at.
+        Path file = worldDir.resolve("economiesmod").resolve("host-config.json")
+                .normalize();
 
         ServerConfig cfg;
         try {

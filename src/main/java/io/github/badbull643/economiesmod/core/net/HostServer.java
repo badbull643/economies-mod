@@ -1239,7 +1239,15 @@ public class HostServer {
         }
 
         if (result.accepted) {
-            System.out.println("[host] seq " + se.seq + " " + msg.eventType);
+            // Deposits say who and what. Everything else is a line in a ledger anybody
+            // can read back; a deposit is the one event a rule may have just refused,
+            // and "seq 15 DepositAndList" cannot be told apart from the one that was
+            // turned away a moment earlier.
+            String detail = depositUnits > 0
+                    ? " — " + depositUnits + " " + depositItemOf(event)
+                            + " from " + event.userId
+                    : "";
+            System.out.println("[host] seq " + se.seq + " " + msg.eventType + detail);
             Message.Accepted acc = new Message.Accepted();
             acc.logLine = log.rawLineFor(se.seq);
             broadcast(acc);
