@@ -17,15 +17,27 @@ below assumes they pass.
   correctly declining a non-fast-forward
 - Dedicated launcher: `--help`, `--write-config`, bootstrap, `--creator-key`, bad port,
   unknown argument, busy port
-- **A1** `/trade` queries, **A2** multiple markets, **A3** the trading fee control
+- **A1** `/trade` queries, **A2** multiple markets, **A3** the trading fee control,
+  **A5** the listing fee, **A6** removing a market
+- Deposit caps and all three cheat routes, confirmed live while debugging them: created
+  with cheats, enabled later via Open to LAN, and enabled-then-reloaded
+
+**Everything in Group A is done except A4**, which needs a fork and so belongs with B2.
 
 ---
 
 ## Group A — one client, no server
 
-Cheapest group. Nothing here needs a second window.
+Only A4 remains here, and it needs a fork — do it straight after B2.
 
-### A5. Listing fee — new, never exercised
+### A5. Listing fee — DONE
+
+### A6. Removing a market — DONE
+
+<details>
+<summary>Kept for reference</summary>
+
+### A5. Listing fee
 
 Creator only, on the Market tab beside the trading fee.
 
@@ -48,7 +60,9 @@ Creator only, on the Market tab beside the trading fee.
 - Switch to the **first** market → the Remove button should be gone. It cannot be
   removed; discarding its history is the route for that
 
-### A4. Fork-reset re-place checklist — never live
+</details>
+
+### A4. Fork-reset re-place checklist — the one still to do here
 
 Needs a fork (see B2), then:
 
