@@ -1866,14 +1866,34 @@ public class MarketScreen extends Screen {
     /**
      * The third column when there is one, the left panel when there is not.
      *
-     * Every destination but Trading leaves that column empty, and the list is at its
-     * most relevant right after a migration — which lands you on Market, where it was
-     * covering the guidance explaining what just happened. Trading is the one screen
-     * whose third column is occupied, and there the inventory is the thing you would
-     * be reading while re-placing, so it keeps it and the list falls back to the left.
+     * Deliberately not a function of the active tab. It used to fall back to the left
+     * panel on Trading, on the reasoning that Trading is the one screen whose third
+     * column is already occupied. What that produced was a box that jumped across the
+     * screen on every tab change while it existed, which reads as a rendering fault
+     * rather than as a considered layout — and the list outlives any one tab, so it is
+     * the thing that has to stay still.
+     *
+     * It draws after every panel, so on Trading it covers the inventory rather than
+     * fighting it. That is the right one to cover: re-placing an order needs its price
+     * and volume, both of which are on the row itself.
+     *
+     * Still switches on width, because a window too narrow for a third column has no
+     * third column to sit in — but that is a resize, where things are expected to move.
      */
     private boolean replaceInSideColumn() {
-        return invX >= 0 && activeScreen != SCREEN_TRADING;
+        return invX >= 0;
+    }
+
+    /**
+     * Whether the re-place box is sitting on the left panel and hiding what is there.
+     *
+     * The one place that decides it, because rendering and hit-testing have to agree.
+     * They did not: discovery stopped drawing whenever any orders were waiting, while
+     * its click handler went on testing rows regardless, so the host list vanished and
+     * stayed clickable. Only ever true on a window too narrow for a third column.
+     */
+    private boolean replaceCoversLeftPanel() {
+        return !MarketStateHolder.pendingReplace().isEmpty() && !replaceInSideColumn();
     }
 
     private int replaceBoxX() { return replaceInSideColumn() ? invX : listX; }
@@ -2007,10 +2027,12 @@ public class MarketScreen extends Screen {
     private void renderDiscovery(MatrixStack matrices, int px,
                                  double mouseX, double mouseY) {
         int py = discoveryStartY();
-        // The re-place list takes this space while it exists — it's transient and
-        // actionable, discovery is neither. render() draws it directly now, on
-        // whichever tab you are on, so this only has to stand aside.
-        if (!MarketStateHolder.pendingReplace().isEmpty()) return;
+        // Only when the re-place box is genuinely on top of this. It used to stand
+        // aside whenever the box existed at all, from when the box lived in the left
+        // panel — but it sits in the third column wherever there is one, so the host
+        // list was being hidden by something that was not covering it. The clicks kept
+        // landing, which made the rows invisible and still joinable.
+        if (replaceCoversLeftPanel()) return;
 
         int x = px;
         int y = py;
@@ -2150,9 +2172,11 @@ public class MarketScreen extends Screen {
         // in the left panel and only one of them is ever drawn.
         if (button == 0 && slotClicked(mouseX, mouseY)) return true;
 
-        // Only where the host list is actually drawn. Hit-testing it from another tab
-        // would join a host from a row nobody can see.
-        if (button == 0 && !polling && activeScreen == SCREEN_NETWORK) {
+        // Only where the host list is actually drawn — same condition renderDiscovery
+        // uses, including the re-place box covering it. Hit-testing a row nobody can
+        // see joins a host by accident, which is what happened here.
+        if (button == 0 && !polling && activeScreen == SCREEN_NETWORK
+                && !replaceCoversLeftPanel()) {
             MinecraftClient mc = MinecraftClient.getInstance();
             String myUuid = mc.player != null
                     ? MinecraftIds.userIdOf(mc.player).toString() : null;
