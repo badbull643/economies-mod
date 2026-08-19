@@ -594,8 +594,6 @@ public class HostServer {
                         sendError(channel, Refusal.NOT_ADMITTED, why);
                         break;
                     }
-                } else if (msg instanceof Message.Ping) {
-                    channel.send(new Message.Pong());
                 } else {
                     System.out.println("[host] ignoring unexpected " + msg.type);
                 }
@@ -1109,11 +1107,6 @@ public class HostServer {
                 e.printStackTrace();
             }
         }
-    }
-
-    // in HostServer
-    public boolean forgetIdentity(UUID userId) throws IOException {
-        return keyRegistry.forget(userId);
     }
 
     private void processProposal(Proposal p) throws IOException {

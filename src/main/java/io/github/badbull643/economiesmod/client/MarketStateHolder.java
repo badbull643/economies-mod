@@ -236,11 +236,9 @@ public class MarketStateHolder {
     private static HostServer hostServer;
     private static Thread hostThread;
 
-    // in MarketStateHolder
     private static int myHostPort = 25555;
 
     public static void setMyHostPort(int port) { myHostPort = port; }
-    public static int myHostPort() { return myHostPort; }
 
 
     private static Path identityFile;

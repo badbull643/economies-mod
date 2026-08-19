@@ -3500,11 +3500,7 @@ public class MarketScreen extends Screen {
 
     /**
      * The one strip that is the same wherever you are: what this client is doing, what
-     * you're worth, the time, and the way out to everything else.
-     *
-     * Real-world clock rather than the world's. In-game time tells you whether it is
-     * night where you are standing; this market spans separate worlds, and the useful
-     * question is whether the people you trade with are plausibly awake.
+     * you're worth, and the way out to everything else.
      */
     private void renderHeader(MatrixStack m) {
         drawCenteredText(m, this.textRenderer, this.title, this.width / 2, 8, 0xFFFFFF);
@@ -3533,13 +3529,6 @@ public class MarketScreen extends Screen {
                 }
             }
         }
-
-        String clock = java.time.LocalTime.now()
-                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
-        int clockW = this.textRenderer.getWidth(clock);
-        // Against the right edge of the content box rather than the window, so it lines
-        // up with the tab row and the panels underneath it.
-        label(m, clock, listX + contentW - clockW, 9, 0xA0A0A0);
     }
 
     /**
@@ -3605,7 +3594,6 @@ public class MarketScreen extends Screen {
      * anything.
      */
     private static final class Overlay {
-        static final int NOTICE = 0;
         static final int CONFIRM = 1;
         static final int DANGER = 2;
 
@@ -3645,10 +3633,6 @@ public class MarketScreen extends Screen {
             0, 0, OVERLAY_BTN_W, OVERLAY_BTN_H, new LiteralText(""), b -> {});
     private final ButtonWidget overlayDismissButton = new ButtonWidget(
             0, 0, OVERLAY_BTN_W, OVERLAY_BTN_H, new LiteralText(""), b -> {});
-
-    private void showNotice(String title, String body) {
-        overlays.addLast(new Overlay(Overlay.NOTICE, title, body, "OK", null));
-    }
 
     private void showConfirm(String title, String body, String confirmLabel, Runnable action) {
         overlays.addLast(new Overlay(Overlay.CONFIRM, title, body, confirmLabel, action));
@@ -3716,8 +3700,7 @@ public class MarketScreen extends Screen {
 
         int[] box = overlayBox(o);
         // Vanilla's own severity colours: red for destructive, yellow for a choice.
-        int accent = o.kind == Overlay.DANGER ? 0xFFFF5555
-                : o.kind == Overlay.CONFIRM ? 0xFFFFAA00 : 0xFF55FFFF;
+        int accent = o.kind == Overlay.DANGER ? 0xFFFF5555 : 0xFFFFAA00;
 
         vanillaPanel(m, box[0], box[1], box[2], box[3]);
 
@@ -3848,9 +3831,15 @@ public class MarketScreen extends Screen {
             return true;
         }
 
-        // Derived from focus rather than a list of fields: the old enumeration left out
-        // marketNameField, so typing "m" into it closed the screen.
-        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_M
+        // Whatever opens the market closes it, asked of the keybind rather than
+        // hardcoded to M — otherwise this would go on closing the screen for a key the
+        // mod no longer claims, and would ignore whatever the player actually bound.
+        // Unbound matches nothing, which leaves Escape as the way out, as it always was.
+        //
+        // Still gated on focus rather than a list of fields: the old enumeration left
+        // out marketNameField, so typing "m" into it closed the screen.
+        if (MarketKeybinds.openMarketKey != null
+                && MarketKeybinds.openMarketKey.matchesKey(keyCode, scanCode)
                 && !(this.getFocused() instanceof TextFieldWidget)) {
             this.onClose();
             return true;
