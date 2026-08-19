@@ -1,5 +1,5 @@
-[21:04:23] [main/INFO] (FabricLoader/GameProvider) Loading Minecraft 1.16.5 with Fabric Loader 0.19.2
-[21:04:23] [main/INFO] (FabricLoader) Loading 50 mods:
+[21:35:09] [main/INFO] (FabricLoader/GameProvider) Loading Minecraft 1.16.5 with Fabric Loader 0.19.2
+[21:35:09] [main/INFO] (FabricLoader) Loading 50 mods:
 	- economiesmod 1.0-SNAPSHOT
 	- fabric 0.42.0+1.16
 	- fabric-api-base 0.4.0+3cc0f0907d
@@ -50,226 +50,355 @@
 	- java 8
 	- minecraft 1.16.5
 	- mixinextras 0.5.4
-[21:04:23] [main/INFO] (FabricLoader/Mixin) SpongePowered MIXIN Subsystem Version=0.8.7 Source=file:/C:/Users/danie/.gradle/caches/modules-2/files-2.1/net.fabricmc/sponge-mixin/0.17.2+mixin.0.8.7/edf98d1d98229e46e36c61774ae2b54dcd852981/sponge-mixin-0.17.2+mixin.0.8.7.jar Service=Knot/Fabric Env=CLIENT
-[21:04:24] [main/INFO] (FabricLoader/Mixin) Loaded Fabric development mappings for mixin remapper!
-[21:04:24] [main/INFO] (FabricLoader/MixinExtras|Service) Initializing MixinExtras via com.llamalad7.mixinextras.service.MixinExtrasServiceImpl(version=0.5.4).
-[21:04:28] [main/INFO] (Minecraft) Environment: authHost='https://authserver.mojang.com', accountsHost='https://api.mojang.com', sessionHost='https://sessionserver.mojang.com', servicesHost='https://api.minecraftservices.com', name='PROD'
-[21:04:29] [main/INFO] (Minecraft) Setting user: Alice
-[21:04:30] [main/INFO] (Indigo) [Indigo] Registering Indigo renderer!
-[21:04:31] [main/INFO] (Minecraft) Backend library: LWJGL version 3.3.2-snapshot
-[21:04:33] [main/INFO] (Minecraft) Narrator library for x64 successfully loaded
-[21:04:33] [main/INFO] (Minecraft) Reloading ResourceManager: Fabric Mods (EconomiesMod, Fabric Events Interaction (v0), Fabric API Lookup API (v1), Fabric Registry Sync (v0), Fabric Object Builders (v0), Fabric Networking API (v1), Fabric Screen Handler API (v1), Fabric Renderer Registries (v1), Fabric Loader, Fabric Rendering Data Attachment (v1), Fabric Commands (v0), Fabric Lifecycle Events (v1), Fabric Events Lifecycle (v0), Fabric API Base, Fabric Screen API (v1), Fabric Crash Report Info (v1), Fabric Key Bindings (v0), Fabric Loot Tables (v1), Fabric Textures (v0), Fabric Networking Block Entity (v0), Fabric Structure API (v1), Fabric Resource Loader (v0), Fabric Entity Events (v1), Fabric Tool Attribute API (v1), Fabric Item Groups (v0), Fabric BlockRenderLayer Registration (v1), Fabric Key Binding API (v1), Fabric Rendering (v0), Fabric Biome API (v1), Fabric Containers (v0), Fabric Rendering (v1), Fabric Command API (v1), Fabric Rendering Fluids (v1), Fabric Renderer - Indigo, Fabric Dimensions API (v1), Fabric Transfer API (v1), Fabric Object Builder API (v1), Fabric Renderer API (v1), Fabric Particles (v1), Fabric Item API (v1), Fabric Mining Levels (v0), Fabric API, Fabric Models (v0), Fabric Networking (v0), Fabric Content Registries (v0), Fabric Tag Extensions (v0), Fabric Game Rule API (v1)), Default, Programmer Art ()
-[21:04:33] [Realms Notification Availability checker #1/INFO] (Minecraft) Could not authorize you against Realms server: java.lang.RuntimeException: Failed to parse into SignedJWT: FabricMC
-[21:04:35] [main/INFO] (Minecraft) OpenAL initialized.
-[21:04:35] [main/INFO] (Minecraft) Sound engine started
-[21:04:36] [main/INFO] (Minecraft) Created: 1024x1024x4 minecraft:textures/atlas/blocks.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 256x128x4 minecraft:textures/atlas/signs.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 1024x512x4 minecraft:textures/atlas/banner_patterns.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 1024x512x4 minecraft:textures/atlas/shield_patterns.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 256x256x4 minecraft:textures/atlas/chest.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 512x256x4 minecraft:textures/atlas/beds.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 512x256x4 minecraft:textures/atlas/shulker_boxes.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 256x256x0 minecraft:textures/atlas/particles.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 256x256x0 minecraft:textures/atlas/paintings.png-atlas
-[21:04:36] [main/INFO] (Minecraft) Created: 256x128x0 minecraft:textures/atlas/mob_effects.png-atlas
-[21:05:09] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
-[21:05:09] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
-[21:05:09] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
-[21:05:09] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
-[21:05:09] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
-[21:05:09] [main/INFO] (Minecraft) Reloading ResourceManager: Default, Fabric Mods (Fabric Tool Attribute API (v1))
-[21:05:10] [main/INFO] (Minecraft) Loaded 7 recipes
-[21:05:10] [main/INFO] (Minecraft) Loaded 927 advancements
-[21:05:10] [main/INFO] (BiomeModificationImpl) Applied 0 biome modifications to 0 of 79 new biomes in 1.683 ms
-[21:05:11] [main/INFO] (Minecraft) Environment: authHost='https://authserver.mojang.com', accountsHost='https://api.mojang.com', sessionHost='https://sessionserver.mojang.com', servicesHost='https://api.minecraftservices.com', name='PROD'
-[21:05:11] [Server thread/INFO] (Minecraft) Starting integrated minecraft server version 1.16.5
-[21:05:11] [Server thread/INFO] (Minecraft) Generating keypair
-[21:05:11] [Server thread/INFO] (Minecraft) Preparing start region for dimension minecraft:overworld
-[21:05:12] [main/INFO] (Minecraft) Preparing spawn area: 0%
-[21:05:12] [main/INFO] (Minecraft) Preparing spawn area: 0%
-[21:05:12] [main/INFO] (Minecraft) Preparing spawn area: 37%
-[21:05:15] [main/INFO] (Minecraft) Preparing spawn area: 83%
-[21:05:15] [main/INFO] (Minecraft) Preparing spawn area: 83%
-[21:05:15] [main/INFO] (Minecraft) Preparing spawn area: 83%
-[21:05:15] [main/INFO] (Minecraft) Preparing spawn area: 83%
-[21:05:15] [main/INFO] (Minecraft) Preparing spawn area: 83%
-[21:05:15] [main/INFO] (Minecraft) Preparing spawn area: 99%
-[21:05:15] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] identity loaded from D:\EconomiesMod\EconomiesMod\run\config\economiesmod-identity-Alice.key
-[21:05:15] [Server thread/INFO] (Minecraft) [STDOUT]: [peers] loaded 7 known peers
-[21:05:15] [main/INFO] (Minecraft) Time elapsed: 4333 ms
-[21:05:16] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 16 events
-[21:05:16] [Server thread/INFO] (Minecraft) Changing view distance to 11, from 10
-[21:05:19] [Server thread/INFO] (Minecraft) Alice[local:E:cdb2d558] logged in with entity id 201 at (348.0649726891312, 97.0, -150.92583280775364)
-[21:05:19] [Server thread/INFO] (Minecraft) Alice joined the game
-[21:05:20] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:05:20] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:05:20] [main/INFO] (Minecraft) Loaded 111 advancements
-[21:05:21] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:05:21] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:06:06] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:06:06] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:06:07] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:06:07] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:08:02] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:08:02] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:08:02] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:08:02] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:08:03] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:08:03] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:08:04] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:08:04] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:08:55] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] no D:\EconomiesMod\EconomiesMod\run\saves\New World\economiesmod\host-config.json — hosting with friend-group settings: open admission, no deposit caps, no world checks
-[21:08:55] [market-host-start/INFO] (Minecraft) [STDOUT]: [keys] loaded 2 known keys
-[21:08:55] [market-host-start/INFO] (Minecraft) [STDOUT]: [host] serving 'newA' (aeb96f2b-2b9e-4c4e-95fe-d5c8c8c32931) — replayed 17 events
-[21:08:55] [market-host/INFO] (Minecraft) [STDOUT]: [host] listening on port 25555
-[21:08:55] [market-host-start/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=17 appliedSeq=17 persist=false
-[21:08:55] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:51040
-[21:08:55] [market-client/INFO] (Minecraft) [STDOUT]: [host] Alice reports 1.3h in a creative world with commands enabled (a69cfefea6ba25c4)
-[21:08:55] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 0 events to /127.0.0.1:51040
-[21:08:55] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] connected to localhost:25555 at seq 17
-[21:08:55] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting on port 25555
-[21:08:55] [market-client/INFO] (Minecraft) [STDOUT]: [host] /127.0.0.1:51040 synced and live (1 connected)
-[21:09:01] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:54153
-[21:09:01] [market-client/INFO] (Minecraft) [STDOUT]: [host] Bob reports 0.8h in a creative world with commands enabled (179ca5bb869b4754)
-[21:09:01] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 1 events to /127.0.0.1:54153
-[21:09:01] [market-client/INFO] (Minecraft) [STDOUT]: [host] /127.0.0.1:54153 synced and live (2 connected)
-[21:09:28] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 18 DepositAndList — 1 minecraft:dirt from 10920508-d5d8-3eed-93d2-92f193afe7d7
-[21:09:54] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 19 PlaceOrder
-[21:09:54] [main/INFO] (Minecraft) [CHAT] [Exchange] Your sell order filled: 1 Dirt @ 40 · +40cr
-[21:10:51] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:10:51] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:10:51] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:10:51] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:11:01] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:11:01] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:11:01] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:11:01] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:11:23] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 20 DepositAndList — 10 minecraft:dirt from 10920508-d5d8-3eed-93d2-92f193afe7d7
-[21:11:53] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:11:53] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:11:53] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:11:53] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:11:58] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 21 Withdraw
-[21:12:02] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:12:02] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:12:02] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:12:02] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:12:10] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 22 DepositAndList — 10 minecraft:dirt from 10920508-d5d8-3eed-93d2-92f193afe7d7
-[21:13:00] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:13:00] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:13:00] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:13:00] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:13:12] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (1 remain)
-[21:14:46] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (0 remain)
-[21:14:46] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
-[21:14:46] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 22 events
-[21:15:15] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:15:15] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:15:16] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:15:16] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:15:17] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:15:17] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:15:17] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:15:17] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:15:39] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] no D:\EconomiesMod\EconomiesMod\run\saves\New World\economiesmod\host-config.json — hosting with friend-group settings: open admission, no deposit caps, no world checks
-[21:15:39] [market-host-start/INFO] (Minecraft) [STDOUT]: [keys] loaded 2 known keys
-[21:15:39] [market-host-start/INFO] (Minecraft) [STDOUT]: [host] serving 'newA' (aeb96f2b-2b9e-4c4e-95fe-d5c8c8c32931) — replayed 22 events
-[21:15:39] [market-host/INFO] (Minecraft) [STDOUT]: [host] listening on port 25555
-[21:15:39] [market-host-start/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=22 appliedSeq=22 persist=false
-[21:15:39] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:57230
-[21:15:39] [market-client/INFO] (Minecraft) [STDOUT]: [host] Alice reports 1.3h in a creative world with commands enabled (a69cfefea6ba25c4)
-[21:15:39] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 0 events to /127.0.0.1:57230
-[21:15:39] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] connected to localhost:25555 at seq 22
-[21:15:39] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting on port 25555
-[21:15:39] [market-client/INFO] (Minecraft) [STDOUT]: [host] /127.0.0.1:57230 synced and live (1 connected)
-[21:15:47] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:57235
-[21:15:47] [market-client/INFO] (Minecraft) [STDOUT]: [host] Bob reports 0.9h in a creative world with commands enabled (179ca5bb869b4754)
-[21:15:47] [market-client/INFO] (Minecraft) [STDOUT]: [host] behind: client at seq 25, we're at 22 — sent our head so they can offer a catch-up
-[21:15:47] [market-client/INFO] (Minecraft) [STDOUT]: [host] caught up 3 events from faa5dca3-c3d4-354b-ae1b-dde9e5a14b3b — now at seq 25
-[21:15:47] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:57237
-[21:15:47] [market-client/INFO] (Minecraft) [STDOUT]: [host] Bob reports 0.9h in a creative world with commands enabled (179ca5bb869b4754)
-[21:15:47] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 0 events to /127.0.0.1:57237
-[21:15:47] [market-client/INFO] (Minecraft) [STDOUT]: [host] /127.0.0.1:57237 synced and live (2 connected)
-[21:16:05] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (1 remain)
-[21:17:21] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:17:21] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:17:21] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:17:21] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:17:21] [Server thread/INFO] (Minecraft) Alice lost connection: Disconnected
-[21:17:21] [Server thread/INFO] (Minecraft) Alice left the game
-[21:17:21] [Server thread/INFO] (Minecraft) Stopping singleplayer server as player logged out
-[21:17:22] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] world stopping — shutting down
-[21:17:22] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (0 remain)
-[21:17:22] [Server thread/INFO] (Minecraft) Stopping server
-[21:17:22] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
-[21:17:22] [Server thread/INFO] (Minecraft) Saving players
-[21:17:22] [Server thread/INFO] (Minecraft) Saving worlds
-[21:17:22] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
-[21:17:22] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (New World): All chunks are saved
-[21:17:22] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
-[21:17:22] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
-[21:17:22] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
-[21:17:22] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
-[21:17:22] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (New World): All chunks are saved
-[21:17:22] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
-[21:17:22] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
-[21:17:23] [main/INFO] (Minecraft) Stopping!
-g chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
-[21:15:12] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
-[21:15:19] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:15:19] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
-[21:15:19] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
-[21:15:19] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
-[21:15:22] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (0 remain)
-[21:15:22] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
-[21:15:22] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 25 events
-[21:15:47] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=25 appliedSeq=25 persist=true
-[21:15:47] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] refused: you have events this host doesn't (you 25, host 22)
-[21:15:47] [market-connect/INFO] (Minecraft) [STDOUT]: [economiesmod] host is 3 events behind on its own market — offering them
-[21:15:47] [market-connect/INFO] (Minecraft) [STDOUT]: [economiesmod] host accepted 3 events
-[21:15:47] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=25 appliedSeq=25 persist=true
-[21:15:47] [market-connect/INFO] (Minecraft) [STDOUT]: [economiesmod] connected to 127.0.0.1:25555 at seq 25
-[21:16:05] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
-[21:16:05] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 25 events
-[21:16:20] [main/WARN] (Minecraft) Unable to play empty soundEvent: minecraft:entity.cod.ambient
-[21:16:21] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:16:21] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
-[21:16:21] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
-[21:16:21] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
-[21:16:38] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting under the rules in D:\EconomiesMod\EconomiesMod\run\saves\asdhaskjdha\economiesmod\host-config.json
-[21:16:38] [market-host-start/INFO] (Minecraft) [STDOUT]: [keys] loaded 1 known keys
-[21:16:38] [market-host-start/INFO] (Minecraft) [STDOUT]: [host] serving 'newA' (aeb96f2b-2b9e-4c4e-95fe-d5c8c8c32931) — replayed 25 events
-[21:16:38] [market-host-start/INFO] (Minecraft) [STDERR]: [economiesmod] could not bind port 25555: java.net.BindException: Address already in use: JVM_Bind
-[21:16:38] [market-host/INFO] (Minecraft) [STDERR]: [economiesmod] host stopped: java.net.BindException: Address already in use: JVM_Bind
-[21:16:38] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 25 events
-[21:17:05] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting under the rules in D:\EconomiesMod\EconomiesMod\run\saves\asdhaskjdha\economiesmod\host-config.json
-[21:17:05] [market-host-start/INFO] (Minecraft) [STDOUT]: [keys] loaded 1 known keys
-[21:17:05] [market-host-start/INFO] (Minecraft) [STDOUT]: [host] serving 'newA' (aeb96f2b-2b9e-4c4e-95fe-d5c8c8c32931) — replayed 25 events
-[21:17:05] [market-host-start/INFO] (Minecraft) [STDERR]: [economiesmod] could not bind port 25555: java.net.BindException: Address already in use: JVM_Bind
-[21:17:05] [market-host/INFO] (Minecraft) [STDERR]: [economiesmod] host stopped: java.net.BindException: Address already in use: JVM_Bind
-[21:17:05] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 25 events
-[21:17:10] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:17:10] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
-[21:17:10] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
-[21:17:10] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
-[21:17:14] [Server thread/INFO] (Minecraft) Saving and pausing game...
-[21:17:14] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
-[21:17:14] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
-[21:17:14] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
-[21:17:14] [Server thread/INFO] (Minecraft) Bob lost connection: Disconnected
-[21:17:14] [Server thread/INFO] (Minecraft) Bob left the game
-[21:17:14] [Server thread/INFO] (Minecraft) Stopping singleplayer server as player logged out
-[21:17:14] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] world stopping — shutting down
-[21:17:14] [Server thread/INFO] (Minecraft) Stopping server
-[21:17:14] [Server thread/INFO] (Minecraft) Saving players
-[21:17:14] [Server thread/INFO] (Minecraft) Saving worlds
-[21:17:14] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
-[21:17:15] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (asdhaskjdha): All chunks are saved
-[21:17:15] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
-[21:17:15] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
-[21:17:15] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
-[21:17:15] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
-[21:17:15] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (asdhaskjdha): All chunks are saved
-[21:17:15] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
-[21:17:15] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
-[21:17:19] [main/INFO] (Minecraft) Stopping!
+[21:35:09] [main/INFO] (FabricLoader/Mixin) SpongePowered MIXIN Subsystem Version=0.8.7 Source=file:/C:/Users/danie/.gradle/caches/modules-2/files-2.1/net.fabricmc/sponge-mixin/0.17.2+mixin.0.8.7/edf98d1d98229e46e36c61774ae2b54dcd852981/sponge-mixin-0.17.2+mixin.0.8.7.jar Service=Knot/Fabric Env=CLIENT
+[21:35:10] [main/INFO] (FabricLoader/Mixin) Loaded Fabric development mappings for mixin remapper!
+[21:35:10] [main/INFO] (FabricLoader/MixinExtras|Service) Initializing MixinExtras via com.llamalad7.mixinextras.service.MixinExtrasServiceImpl(version=0.5.4).
+[21:35:13] [main/INFO] (Minecraft) Environment: authHost='https://authserver.mojang.com', accountsHost='https://api.mojang.com', sessionHost='https://sessionserver.mojang.com', servicesHost='https://api.minecraftservices.com', name='PROD'
+[21:35:14] [main/INFO] (Minecraft) Setting user: Alice
+[21:35:14] [main/INFO] (Indigo) [Indigo] Registering Indigo renderer!
+[21:35:15] [main/INFO] (Minecraft) Backend library: LWJGL version 3.3.2-snapshot
+[21:35:17] [main/INFO] (Minecraft) Narrator library for x64 successfully loaded
+[21:35:17] [main/INFO] (Minecraft) Reloading ResourceManager: Fabric Mods (Fabric Networking Block Entity (v0), Fabric Key Bindings (v0), Fabric Renderer Registries (v1), Fabric Networking (v0), Fabric Loot Tables (v1), Fabric Transfer API (v1), Fabric Networking API (v1), Fabric Renderer API (v1), Fabric Registry Sync (v0), Fabric Object Builders (v0), Fabric Lifecycle Events (v1), Fabric Rendering Fluids (v1), Fabric API, Fabric Screen API (v1), Fabric API Lookup API (v1), Fabric Renderer - Indigo, Fabric Particles (v1), Fabric BlockRenderLayer Registration (v1), Fabric Structure API (v1), Fabric Content Registries (v0), Fabric Mining Levels (v0), Fabric Rendering (v0), Fabric Dimensions API (v1), Fabric Biome API (v1), Fabric Object Builder API (v1), Fabric Entity Events (v1), Fabric Rendering (v1), Fabric Crash Report Info (v1), Fabric Key Binding API (v1), Fabric Models (v0), Fabric Item API (v1), Fabric Tool Attribute API (v1), Fabric Item Groups (v0), Fabric Textures (v0), Fabric Command API (v1), Fabric Commands (v0), Fabric Tag Extensions (v0), Fabric Containers (v0), Fabric Game Rule API (v1), Fabric Events Interaction (v0), Fabric Screen Handler API (v1), Fabric Rendering Data Attachment (v1), Fabric Loader, Fabric API Base, Fabric Resource Loader (v0), EconomiesMod, Fabric Events Lifecycle (v0)), Default, Programmer Art ()
+[21:35:17] [Realms Notification Availability checker #1/INFO] (Minecraft) Could not authorize you against Realms server: java.lang.RuntimeException: Failed to parse into SignedJWT: FabricMC
+[21:35:19] [main/INFO] (Minecraft) OpenAL initialized.
+[21:35:19] [main/INFO] (Minecraft) Sound engine started
+[21:35:19] [main/INFO] (Minecraft) Created: 1024x1024x4 minecraft:textures/atlas/blocks.png-atlas
+[21:35:19] [main/INFO] (Minecraft) Created: 256x128x4 minecraft:textures/atlas/signs.png-atlas
+[21:35:19] [main/INFO] (Minecraft) Created: 1024x512x4 minecraft:textures/atlas/banner_patterns.png-atlas
+[21:35:19] [main/INFO] (Minecraft) Created: 1024x512x4 minecraft:textures/atlas/shield_patterns.png-atlas
+[21:35:19] [main/INFO] (Minecraft) Created: 256x256x4 minecraft:textures/atlas/chest.png-atlas
+[21:35:19] [main/INFO] (Minecraft) Created: 512x256x4 minecraft:textures/atlas/beds.png-atlas
+[21:35:19] [main/INFO] (Minecraft) Created: 512x256x4 minecraft:textures/atlas/shulker_boxes.png-atlas
+[21:35:20] [main/INFO] (Minecraft) Created: 256x256x0 minecraft:textures/atlas/particles.png-atlas
+[21:35:20] [main/INFO] (Minecraft) Created: 256x256x0 minecraft:textures/atlas/paintings.png-atlas
+[21:35:20] [main/INFO] (Minecraft) Created: 256x128x0 minecraft:textures/atlas/mob_effects.png-atlas
+[21:36:13] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[21:36:13] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[21:36:13] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
+[21:36:13] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[21:36:13] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[21:36:13] [main/INFO] (Minecraft) Reloading ResourceManager: Default, Fabric Mods (Fabric Tool Attribute API (v1))
+[21:36:13] [main/INFO] (Minecraft) Loaded 7 recipes
+[21:36:13] [main/INFO] (Minecraft) Loaded 927 advancements
+[21:36:13] [main/INFO] (BiomeModificationImpl) Applied 0 biome modifications to 0 of 79 new biomes in 1.240 ms
+[21:36:14] [main/INFO] (Minecraft) Environment: authHost='https://authserver.mojang.com', accountsHost='https://api.mojang.com', sessionHost='https://sessionserver.mojang.com', servicesHost='https://api.minecraftservices.com', name='PROD'
+[21:36:14] [Server thread/INFO] (Minecraft) Starting integrated minecraft server version 1.16.5
+[21:36:14] [Server thread/INFO] (Minecraft) Generating keypair
+[21:36:14] [Server thread/INFO] (Minecraft) Preparing start region for dimension minecraft:overworld
+[21:36:15] [main/INFO] (Minecraft) Preparing spawn area: 0%
+[21:36:15] [main/INFO] (Minecraft) Preparing spawn area: 0%
+[21:36:16] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[21:36:16] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[21:36:16] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[21:36:17] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] identity loaded from D:\EconomiesMod\EconomiesMod\run\config\economiesmod-identity-Alice.key
+[21:36:17] [Server thread/INFO] (Minecraft) [STDOUT]: [peers] loaded 7 known peers
+[21:36:17] [main/INFO] (Minecraft) Time elapsed: 2483 ms
+[21:36:17] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 25 events
+[21:36:17] [Server thread/INFO] (Minecraft) Changing view distance to 11, from 10
+[21:36:18] [Server thread/INFO] (Minecraft) Alice[local:E:9bd4f567] logged in with entity id 194 at (348.7230618000637, 97.0, -148.42507657762545)
+[21:36:18] [Server thread/INFO] (Minecraft) Alice joined the game
+[21:36:18] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[21:36:18] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[21:36:18] [main/INFO] (Minecraft) Loaded 111 advancements
+[21:36:19] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[21:36:19] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[21:36:24] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[21:36:24] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[21:36:24] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[21:36:24] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[21:36:25] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] no D:\EconomiesMod\EconomiesMod\run\saves\New World\economiesmod\host-config.json — hosting with friend-group settings: open admission, no deposit caps, no world checks
+[21:36:25] [market-host-start/INFO] (Minecraft) [STDOUT]: [keys] loaded 2 known keys
+[21:36:25] [market-host-start/INFO] (Minecraft) [STDOUT]: [host] serving 'newA' (aeb96f2b-2b9e-4c4e-95fe-d5c8c8c32931) — replayed 25 events
+[21:36:25] [market-host/INFO] (Minecraft) [STDOUT]: [host] listening on port 25555
+[21:36:25] [market-host-start/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=25 appliedSeq=25 persist=false
+[21:36:25] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:55339
+[21:36:25] [market-client/INFO] (Minecraft) [STDOUT]: [host] Alice reports 1.3h in a creative world with commands enabled (a69cfefea6ba25c4)
+[21:36:25] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 0 events to /127.0.0.1:55339
+[21:36:25] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] connected to localhost:25555 at seq 25
+[21:36:25] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting on port 25555
+[21:36:25] [market-client/INFO] (Minecraft) [STDOUT]: [host] /127.0.0.1:55339 synced and live (1 connected)
+[21:36:32] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /10.221.224.140:57443
+[21:36:32] [market-client/INFO] (Minecraft) [STDOUT]: [host] TestPeer reports 0.5h in a survival world with commands enabled (5d13e5c62089d6d5)
+[21:36:32] [market-client/INFO] (Minecraft) [STDOUT]: [keys] registered new identity 2da0d507-6704-3d31-9809-8395395ea565
+[21:36:32] [market-client/INFO] (Minecraft) [STDERR]: [host] REFUSED 2da0d507-6704-3d31-9809-8395395ea565 — different market (c84f02e1-39b4-46c2-b4c1-f44532693482 vs aeb96f2b-2b9e-4c4e-95fe-d5c8c8c32931)
+[21:36:40] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 26 MigrateBalance
+[21:36:40] [market-client/INFO] (Minecraft) [STDOUT]: [host] migrated 860 credits, 70 minecraft:iron_ingot for 2da0d507-6704-3d31-9809-8395395ea565 from 'testE'
+[21:36:40] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /10.221.224.140:64552
+[21:36:40] [market-client/INFO] (Minecraft) [STDOUT]: [host] TestPeer reports 0.5h in a survival world with commands enabled (5d13e5c62089d6d5)
+[21:36:40] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 26 events to /10.221.224.140:64552
+[21:36:40] [market-client/INFO] (Minecraft) [STDOUT]: [host] /10.221.224.140:64552 synced and live (2 connected)
+[21:36:40] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 27 KeyRegistered
+[21:36:40] [market-sequencer/INFO] (Minecraft) [STDERR]: [host] welcome grant for 2da0d507-6704-3d31-9809-8395395ea565 refused: already accounted for by a migration
+[21:36:47] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 28 PlaceOrder
+[21:37:17] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (1 remain)
+[21:38:29] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 29 DepositAndList — 10 minecraft:dirt from 10920508-d5d8-3eed-93d2-92f193afe7d7
+[21:38:31] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 30 DepositAndList — 10 minecraft:dirt from 10920508-d5d8-3eed-93d2-92f193afe7d7
+[21:38:34] [market-discovery/INFO] (Minecraft) [STDERR]: [economiesmod] divergence: TestPeer reports 2e3859d7336aec225653785158ff1dc2ae276adcab7c47bac1f90460a040166b at event 29, we have 44b158a0123f11d8ce51b644aff275c2c5e11917eb2b792f907bd5b42157e069
+[21:39:09] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[21:39:09] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[21:39:09] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[21:39:09] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[21:40:20] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (0 remain)
+[21:40:20] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
+[21:40:20] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 30 events
+[21:40:23] [market-connect/INFO] (Minecraft) [STDOUT]: [economiesmod] stopping host before connecting out
+[21:40:23] [market-connect/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 30 events
+[21:40:23] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=30 appliedSeq=30 persist=true
+[21:40:23] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] refused: you have events this host doesn't (you 30, host 29)
+[21:40:23] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] diverged from host at seq 29 (ours 44b158a0123f11d8ce51b644aff275c2c5e11917eb2b792f907bd5b42157e069, theirs 2e3859d7336aec225653785158ff1dc2ae276adcab7c47bac1f90460a040166b) — not a fast-forward
+[21:40:40] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=30 appliedSeq=30 persist=true
+[21:40:40] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] refused: you have events this host doesn't (you 30, host 29)
+[21:40:40] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] diverged from host at seq 29 (ours 44b158a0123f11d8ce51b644aff275c2c5e11917eb2b792f907bd5b42157e069, theirs 2e3859d7336aec225653785158ff1dc2ae276adcab7c47bac1f90460a040166b) — not a fast-forward
+[21:42:39] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=30 appliedSeq=30 persist=true
+[21:42:39] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] refused: you have events this host doesn't (you 30, host 29)
+[21:42:39] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] diverged from host at seq 29 (ours 44b158a0123f11d8ce51b644aff275c2c5e11917eb2b792f907bd5b42157e069, theirs 2e3859d7336aec225653785158ff1dc2ae276adcab7c47bac1f90460a040166b) — not a fast-forward
+[21:42:50] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 0 events
+[21:42:50] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local history discarded
+[21:43:07] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=0 appliedSeq=0 persist=true
+[21:43:07] [market-connect/INFO] (Minecraft) [STDOUT]: [economiesmod] connected to 10.221.224.140:25555 at seq 29
+[21:43:19] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
+[21:43:19] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 29 events
+[21:43:24] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] no D:\EconomiesMod\EconomiesMod\run\saves\New World\economiesmod\host-config.json — hosting with friend-group settings: open admission, no deposit caps, no world checks
+[21:43:24] [market-host-start/INFO] (Minecraft) [STDOUT]: [host] serving 'newA' (aeb96f2b-2b9e-4c4e-95fe-d5c8c8c32931) — replayed 29 events
+[21:43:24] [market-host/INFO] (Minecraft) [STDOUT]: [host] listening on port 25555
+[21:43:24] [market-host-start/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=29 appliedSeq=29 persist=false
+[21:43:24] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:53438
+[21:43:24] [market-client/INFO] (Minecraft) [STDOUT]: [host] Alice reports 1.3h in a creative world with commands enabled (a69cfefea6ba25c4)
+[21:43:24] [market-client/INFO] (Minecraft) [STDOUT]: [keys] registered new identity 10920508-d5d8-3eed-93d2-92f193afe7d7
+[21:43:24] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 0 events to /127.0.0.1:53438
+[21:43:24] [market-client/INFO] (Minecraft) [STDOUT]: [host] /127.0.0.1:53438 synced and live (1 connected)
+[21:43:24] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] connected to localhost:25555 at seq 29
+[21:43:24] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting on port 25555
+[21:44:46] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[21:44:46] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[21:44:46] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[21:44:46] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[21:44:54] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 30 PlaceOrder
+[21:44:54] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 31 PlaceOrder
+[21:44:55] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 32 PlaceOrder
+[21:44:55] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 33 PlaceOrder
+[21:44:56] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 34 PlaceOrder
+[21:45:11] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (0 remain)
+[21:45:11] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
+[21:45:11] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 34 events
+[21:46:12] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=34 appliedSeq=34 persist=true
+[21:46:12] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] refused: you have events this host doesn't (you 34, host 29)
+[21:46:12] [market-connect/INFO] (Minecraft) [STDOUT]: [economiesmod] host is 5 events behind on its own market — offering them
+[21:46:12] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] host refused the catch-up after 0 events: log file changed underneath us (expected 24622 bytes, found 27854) — another writer is active on market.jsonl; refusing to append
+[21:46:44] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=34 appliedSeq=34 persist=true
+[21:46:44] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] refused: you have events this host doesn't (you 34, host 29)
+[21:46:44] [market-connect/INFO] (Minecraft) [STDOUT]: [economiesmod] host is 5 events behind on its own market — offering them
+[21:46:44] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] host refused the catch-up after 0 events: log file changed underneath us (expected 24622 bytes, found 27854) — another writer is active on market.jsonl; refusing to append
+[21:47:02] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 0 events
+[21:47:02] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local history discarded
+[21:47:08] [main/INFO] (Minecraft) [STDERR]: [economiesmod] log unusable: chain is broken at event 2
+[21:47:08] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 2 events
+[21:47:08] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] now using market slot 'market-3'
+[21:47:13] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 0 events
+[21:47:13] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] removed market slot 'market-3'
+[21:47:25] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] created market 'newALL' (8309636b-f230-4e07-b6b1-4b3281404683)
+[21:47:38] [market-migrate/INFO] (Minecraft) [STDERR]: [economiesmod] migration failed: java.net.ConnectException: Connection refused: connect
+[21:48:07] [market-connect/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=1 appliedSeq=1 persist=true
+[21:48:07] [market-connect/INFO] (Minecraft) [STDERR]: [economiesmod] refused: you hold 'newALL', this host serves 'newA' — separate economies, which cannot be merged
+[21:54:52] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[21:54:52] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[21:54:52] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[21:54:52] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[21:54:53] [Server thread/INFO] (Minecraft) Alice lost connection: Disconnected
+[21:54:53] [Server thread/INFO] (Minecraft) Alice left the game
+[21:54:53] [Server thread/INFO] (Minecraft) Stopping singleplayer server as player logged out
+[21:54:53] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] world stopping — shutting down
+[21:54:53] [Server thread/INFO] (Minecraft) Stopping server
+[21:54:53] [Server thread/INFO] (Minecraft) Saving players
+[21:54:53] [Server thread/INFO] (Minecraft) Saving worlds
+[21:54:53] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[21:54:53] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (New World): All chunks are saved
+[21:54:53] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[21:54:53] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[21:54:53] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[21:54:53] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[21:54:53] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (New World): All chunks are saved
+[21:54:53] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[21:54:53] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[21:54:55] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[21:54:55] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[21:54:55] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
+[21:54:55] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[21:54:55] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[21:54:55] [main/INFO] (Minecraft) Reloading ResourceManager: Default, Fabric Mods (Fabric Tool Attribute API (v1))
+[21:54:56] [main/INFO] (Minecraft) Loaded 7 recipes
+[21:54:56] [main/INFO] (Minecraft) Loaded 927 advancements
+[21:54:56] [main/INFO] (BiomeModificationImpl) Applied 0 biome modifications to 0 of 79 new biomes in 241.8 μs
+[21:54:56] [main/INFO] (Minecraft) Environment: authHost='https://authserver.mojang.com', accountsHost='https://api.mojang.com', sessionHost='https://sessionserver.mojang.com', servicesHost='https://api.minecraftservices.com', name='PROD'
+[21:54:56] [Server thread/INFO] (Minecraft) Starting integrated minecraft server version 1.16.5
+[21:54:56] [Server thread/INFO] (Minecraft) Generating keypair
+[21:54:56] [Server thread/INFO] (Minecraft) Preparing start region for dimension minecraft:overworld
+[21:54:57] [main/INFO] (Minecraft) Preparing spawn area: 0%
+[21:54:57] [main/INFO] (Minecraft) Preparing spawn area: 0%
+[21:54:58] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[21:54:58] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[21:54:58] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[21:54:58] [main/INFO] (Minecraft) Time elapsed: 2400 ms
+[21:54:58] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] identity loaded from D:\EconomiesMod\EconomiesMod\run\config\economiesmod-identity-Alice.key
+[21:54:58] [Server thread/INFO] (Minecraft) [STDOUT]: [peers] loaded 8 known peers
+[21:54:58] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 1 events
+[21:54:58] [Server thread/INFO] (Minecraft) Changing view distance to 11, from 10
+[21:54:59] [Server thread/INFO] (Minecraft) Alice[local:E:9090e398] logged in with entity id 1145 at (351.7764245683512, 92.0, -160.43135313698443)
+[21:54:59] [Server thread/INFO] (Minecraft) Alice joined the game
+[21:54:59] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[21:54:59] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[21:54:59] [main/INFO] (Minecraft) Loaded 111 advancements
+[21:54:59] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[21:54:59] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[21:55:01] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[21:55:01] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[21:55:01] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[21:55:01] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[21:55:57] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] no D:\EconomiesMod\EconomiesMod\run\saves\New World\economiesmod\host-config.json — hosting with friend-group settings: open admission, no deposit caps, no world checks
+[21:55:57] [market-host-start/INFO] (Minecraft) [STDOUT]: [host] serving 'newALL' (8309636b-f230-4e07-b6b1-4b3281404683) — replayed 1 events
+[21:55:57] [market-host/INFO] (Minecraft) [STDOUT]: [host] seq 2 WelcomeGrant 1000 to 10920508-d5d8-3eed-93d2-92f193afe7d7
+[21:55:57] [market-host/INFO] (Minecraft) [STDOUT]: [host] listening on port 25555
+[21:55:57] [market-host-start/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=2 appliedSeq=2 persist=false
+[21:55:57] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:49588
+[21:55:57] [market-client/INFO] (Minecraft) [STDOUT]: [host] Alice reports 1.3h in a creative world with commands enabled (a69cfefea6ba25c4)
+[21:55:57] [market-client/INFO] (Minecraft) [STDOUT]: [keys] registered new identity 10920508-d5d8-3eed-93d2-92f193afe7d7
+[21:55:57] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 0 events to /127.0.0.1:49588
+[21:55:57] [market-client/INFO] (Minecraft) [STDOUT]: [host] /127.0.0.1:49588 synced and live (1 connected)
+[21:55:57] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] connected to localhost:25555 at seq 2
+[21:55:57] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting on port 25555
+[21:56:06] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /10.221.224.140:53166
+[21:56:06] [market-client/INFO] (Minecraft) [STDOUT]: [host] TestPeer reports 0.5h in a survival world with commands enabled (5d13e5c62089d6d5)
+[21:56:06] [market-client/INFO] (Minecraft) [STDOUT]: [keys] registered new identity 2da0d507-6704-3d31-9809-8395395ea565
+[21:56:06] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 2 events to /10.221.224.140:53166
+[21:56:06] [market-client/INFO] (Minecraft) [STDOUT]: [host] /10.221.224.140:53166 synced and live (2 connected)
+[21:56:06] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 3 KeyRegistered
+[21:56:06] [market-sequencer/INFO] (Minecraft) [STDOUT]: [host] seq 4 WelcomeGrant 1000 to 2da0d507-6704-3d31-9809-8395395ea565
+[21:56:25] [market-client/INFO] (Minecraft) [STDOUT]: [host] client disconnected (1 remain)
+[21:56:25] [market-client-reader/INFO] (Minecraft) [STDERR]: [client] reader stopped: Socket closed
+[21:56:25] [main/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 4 events
+[21:59:31] [main/INFO] (Minecraft) Loaded 112 advancements
+[21:59:42] [main/INFO] (Minecraft) Loaded 118 advancements
+[22:01:12] [main/INFO] (Minecraft) Loaded 140 advancements
+[22:02:15] [main/INFO] (Minecraft) [CHAT] Seed: [8550140455631387840]
+[22:02:16] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[22:02:16] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[22:02:17] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[22:02:17] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[22:02:17] [Server thread/INFO] (Minecraft) Alice lost connection: Disconnected
+[22:02:17] [Server thread/INFO] (Minecraft) Alice left the game
+[22:02:17] [Server thread/INFO] (Minecraft) Stopping singleplayer server as player logged out
+[22:02:17] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] world stopping — shutting down
+[22:02:17] [Server thread/INFO] (Minecraft) Stopping server
+[22:02:17] [Server thread/INFO] (Minecraft) Saving players
+[22:02:17] [Server thread/INFO] (Minecraft) Saving worlds
+[22:02:17] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[22:02:20] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (New World): All chunks are saved
+[22:02:20] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[22:02:20] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[22:02:20] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[22:02:20] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[22:02:20] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (New World): All chunks are saved
+[22:02:20] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[22:02:20] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[22:02:22] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[22:02:22] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[22:02:22] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
+[22:02:22] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[22:02:22] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[22:02:22] [main/INFO] (Minecraft) Reloading ResourceManager: Default, Fabric Mods (Fabric Tool Attribute API (v1))
+[22:02:22] [main/INFO] (Minecraft) Loaded 7 recipes
+[22:02:22] [main/INFO] (Minecraft) Loaded 927 advancements
+[22:02:22] [main/INFO] (BiomeModificationImpl) Applied 0 biome modifications to 0 of 79 new biomes in 143.6 μs
+[22:02:23] [main/INFO] (Minecraft) Environment: authHost='https://authserver.mojang.com', accountsHost='https://api.mojang.com', sessionHost='https://sessionserver.mojang.com', servicesHost='https://api.minecraftservices.com', name='PROD'
+[22:02:23] [Server thread/INFO] (Minecraft) Starting integrated minecraft server version 1.16.5
+[22:02:23] [Server thread/INFO] (Minecraft) Generating keypair
+[22:02:23] [Server thread/INFO] (Minecraft) Preparing start region for dimension minecraft:overworld
+[22:02:23] [main/INFO] (Minecraft) Preparing spawn area: 0%
+[22:02:23] [main/INFO] (Minecraft) Preparing spawn area: 0%
+[22:02:23] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] identity loaded from D:\EconomiesMod\EconomiesMod\run\config\economiesmod-identity-Alice.key
+[22:02:23] [Server thread/INFO] (Minecraft) [STDOUT]: [peers] loaded 8 known peers
+[22:02:23] [main/INFO] (Minecraft) Time elapsed: 650 ms
+[22:02:23] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 25 events
+[22:02:23] [Server thread/INFO] (Minecraft) Changing view distance to 11, from 10
+[22:02:24] [Server thread/INFO] (Minecraft) Alice[local:E:e6c420b1] logged in with entity id 2664 at (0.003970000558844167, 66.0, -99.23032185842567)
+[22:02:24] [Server thread/INFO] (Minecraft) Alice joined the game
+[22:02:24] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[22:02:24] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
+[22:02:24] [main/INFO] (Minecraft) Loaded 90 advancements
+[22:02:24] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
+[22:02:24] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
+[22:02:26] [main/INFO] (Minecraft) [CHAT] Seed: [-5878925897330663381]
+[22:02:27] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[22:02:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
+[22:02:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
+[22:02:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
+[22:02:27] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[22:02:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
+[22:02:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
+[22:02:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
+[22:02:28] [Server thread/INFO] (Minecraft) Alice lost connection: Disconnected
+[22:02:28] [Server thread/INFO] (Minecraft) Alice left the game
+[22:02:28] [Server thread/INFO] (Minecraft) Stopping singleplayer server as player logged out
+[22:02:28] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] world stopping — shutting down
+[22:02:28] [Server thread/INFO] (Minecraft) Stopping server
+[22:02:28] [Server thread/INFO] (Minecraft) Saving players
+[22:02:28] [Server thread/INFO] (Minecraft) Saving worlds
+[22:02:28] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:overworld
+[22:02:28] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (asdhaskjdha): All chunks are saved
+[22:02:28] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_nether
+[22:02:28] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[22:02:28] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[asdhaskjdha]'/minecraft:the_end
+[22:02:28] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[22:02:28] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (asdhaskjdha): All chunks are saved
+[22:02:28] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[22:02:28] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[22:02:30] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[22:02:30] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[22:02:30] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
+[22:02:30] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[22:02:30] [main/WARN] (Minecraft) Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[22:02:30] [main/INFO] (Minecraft) Reloading ResourceManager: Default, Fabric Mods (Fabric Tool Attribute API (v1))
+[22:02:31] [main/INFO] (Minecraft) Loaded 7 recipes
+[22:02:31] [main/INFO] (Minecraft) Loaded 927 advancements
+[22:02:31] [main/INFO] (BiomeModificationImpl) Applied 0 biome modifications to 0 of 79 new biomes in 181.6 μs
+[22:02:31] [main/INFO] (Minecraft) Environment: authHost='https://authserver.mojang.com', accountsHost='https://api.mojang.com', sessionHost='https://sessionserver.mojang.com', servicesHost='https://api.minecraftservices.com', name='PROD'
+[22:02:31] [Server thread/INFO] (Minecraft) Starting integrated minecraft server version 1.16.5
+[22:02:31] [Server thread/INFO] (Minecraft) Generating keypair
+[22:02:31] [Server thread/INFO] (Minecraft) Preparing start region for dimension minecraft:overworld
+[22:02:31] [main/INFO] (Minecraft) Preparing spawn area: 0%
+[22:02:33] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[22:02:33] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[22:02:33] [main/INFO] (Minecraft) Preparing spawn area: 83%
+[22:02:33] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] identity loaded from D:\EconomiesMod\EconomiesMod\run\config\economiesmod-identity-Alice.key
+[22:02:33] [Server thread/INFO] (Minecraft) [STDOUT]: [peers] loaded 8 known peers
+[22:02:33] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] local: replayed 4 events
+[22:02:33] [main/INFO] (Minecraft) Time elapsed: 1904 ms
+[22:02:33] [Server thread/INFO] (Minecraft) Changing view distance to 11, from 10
+[22:02:33] [Server thread/INFO] (Minecraft) Alice[local:E:63559226] logged in with entity id 2971 at (388.1704981469052, 110.0, -160.05613662475167)
+[22:02:33] [Server thread/INFO] (Minecraft) Alice joined the game
+[22:02:33] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[22:02:33] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[22:02:33] [main/INFO] (Minecraft) Loaded 140 advancements
+[22:02:33] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[22:02:33] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[22:03:26] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[22:03:26] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[22:03:26] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[22:03:26] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[22:03:26] [Server thread/INFO] (Minecraft) Alice lost connection: Disconnected
+[22:03:26] [Server thread/INFO] (Minecraft) Alice left the game
+[22:03:26] [Server thread/INFO] (Minecraft) Stopping singleplayer server as player logged out
+[22:03:26] [Server thread/INFO] (Minecraft) [STDOUT]: [economiesmod] world stopping — shutting down
+[22:03:26] [Server thread/INFO] (Minecraft) Stopping server
+[22:03:26] [Server thread/INFO] (Minecraft) Saving players
+[22:03:26] [Server thread/INFO] (Minecraft) Saving worlds
+[22:03:26] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:overworld
+[22:03:27] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (New World): All chunks are saved
+[22:03:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_nether
+[22:03:27] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[22:03:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[New World]'/minecraft:the_end
+[22:03:27] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[22:03:27] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (New World): All chunks are saved
+[22:03:28] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[22:03:28] [Server thread/INFO] (Minecraft) ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[22:03:28] [main/INFO] (Minecraft) Stopping!
