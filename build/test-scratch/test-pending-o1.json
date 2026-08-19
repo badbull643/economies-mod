@@ -1,0 +1,1 @@
+[{"kind":"DEPOSIT","userId":"00000000-0000-0000-0000-000000000001","itemId":"minecraft:iron_ingot","quantity":10,"clientEventId":"evt-1","seq":0,"timestamp":1787168564251},{"kind":"WITHDRAW","userId":"00000000-0000-0000-0000-000000000001","itemId":"minecraft:diamond","quantity":3,"seq":42,"timestamp":1787168564253}]
