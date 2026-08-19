@@ -83,6 +83,134 @@ public class MarketState {
         this.creator = creator;
     }
 
+    // ─────────── economic policy ───────────
+
+    /**
+     * Transaction tax on fills, in basis points. Zero until a MarketPolicy event says
+     * otherwise, so every market created before policy existed behaves exactly as it did.
+     */
+    private volatile int taxBps = 0;
+
+    public int taxBps() { return taxBps; }
+
+    /** Called only by EventApplier, which has already checked the bounds and the author. */
+    void setTaxBps(int bps) { this.taxBps = bps; }
+
+    /**
+     * What a new identity is granted, in credits.
+     *
+     * Defaults to the value every market used when this was a compiled-in constant, so
+     * logs written before policy existed still validate — their grants were all for
+     * exactly this amount.
+     */
+    private volatile long welcomeGrant = ServerConfig.DEFAULT_WELCOME_GRANT;
+
+    public long welcomeGrant() { return welcomeGrant; }
+
+    void setWelcomeGrant(long amount) { this.welcomeGrant = amount; }
+
+    /**
+     * The most a market may grant a newcomer.
+     *
+     * A ceiling on a fat finger, not a security boundary — the security is that grants
+     * must equal the market's policy exactly, so the number a liar can give themselves
+     * is the same one an honest host would have given them anyway.
+     */
+    public static final long MAX_WELCOME_GRANT = 1_000_000L;
+
+    /**
+     * Flat credits charged for placing an order. Zero, and off, until policy says
+     * otherwise.
+     *
+     * Charged on both sides. A sell costs credits even though it offers goods, which is
+     * the one genuinely awkward consequence: somebody holding items and no money cannot
+     * list at all. That is the real cost of pricing order placement rather than order
+     * value, and the reason this wants to stay small next to the welcome grant.
+     */
+    private volatile long listingFee = 0;
+
+    public long listingFee() { return listingFee; }
+
+    void setListingFee(long fee) { this.listingFee = fee; }
+
+    /**
+     * The most a market may charge to list.
+     *
+     * Low on purpose. This prices the number of orders, and a fee big enough to feel
+     * like a tax is big enough to stop people repricing — which costs a market more
+     * than the spam it was reached for.
+     */
+    public static final long MAX_LISTING_FEE = 1_000L;
+
+    /** Basis points are per ten thousand. Named so the 10000 is never a loose literal. */
+    public static final int BPS_DIVISOR = 10_000;
+
+    /** The highest rate a market may set, in basis points. */
+    public static final int MAX_TAX_BPS = 5_000;
+
+    /**
+     * The tax on one fill.
+     *
+     * Every replica computes this independently and must agree to the credit, so the
+     * rule is fixed here rather than left to whoever calls it: multiply in long, divide
+     * once, truncate. Amounts are always positive, so integer division is a floor —
+     * true by accident of the inputs rather than by construction, which is why there is
+     * a test pinning it rather than a comment hoping for it.
+     *
+     * Rounding down also means the tax can be zero on a small fill. That is deliberate:
+     * the alternative, rounding up, takes a credit from a one-credit trade and makes the
+     * effective rate on small trades wildly higher than the number the market advertises.
+     */
+    /**
+     * Reads a fee written as a percentage and returns basis points, or -1 if it is not
+     * one.
+     *
+     * Lives in core rather than beside the text field that calls it so it can be tested
+     * without Minecraft — the conversion is the one place a human-entered decimal meets
+     * a number every replica has to agree on.
+     *
+     * BigDecimal, not Double.parseDouble. Parsing "2.5" to a double and multiplying by
+     * 100 can land on 249.99999999999997, and truncating that gives a market a 2.49%
+     * fee nobody asked for. Two decimal places is exactly what basis points can hold,
+     * so anything finer is refused rather than quietly rounded.
+     */
+    public static int bpsFromPercent(String text) {
+        if (text == null) return -1;
+        try {
+            java.math.BigDecimal pct = new java.math.BigDecimal(text.trim());
+            if (pct.scale() > 2) return -1;
+            int bps = pct.movePointRight(2).intValueExact();
+            return bps < 0 ? -1 : bps;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /**
+     * The smallest sale this rate actually takes anything from, or 0 when there is no
+     * rate.
+     *
+     * Rounding down means a percentage of a small enough sale is nothing, and with
+     * integer credits that is unavoidable: a market whose items go for one or two
+     * credits cannot express 2.5% of a sale at all. The rate is not broken when that
+     * happens, but it is invisible, and somebody who set a fee and watched it take
+     * nothing deserves to be told which of the two they are looking at.
+     *
+     * Ceiling division, because the fee bites at the first amount where
+     * amount * bps reaches one whole ten-thousandth.
+     */
+    public static long smallestTaxableSale(int bps) {
+        if (bps <= 0) return 0;
+        return (BPS_DIVISOR + bps - 1) / bps;
+    }
+
+    public static long taxOn(long amount, int bps) {
+        if (bps <= 0 || amount <= 0) return 0;
+        long tax = Math.multiplyExact(amount, (long) bps) / BPS_DIVISOR;
+        // Cannot exceed the trade it is levied on, whatever the rate.
+        return Math.min(tax, amount);
+    }
+
     public WalletRegistry wallets() { return wallets; }
 
     public TradeHistory trades() { return trades; }
@@ -144,6 +272,12 @@ public class MarketState {
         SubmitResult check = canSubmit(order);
         if (!check.accepted) return check;
 
+        // Charged on placement, kept on cancellation, and burned like the trading fee.
+        // Refunding it would deter nothing, which is the only thing it is for.
+        if (listingFee > 0) {
+            wallets.adjust(order.userID(), -listingFee);
+        }
+
         // Reserve
         if (!order.isBid()) {
             itemBalances.adjust(order.userID(), order.itemID(), -order.volume());
@@ -156,7 +290,19 @@ public class MarketState {
 
         for (Fill f : fills) {
             itemBalances.adjust(f.buyerId(), f.itemId(), +f.quantity());
-            wallets.adjust(f.sellerId(), +f.amount());
+
+            // Levied on the seller's proceeds, not the buyer's outlay. The buyer's side
+            // already reserves at their limit price and refunds the difference below,
+            // and threading a deduction through that is how refund arithmetic acquires
+            // the double-spend bugs this project has already rejected once. Taking it
+            // here changes one credit and leaves the reservation untouched.
+            //
+            // Burned, not paid to anyone. The welcome grant is currently an unbounded
+            // source of money with no sink; a tax that credited the operator would just
+            // move the unboundedness to them, and a treasury needs a way to spend that
+            // does not exist. Destroying it is the only option that closes the loop.
+            long tax = taxOn(f.amount(), taxBps);
+            wallets.adjust(f.sellerId(), +(f.amount() - tax));
 
             long reservedForThisFill = f.quantity() * buyerOrderPrice(order, f);
             long actuallySpent = f.amount();
@@ -188,15 +334,27 @@ public class MarketState {
             if (available < order.volume()) {
                 return SubmitResult.reject("insufficient item balance");
             }
+            // A sell offers goods but still pays to be listed, so it needs credits it
+            // is not otherwise spending. Checked here rather than discovered during
+            // settlement, where the order would already have been accepted.
+            if (listingFee > 0 && wallets.getBalance(order.userID()) < listingFee) {
+                return SubmitResult.reject("listing costs " + listingFee
+                        + " credits and you have "
+                        + wallets.getBalance(order.userID()));
+            }
         } else {
             long maxCost;
             try {
-                maxCost = Math.multiplyExact(order.volume(), order.value());
+                maxCost = Math.addExact(
+                        Math.multiplyExact(order.volume(), order.value()), listingFee);
             } catch (ArithmeticException e) {
                 return SubmitResult.reject("order value too large");
             }
             if (wallets.getBalance(order.userID()) < maxCost) {
-                return SubmitResult.reject("insufficient credits");
+                return SubmitResult.reject(listingFee > 0
+                        ? "insufficient credits — this costs " + maxCost
+                                + " including the " + listingFee + " listing fee"
+                        : "insufficient credits");
             }
         }
 
@@ -208,8 +366,32 @@ public class MarketState {
         long available = itemBalances.getBalance(userId, itemId);
         if (available < qty) return false;
         itemBalances.adjust(userId, itemId, -qty);
+        withdrawn.merge(userId + " " + itemId, qty, Long::sum);
         return true;
     }
+
+    /**
+     * How much of an item this market has ever handed to somebody.
+     *
+     * Only grows, and derived from the log like everything else here, so every replica
+     * agrees on it.
+     *
+     * Exists for one reason: a withdrawal puts items in a player's inventory through
+     * insertStack, which increments no statistic — exactly as /give does. Without this,
+     * the deposit rules that weigh a player against their own statistics would refuse
+     * them the goods this market gave them, which is the one case where their
+     * provenance is not in doubt at all: it was in the ledger a moment ago.
+     */
+    public long withdrawnBy(UUID userId, String itemId) {
+        if (userId == null || itemId == null) return 0;
+        Long n = withdrawn.get(userId + " " + itemId);
+        return n == null ? 0 : n;
+    }
+
+    // "<uuid> <itemId>" rather than a nested map: nothing ever iterates one half of it.
+    // A space is safe as the join — a UUID is hex and dashes, an item id is a namespaced
+    // path, and neither can contain one.
+    private final Map<String, Long> withdrawn = new ConcurrentHashMap<>();
 
     private long buyerOrderPrice(Order incoming, Fill f) {
         // If the incoming order is the buyer, use its price.

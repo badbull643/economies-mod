@@ -14,7 +14,15 @@ public class MarketKeybinds {
         openMarketKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.economiesmod.openmarket",      // translation key
                 InputUtil.Type.KEYSYM,
-                GLFW.GLFW_KEY_M,                    // default bound to M
+                // Unbound by default, so this mod claims no key until asked. M is a
+                // reasonable key for a market and a reasonable key for a dozen other
+                // mods, and a fresh install silently taking it is how keys get fought
+                // over. The player binds it in Options → Controls → EconomiesMod, which
+                // is where somebody looking for a keybind already looks.
+                //
+                // There are two other ways in that need no key at all — the inventory
+                // button and /trade — so an unbound default costs nobody access.
+                GLFW.GLFW_KEY_UNKNOWN,
                 "key.category.economiesmod"         // category translation key
         ));
 

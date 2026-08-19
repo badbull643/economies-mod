@@ -119,7 +119,6 @@ public class EventLog {
     // asks whether the log is usable.
     private volatile long unreadableAt = -1;
 
-    public long unreadableAt() { return unreadableAt; }
     public boolean isUnreadable() { return unreadableAt != -1; }
 
     /**
@@ -235,6 +234,7 @@ public class EventLog {
             case "PlaceOrder":    return Event.PlaceOrder.class;
             case "CancelOrder":   return Event.CancelOrder.class;
             case "DepositAndList": return Event.DepositAndList.class;
+            case "MarketPolicy":  return Event.MarketPolicy.class;
             default:
                 throw new IllegalStateException("Unknown event type in log: " + typeName);
         }

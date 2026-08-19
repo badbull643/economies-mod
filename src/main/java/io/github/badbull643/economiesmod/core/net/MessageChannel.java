@@ -35,6 +35,18 @@ public class MessageChannel implements AutoCloseable {
         out.println(gson.toJson(msg));
     }
 
+    /**
+     * Whether a write has failed on this channel.
+     *
+     * PrintWriter never throws — it catches IOException internally and raises a flag —
+     * so a send to a socket whose peer has gone returns normally and silently does
+     * nothing. Callers that wrap send in a try/catch are catching something that cannot
+     * happen; this is the only way to notice.
+     */
+    public boolean failed() {
+        return out.checkError();
+    }
+
     static final int MAX_LINE_LENGTH = 1_000_000;   // 1 MB — generous for a Sync batch
 
     public Message receive() throws IOException {
@@ -67,16 +79,15 @@ public class MessageChannel implements AutoCloseable {
         switch (type) {
             case "Hello":    return Message.Hello.class;
             case "Propose":  return Message.Propose.class;
-            case "Ping":     return Message.Ping.class;
             case "Sync":     return Message.Sync.class;
             case "Accepted": return Message.Accepted.class;
             case "Rejected": return Message.Rejected.class;
             case "Error":    return Message.Error.class;
-            case "Pong":     return Message.Pong.class;
             case "QueryReply":  return Message.QueryReply.class;
             case "Query":       return Message.Query.class;
             case "MigrateRequest": return Message.MigrateRequest.class;
             case "MigrateResult":  return Message.MigrateResult.class;
+            case "Attest":         return Message.Attest.class;
             case "CatchUp":        return Message.CatchUp.class;
             case "CatchUpResult":  return Message.CatchUpResult.class;
             default: throw new IllegalStateException("Unknown message type: " + type);

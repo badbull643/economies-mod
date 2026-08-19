@@ -1,6 +1,7 @@
 package io.github.badbull643.economiesmod.core.net;
 
 import io.github.badbull643.economiesmod.core.PeerCache;
+import io.github.badbull643.economiesmod.core.WorldAttestation;
 
 import java.util.List;
 
@@ -19,6 +20,15 @@ public abstract class Message {
         public String protocolVersion;
         public String marketId;      // null means "no history yet" — free to adopt any market
         public String marketName;    // so a refusal can name both markets, not just their UUIDs
+        /**
+         * What this client says about the world it trades from, or null.
+         *
+         * Unsigned, and deliberately not part of the handshake's trust. Signing it would
+         * only prove who made the claim, which nobody doubts — the claim itself is
+         * unverifiable either way, and dressing it in a signature would suggest
+         * otherwise. See WorldAttestation for what it is actually good for.
+         */
+        public WorldAttestation attestation;
         public Hello() { type = "Hello"; }
     }
 
@@ -30,9 +40,6 @@ public abstract class Message {
         public Propose() { type = "Propose"; }
     }
 
-    public static class Ping extends Message {
-        public Ping() { type = "Ping"; }
-    }
 
     // ─── Server → Client ───
 
@@ -54,6 +61,15 @@ public abstract class Message {
         public String hostPublicKey;
         public String marketId;
         public String marketName;
+        /**
+         * Whether this host is a dedicated server rather than somebody's game.
+         *
+         * The one player-facing difference between the two hosting modes, and the only
+         * one worth surfacing: it answers "will this still be here tomorrow, and do I
+         * need to take a turn hosting". Everything else about them is identical by
+         * design, which is why there is no client-side mode toggle to go with it.
+         */
+        public boolean dedicated = false;
         public Sync() { type = "Sync"; }
     }
 
@@ -81,14 +97,6 @@ public abstract class Message {
         public Error() { type = "Error"; }
     }
 
-    public static class Pong extends Message {
-        public Pong() { type = "Pong"; }
-    }
-
-    public static class SteppingDown extends Message {
-        public long finalSeq;
-        public SteppingDown() { type = "SteppingDown"; }
-    }
 
     /**
      * "Here is the market I'm abandoning — work out what I'm owed."
@@ -140,6 +148,22 @@ public abstract class Message {
         public CatchUpResult() { type = "CatchUpResult"; }
     }
 
+    /**
+     * "What I said about my world has changed."
+     *
+     * Sent after the handshake, because the handshake is a photograph and the thing it
+     * describes can change underneath it. Connecting from a clean world and then opening
+     * it to LAN with cheats enabled would otherwise leave the host holding a description
+     * that stopped being true a minute after it was given.
+     *
+     * Unsigned, like the attestation on Hello and for the same reason: signing would
+     * prove who said it, which nobody doubts, and imply a guarantee that does not exist.
+     */
+    public static class Attest extends Message {
+        public WorldAttestation attestation;
+        public Attest() { type = "Attest"; }
+    }
+
     /** Lightweight liveness/status probe. No handshake, no state. */
     public static class Query extends Message {
         public String protocolVersion;
@@ -159,6 +183,18 @@ public abstract class Message {
         public String signature;      // over the canonical payload below
         public String marketId;       // which market this host is serving
         public String marketName;
+        /**
+         * Whether this host is a dedicated server. Carried here as well as on Sync
+         * because the host list is built from discovery, which never gets a Sync — a
+         * badge that only appeared after connecting would be answering the question
+         * too late to be of use in choosing.
+         *
+         * Self-reported, and inside the signed payload. Signing does not make it true —
+         * a host can describe itself however it likes — but it stops anyone else
+         * changing the answer in transit, which matters more than usual given the
+         * transport is assumed to be a trusted mesh rather than encrypted.
+         */
+        public boolean dedicated;
         public QueryReply() { type = "QueryReply"; }
     }
 

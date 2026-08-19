@@ -20,8 +20,60 @@ import java.nio.file.Paths;
 public class HostServer {
 
     // 6: MigrateBalance event; MigrateRequest/MigrateResult messages.
-    public static final String PROTOCOL_VERSION = "7";
+    // 8: MarketPolicy event (transaction tax); Sync.dedicated. Batched deliberately —
+    //    each wire change costs a version and a window where mixed clients cannot talk,
+    //    so the two that were ready went together.
+    public static final String PROTOCOL_VERSION = "8";
+    /** Only the fallback for the deprecated constructors now — see ServerConfig. */
     private static final int MAX_CONNECTIONS = 64;
+
+    /** Everything the two hosting modes disagree about. Never null. */
+    private final ServerConfig config;
+
+    /**
+     * How much each identity has handed this host lately. Off unless configured.
+     *
+     * Host-side rather than in EventApplier, and necessarily so — its answer depends on
+     * when it is asked, so a replica replaying later would judge a window that has
+     * passed and refuse events the market legitimately holds. See DepositLimiter.
+     */
+    private final DepositLimiter depositLimiter;
+
+    /**
+     * What each identity said about its world when it connected.
+     *
+     * Kept only for as long as this host runs, and only to be contradicted: the value
+     * is in comparing a claim against what the identity subsequently did, which is the
+     * one thing here the host observed rather than was told. Never written to the log —
+     * a claim nobody can verify has no business in a history everybody replays.
+     */
+    private final Map<UUID, WorldAttestation> attestations = new ConcurrentHashMap<>();
+
+    /** Which item a deposit is of, or null if the event is not one. */
+    private static String depositItemOf(Event event) {
+        if (event instanceof Event.Deposit) return ((Event.Deposit) event).itemId;
+        if (event instanceof Event.DepositAndList) {
+            return ((Event.DepositAndList) event).itemId;
+        }
+        return null;
+    }
+
+    /**
+     * Items this event would add to the depositor's balance, or 0 if it is not a
+     * deposit.
+     *
+     * DepositAndList counts the same as Deposit: the goods enter the market either way,
+     * and a cap that only watched one of them would be a cap on which button was used.
+     */
+    private static long depositUnitsOf(Event event) {
+        if (event instanceof Event.Deposit) {
+            return ((Event.Deposit) event).quantity;
+        }
+        if (event instanceof Event.DepositAndList) {
+            return ((Event.DepositAndList) event).quantity;
+        }
+        return 0;
+    }
 
     private final int port;
     private final EventLog log;
@@ -35,7 +87,69 @@ public class HostServer {
     private Thread sequencerThread;
     private final PeerCache peerCache;
 
-    private final List<MessageChannel> clients = new CopyOnWriteArrayList<>();
+    private final List<ClientLink> clients = new CopyOnWriteArrayList<>();
+
+    /**
+     * One live client, with its own outbound queue and the thread that drains it.
+     *
+     * Fan-out used to be a loop of blocking writes on the sequencer thread. A socket
+     * write blocks once the peer's receive window fills, so a single client that had
+     * stopped reading — suspended laptop, saturated uplink, debugger breakpoint —
+     * stopped the sequencer, and with it every other client's trades. That cost scales
+     * with maxConnections, which is now something an operator sets.
+     *
+     * Each client gets a thread and a bounded queue instead. Order is preserved per
+     * client because exactly one thread writes to each socket, which matters more than
+     * it used to: a client that sees a sequence gap now tears down and resyncs.
+     */
+    private static final class ClientLink {
+        final MessageChannel channel;
+        private final BlockingQueue<Message> outbound;
+        private final Thread writer;
+        private volatile boolean open = true;
+
+        ClientLink(MessageChannel channel, int queueDepth) {
+            this.channel = channel;
+            this.outbound = new ArrayBlockingQueue<>(queueDepth);
+            this.writer = new Thread(this::drain, "market-writer");
+            this.writer.setDaemon(true);
+            this.writer.start();
+        }
+
+        /**
+         * Queues one message. False means this client is beyond saving — either its
+         * queue is full, so it is further behind than we are willing to buffer, or the
+         * socket has already failed underneath it.
+         */
+        boolean enqueue(Message msg) {
+            return open && outbound.offer(msg);
+        }
+
+        private void drain() {
+            try {
+                while (open) {
+                    Message msg = outbound.take();
+                    channel.send(msg);
+                    // PrintWriter swallows IOException, so a dead socket is only
+                    // visible as a flag. Without this the thread would spin happily
+                    // writing into a closed connection for as long as it was queued.
+                    if (channel.failed()) {
+                        open = false;
+                        return;
+                    }
+                }
+            } catch (InterruptedException e) {
+                // Closing. Nothing left to deliver that anyone is waiting for.
+            }
+        }
+
+        /** Idempotent: both the broadcast path and the reader's finally may call it. */
+        void close() {
+            open = false;
+            writer.interrupt();
+            try { channel.close(); } catch (IOException ignored) {}
+        }
+    }
     private final BlockingQueue<Proposal> queue = new LinkedBlockingQueue<>(1000);
     private static final int DEDUP_CACHE_SIZE = 10_000;
 
@@ -51,13 +165,16 @@ public class HostServer {
 
     /** A proposal waiting to be sequenced, paired with who sent it. */
     private static class Proposal {
-        final MessageChannel from;
+        /** The link rather than the channel: rejections are written by the sequencer,
+         *  so they have to go through the same queue broadcasts do or a blocked client
+         *  stalls it on the way out. Null for host-authored work. */
+        final ClientLink from;
         final Message.Propose msg;
         /** Set instead of msg for work the host authors itself, so it still goes
          *  through the one thread that owns the log. */
         final Runnable hostAction;
 
-        Proposal(MessageChannel from, Message.Propose msg) {
+        Proposal(ClientLink from, Message.Propose msg) {
             this.from = from;
             this.msg = msg;
             this.hostAction = null;
@@ -101,7 +218,8 @@ public class HostServer {
 
 
     //change too about 50
-    public static final long DEFAULT_WELCOME_GRANT = 1000L;
+    /** Kept as an alias so existing callers still read naturally; ServerConfig owns it. */
+    public static final long DEFAULT_WELCOME_GRANT = ServerConfig.DEFAULT_WELCOME_GRANT;
 
     public HostServer(int port, Path logFile, String hostName, String hostUserId,
                       PlayerKeys hostKeys, PeerCache peerCache) throws IOException {
@@ -111,10 +229,48 @@ public class HostServer {
     public HostServer(int port, Path logFile, String hostName, String hostUserId,
                       PlayerKeys hostKeys, PeerCache peerCache,
                       long welcomeGrantAmount) throws IOException {
-        this.welcomeGrantAmount = welcomeGrantAmount;
-        this.port = port;
-        this.hostName = hostName;
-        this.hostUserId = hostUserId;
+        this(configFor(port, hostName, hostUserId, welcomeGrantAmount),
+                logFile, hostKeys, peerCache);
+    }
+
+    /**
+     * Wraps the loose arguments the client still passes in the same object the
+     * dedicated launcher loads from disk, so there is one code path below this point
+     * rather than two that have to be kept agreeing.
+     */
+    private static ServerConfig configFor(int port, String hostName, String hostUserId,
+                                          long welcomeGrantAmount) {
+        ServerConfig cfg = ServerConfig.friendGroup(port);
+        cfg.hostName = hostName;
+        cfg.hostUserId = hostUserId;
+        cfg.welcomeGrant = welcomeGrantAmount;
+        return cfg;
+    }
+
+    /**
+     * The one constructor that matters. Everything the two hosting modes disagree about
+     * arrives in the config; nothing below here can tell them apart, which is the whole
+     * design — a dedicated server is a host whose operator never changes.
+     */
+    public HostServer(ServerConfig config, Path logFile, PlayerKeys hostKeys,
+                      PeerCache peerCache) throws IOException {
+        String configProblem = config.problem();
+        if (configProblem != null) {
+            throw new IOException("bad server config: " + configProblem);
+        }
+
+        this.config = config;
+        // Counting is switched on by either feature. The cap needs a total to compare
+        // against a ceiling; the attestation check needs one to compare against claimed
+        // play time. With neither configured the window is zero and nothing is kept.
+        boolean needsCounting = config.maxDepositUnitsPerWindow > 0
+                || config.maxDepositUnitsPerPlayHour > 0;
+        this.depositLimiter = new DepositLimiter(config.maxDepositUnitsPerWindow,
+                needsCounting ? config.depositWindowMinutes * 60_000L : 0L);
+        this.welcomeGrantAmount = config.welcomeGrant;
+        this.port = config.port;
+        this.hostName = config.hostName;
+        this.hostUserId = config.hostUserId;
         this.hostKeys = hostKeys;
         this.peerCache = peerCache;
         this.log = new EventLog(logFile);
@@ -157,20 +313,30 @@ public class HostServer {
         sequencerThread.start();
 
         try {
-            serverSocket = new ServerSocket(port);
+            // An explicit bindAddress listens on that interface only. Absent, this is
+            // the same all-interfaces socket as before.
+            String bind = config.bindAddress;
+            if (bind == null || bind.trim().isEmpty()) {
+                serverSocket = new ServerSocket(port);
+            } else {
+                serverSocket = new ServerSocket(port, 50,
+                        java.net.InetAddress.getByName(bind.trim()));
+            }
         } catch (IOException e) {
             bindError = e;
             bound.countDown();          // release the waiter even on failure
             throw e;
         }
         bound.countDown();
-        System.out.println("[host] listening on port " + port);
+        System.out.println("[host] listening on port " + port
+                + (config.bindAddress == null || config.bindAddress.trim().isEmpty()
+                        ? "" : " (" + config.bindAddress.trim() + " only)"));
 
         try {
             while (running) {
                 Socket socket = serverSocket.accept();
 
-                if (clients.size() >= MAX_CONNECTIONS) {
+                if (clients.size() >= config.maxConnections) {
                     System.out.println("[host] refusing connection — at capacity");
                     try (MessageChannel ch = new MessageChannel(socket)) {
                         Message.Error err = new Message.Error();
@@ -187,8 +353,8 @@ public class HostServer {
         } catch (IOException e) {
             if (running) throw e;
         } finally {
-            for (MessageChannel ch : clients) {
-                try { ch.close(); } catch (IOException ignored) {}
+            for (ClientLink link : clients) {
+                link.close();
             }
             clients.clear();
         }
@@ -278,6 +444,9 @@ public class HostServer {
 
     private void handleClient(Socket socket) {
         MessageChannel channel = null;
+        // Only set once this connection becomes a live client. Probes and pre-handshake
+        // exchanges never get one, which is what distinguishes them on the way out.
+        ClientLink link = null;
         RateLimiter limiter = new RateLimiter(30, 10_000);   // 30 proposals per 10s
 
         try {
@@ -311,6 +480,9 @@ public class HostServer {
                 reply.marketId = state.marketId() != null
                         ? state.marketId().toString() : null;
                 reply.marketName = state.marketName();
+                // Set before signing, or it would be the one field in this reply a
+                // bystander could rewrite.
+                reply.dedicated = config.dedicated;
                 try {
                     reply.signature = hostKeys.sign(Probe.queryPayload(reply, q.nonce));
                 } catch (GeneralSecurityException e) {
@@ -340,14 +512,21 @@ public class HostServer {
             // buried the real ones.
             System.out.println("[host] connection from " + channel.remoteAddress());
 
-            if (!handshake(channel, (Message.Hello) first)) {
+            Message.Hello hello = (Message.Hello) first;
+            if (!handshake(channel, hello)) {
                 return;   // handshake sent its own Error
             }
+
+            // Held for the rest of the connection: an attestation update arriving later
+            // has to be filed against the identity that made the original claim, and
+            // the Hello is the only place that is stated.
+            UUID liveUser = UUID.fromString(hello.userId);
 
             // Synced clients may sit idle indefinitely.
             socket.setSoTimeout(0);
 
-            clients.add(channel);
+            link = new ClientLink(channel, config.outboundQueueDepth);
+            clients.add(link);
             System.out.println("[host] " + channel.remoteAddress() + " synced and live ("
                     + clients.size() + " connected)");
 
@@ -364,14 +543,57 @@ public class HostServer {
                         continue;
                     }
 
-                    if (!queue.offer(new Proposal(channel, prop))) {
+                    if (!queue.offer(new Proposal(link, prop))) {
                         Message.Rejected r = new Message.Rejected();
                         r.clientEventId = prop.clientEventId;
                         r.reason = "server busy";
                         channel.send(r);
                     }
-                } else if (msg instanceof Message.Ping) {
-                    channel.send(new Message.Pong());
+                } else if (msg instanceof Message.Attest) {
+                    // The handshake described a world that has since changed. Re-judged
+                    // against the same policy, because a description that was acceptable
+                    // when given is not a licence for whatever the world becomes.
+                    WorldAttestation now = ((Message.Attest) msg).attestation;
+                    if (now == null) continue;
+
+                    WorldAttestation was = attestations.put(liveUser, now);
+
+                    // Logged whether or not policy acts on it. An operator who has not
+                    // switched on refuseCheatWorlds still wants to know that somebody
+                    // turned cheats on mid-session — that is the whole anomaly signal,
+                    // and silence would leave "nothing happened" and "the policy is off"
+                    // looking identical from the console.
+                    boolean newlyCheating = now.cheatsAvailable()
+                            && (was == null || !was.cheatsAvailable());
+                    if (newlyCheating) {
+                        System.out.println("[host] " + hello.displayName
+                                + " enabled commands in their world"
+                                + (now.cheatsEnabledLater() ? " after creating it" : ""));
+                    }
+
+                    List<String> objections = now.objections(config, 0);
+                    if (!objections.isEmpty()) {
+                        String why = String.join("; ", objections);
+                        System.out.println("[host] " + hello.displayName
+                                + " no longer passes: " + why);
+
+                        // Banned only here, never at the door. Arriving with cheats is
+                        // refused already and needs no permanent record; being admitted
+                        // under one description and then changing the thing that was
+                        // checked is the only case that looks like a decision.
+                        if (config.banOnWorldChange && config.ban(liveUser.toString())) {
+                            System.out.println("[host] banned " + liveUser
+                                    + " — remove them from deny in the config to undo it");
+                            sendError(channel, Refusal.NOT_ADMITTED, why
+                                    + " — this server bans identities that change their"
+                                    + " world after connecting, so speak to whoever runs"
+                                    + " it");
+                            break;
+                        }
+
+                        sendError(channel, Refusal.NOT_ADMITTED, why);
+                        break;
+                    }
                 } else {
                     System.out.println("[host] ignoring unexpected " + msg.type);
                 }
@@ -386,8 +608,12 @@ public class HostServer {
                 // Only announce a disconnect for something that was actually a live
                 // client — a probe was never in the set, and reporting it as a
                 // departure made the count jump around for no reason.
-                boolean wasLive = clients.remove(channel);
-                try { channel.close(); } catch (IOException ignored) {}
+                boolean wasLive = link != null && clients.remove(link);
+                if (link != null) {
+                    link.close();       // stops the writer thread and closes the socket
+                } else {
+                    try { channel.close(); } catch (IOException ignored) {}
+                }
                 if (wasLive) {
                     System.out.println("[host] client disconnected ("
                             + clients.size() + " remain)");
@@ -416,6 +642,47 @@ public class HostServer {
         if (hello.publicKey == null || hello.publicKey.isEmpty()) {
             sendError(channel, "no public key presented");
             return false;
+        }
+
+        // Before the sync, which is the expensive part: an identity that is not welcome
+        // should cost this server one comparison, not a whole history read and send.
+        String notWelcome = config.refuses(hello.userId);
+        if (notWelcome != null) {
+            System.out.println("[host] refused " + hello.displayName + " ("
+                    + hello.userId + ") — " + notWelcome);
+            sendError(channel, Refusal.NOT_ADMITTED, notWelcome);
+            return false;
+        }
+
+        if (config.requireAttestation && hello.attestation == null) {
+            System.out.println("[host] refused " + hello.displayName
+                    + " — described no world");
+            sendError(channel, Refusal.NOT_ADMITTED, "this server asks connecting"
+                    + " players to describe their world, and yours did not");
+            return false;
+        }
+
+        if (hello.attestation != null) {
+            // Nothing has been deposited yet this session, so only the claims that stand
+            // on their own can be judged here. The one worth having — deposits against
+            // claimed play time — needs something to compare against and is checked as
+            // deposits arrive.
+            List<String> objections = hello.attestation.objections(config, 0);
+            if (!objections.isEmpty()) {
+                System.out.println("[host] refused " + hello.displayName + " — "
+                        + String.join("; ", objections));
+                sendError(channel, Refusal.NOT_ADMITTED, String.join("; ", objections));
+                return false;
+            }
+            attestations.put(claimedUser, hello.attestation);
+            System.out.println("[host] " + hello.displayName + " reports "
+                    + String.format("%.1f", hello.attestation.claimedHours())
+                    + "h in a " + hello.attestation.gameMode + " world"
+                    + (hello.attestation.cheatsEnabledLater()
+                            ? " with commands switched on this session"
+                            : hello.attestation.cheatsAvailable()
+                                    ? " with commands enabled" : "")
+                    + " (" + hello.attestation.worldIdHash + ")");
         }
 
         // Admission is decided by the log, not by known-keys.json. Two TOFU registries
@@ -529,6 +796,7 @@ public class HostServer {
                 sync.hostPublicKey = hostKeys.publicKeyString();
                 sync.marketId = ourMarket;
                 sync.marketName = state.marketName();
+                sync.dedicated = config.dedicated;
                 sync.knownPeers = shareable;
             }
             channel.send(sync);
@@ -551,6 +819,18 @@ public class HostServer {
     private void handleMigrate(MessageChannel channel, Message.MigrateRequest first) {
         Message.MigrateResult reply = new Message.MigrateResult();
         try {
+            // Migration is a pre-handshake exchange that writes a MigrateBalance and
+            // credits the sender. Gating only the handshake would leave the admission
+            // policy bypassable by the one path that hands out money.
+            String notWelcome = config.refuses(first.userId);
+            if (notWelcome != null) {
+                System.out.println("[host] refused migration from " + first.userId
+                        + " — " + notWelcome);
+                reply.reason = notWelcome;
+                channel.send(reply);
+                return;
+            }
+
             // A whole history can arrive as several chunks — see MessageChannel's
             // CHUNK_BUDGET_BYTES — so keep reading until the sender marks the last one,
             // accumulating before the expensive verify runs once over all of it.
@@ -680,6 +960,19 @@ public class HostServer {
     private void handleCatchUp(MessageChannel channel, Message.CatchUp req) {
         Message.CatchUpResult reply = new Message.CatchUpResult();
         try {
+            // Also pre-handshake, and also a write: it appends the offered events to
+            // this log. The events are verified and must fast-forward cleanly, so this
+            // is not a hole in the trust model — but who may append to this server's
+            // copy is exactly the question admission exists to answer.
+            String notWelcome = config.refuses(req.userId);
+            if (notWelcome != null) {
+                System.out.println("[host] refused catch-up from " + req.userId
+                        + " — " + notWelcome);
+                reply.reason = notWelcome;
+                channel.send(reply);
+                return;
+            }
+
             // Chunked like a migration, and for the same reason: there is no bound on
             // how far a host can have fallen behind its own market.
             final List<String> offered = accumulateChunks(channel, req.logLines, req.complete,
@@ -816,11 +1109,6 @@ public class HostServer {
         }
     }
 
-    // in HostServer
-    public boolean forgetIdentity(UUID userId) throws IOException {
-        return keyRegistry.forget(userId);
-    }
-
     private void processProposal(Proposal p) throws IOException {
         Message.Propose msg = p.msg;
 
@@ -861,14 +1149,112 @@ public class HostServer {
             return;
         }
 
+        // After validate, so an event refused for some other reason costs nobody any of
+        // their allowance, and before append, because this is the last point at which
+        // declining is free.
+        long depositUnits = depositUnitsOf(event);
+        if (depositUnits > 0 && !depositLimiter.allows(event.userId, depositUnits,
+                System.currentTimeMillis())) {
+            long remaining = depositLimiter.remainingFor(event.userId,
+                    System.currentTimeMillis());
+            // The refusal an operator actually wants to see. Nothing else here reports
+            // a client behaving implausibly rather than incorrectly.
+            System.out.println("[host] deposit cap: " + event.userId + " tried "
+                    + depositUnits + ", has " + remaining + " left of "
+                    + depositLimiter.maxUnits());
+            reject(p.from, msg.clientEventId, "deposit limit reached — this server"
+                    + " accepts " + depositLimiter.maxUnits() + " items per identity"
+                    + " per " + config.depositWindowMinutes + " minutes, and you have "
+                    + remaining + " left");
+            return;
+        }
+
+        // The contradiction check, at the only moment both halves of it exist: a claim
+        // made at handshake, and a quantity this host has now actually been handed.
+        // Neither is checkable alone; together they can be impossible.
+        // Against the player's own statistics, which they did not write. Minecraft
+        // counts what is mined, crafted and picked up, and /give increments none of it,
+        // so a deposit far beyond that total is a contradiction in a record the
+        // depositor cannot quietly restate.
+        //
+        // A generous multiple, not a limit: the count is a floor, since smelted output
+        // and anything taken from a chest never touch PICKED_UP. The case worth catching
+        // is out by hundreds, not by three.
+        if (depositUnits > 0 && config.maxDepositMultipleOfHandled > 0) {
+            WorldAttestation claim = attestations.get(event.userId);
+            String itemId = depositItemOf(event);
+            if (claim != null && itemId != null) {
+                long handled = claim.handledOf(itemId);
+
+                // Plus whatever this market has already given them. A withdrawal lands
+                // in an inventory through insertStack, which increments no statistic —
+                // the same reason /give leaves no trace — so without this the rule would
+                // refuse somebody re-depositing goods it handed out itself, which is the
+                // one case where provenance is not in question: it was in the ledger a
+                // moment ago. Read from state rather than the claim, so it is the
+                // market's own record and not the depositor's account of it.
+                long fromThisMarket = state.withdrawnBy(event.userId, itemId);
+                long allowed = Math.addExact(
+                        Math.multiplyExact(handled,
+                                (long) config.maxDepositMultipleOfHandled),
+                        fromThisMarket);
+                long already = depositLimiter.usedBy(event.userId, itemId,
+                        System.currentTimeMillis());
+
+                if (already + depositUnits > allowed) {
+                    System.out.println("[host] implausible deposit from " + event.userId
+                            + ": " + (already + depositUnits) + " " + itemId
+                            + " against statistics showing " + handled + " ever handled");
+                    reject(p.from, msg.clientEventId, "you have handled " + handled + " "
+                            + itemId + " by your own statistics, and this server accepts"
+                            + " deposits up to " + config.maxDepositMultipleOfHandled
+                            + " times that"
+                            + (fromThisMarket > 0
+                                    ? ", plus the " + fromThisMarket
+                                            + " this market gave you" : ""));
+                    return;
+                }
+            }
+        }
+
+        if (depositUnits > 0) {
+            WorldAttestation claim = attestations.get(event.userId);
+            if (claim != null) {
+                long already = depositLimiter.usedBy(event.userId,
+                        System.currentTimeMillis());
+                List<String> objections = claim.objections(config, already + depositUnits);
+                if (!objections.isEmpty()) {
+                    String why = String.join("; ", objections);
+                    System.out.println("[host] implausible deposit from " + event.userId
+                            + ": " + why);
+                    reject(p.from, msg.clientEventId, why);
+                    return;
+                }
+            }
+        }
+
         // Valid — now it becomes history. The signature is stored alongside the event
         // so anyone replaying this log later can check authorship without having been
         // present when it was written.
         SequencedEvent se = log.append(event, msg.signature);
         EventApplier.Result result = EventApplier.apply(state, se);
 
+        // Counted only once it is genuinely in the log.
+        if (result.accepted && depositUnits > 0) {
+            depositLimiter.record(event.userId, depositItemOf(event), depositUnits,
+                    System.currentTimeMillis());
+        }
+
         if (result.accepted) {
-            System.out.println("[host] seq " + se.seq + " " + msg.eventType);
+            // Deposits say who and what. Everything else is a line in a ledger anybody
+            // can read back; a deposit is the one event a rule may have just refused,
+            // and "seq 15 DepositAndList" cannot be told apart from the one that was
+            // turned away a moment earlier.
+            String detail = depositUnits > 0
+                    ? " — " + depositUnits + " " + depositItemOf(event)
+                            + " from " + event.userId
+                    : "";
+            System.out.println("[host] seq " + se.seq + " " + msg.eventType + detail);
             Message.Accepted acc = new Message.Accepted();
             acc.logLine = log.rawLineFor(se.seq);
             broadcast(acc);
@@ -947,7 +1333,19 @@ public class HostServer {
     }
 
     private void issueWelcomeGrant(UUID userId) throws IOException {
-        if (welcomeGrantAmount <= 0) return;
+        // Two different questions, and only one of them is the market's to answer.
+        //
+        // Whether to issue grants at all is this host's business: declining is not a
+        // policy violation, it just means an event nobody was owed does not exist. A
+        // configured zero is that opt-out.
+        //
+        // How much is emphatically not. A host that used its own figure would author
+        // grants every replica rejected, and on a market it did not create it would be
+        // overruling policy it has no authority over.
+        if (config.welcomeGrant <= 0) return;
+
+        long amount = state.welcomeGrant();
+        if (amount <= 0) return;
         if (userId == null) return;
         if (state.hasBeenGranted(userId)) return;
 
@@ -955,7 +1353,7 @@ public class HostServer {
         wg.userId = hostUserIdAsUuid();
         wg.marketId = state.marketId();
         wg.targetUserId = userId;
-        wg.amount = welcomeGrantAmount;
+        wg.amount = amount;
         wg.clientEventId = UUID.randomUUID().toString();
         wg.timestamp = System.currentTimeMillis();
 
@@ -981,7 +1379,7 @@ public class HostServer {
 
         SequencedEvent se = log.append(wg, signature);
         if (EventApplier.apply(state, se).accepted) {
-            System.out.println("[host] seq " + se.seq + " WelcomeGrant " + welcomeGrantAmount
+            System.out.println("[host] seq " + se.seq + " WelcomeGrant " + amount
                     + " to " + userId);
             Message.Accepted acc = new Message.Accepted();
             acc.logLine = log.rawLineFor(se.seq);
@@ -994,20 +1392,34 @@ public class HostServer {
     }
 
     private void broadcast(Message msg) {
-        for (MessageChannel ch : clients) {
-            try {
-                ch.send(msg);
-            } catch (Exception e) {
-                System.out.println("[host] broadcast failed to " + ch.remoteAddress());
+        // Hands off to each client's writer thread and returns. Nothing here can block
+        // on a socket, so one unresponsive client no longer holds up sequencing for
+        // everyone else — it just falls behind in its own queue until it is dropped.
+        for (ClientLink link : clients) {
+            if (!link.enqueue(msg)) {
+                System.out.println("[host] dropping " + link.channel.remoteAddress()
+                        + " — too far behind to keep up");
+                clients.remove(link);
+                link.close();
             }
         }
     }
 
-    private void reject(MessageChannel to, String clientEventId, String reason) {
+    /**
+     * Queued rather than written, because this runs on the sequencer.
+     *
+     * A direct send here would block that thread against a client whose socket has
+     * filled — the same stall the broadcast fan-out was just moved off, reachable by
+     * any client that submits something invalid. A rejection that cannot be queued is
+     * dropped: the client is already beyond its backlog and about to be disconnected,
+     * and there is no one left to tell.
+     */
+    private void reject(ClientLink to, String clientEventId, String reason) {
+        if (to == null) return;      // host-authored work has no one to answer to
         Message.Rejected r = new Message.Rejected();
         r.clientEventId = clientEventId;
         r.reason = reason;
-        to.send(r);
+        to.enqueue(r);
     }
 
     /**
@@ -1025,6 +1437,15 @@ public class HostServer {
         public static final String NO_IDENTITY      = "no_identity";
         /** Right identity, wrong signing key — usually a moved or lost key file. */
         public static final String KEY_MISMATCH     = "key_mismatch";
+        /**
+         * Turned away by this server's admission policy.
+         *
+         * Nothing is wrong with the client's history, so unlike every other code here
+         * there is no remedy it can carry out — the answer is with whoever runs the
+         * server. Safe to add without a protocol bump: code is an existing field and a
+         * client that does not know this value falls back to showing the reason text.
+         */
+        public static final String NOT_ADMITTED     = "not_admitted";
         private Refusal() {}
     }
 
@@ -1054,26 +1475,227 @@ public class HostServer {
     }
     // ─────────── standalone entry point ───────────
 
+    private static final String USAGE =
+            "usage: HostServer [--config <file>] [--write-config] [--creator-key <file>]\n"
+            + "                  [--port N] [--log <file>] [--name <host name>]\n"
+            + "                  [--market <market name>] [--bind <address>]\n"
+            + "\n"
+            + "  --config        config file to read (default server-config.json)\n"
+            + "  --write-config  write the effective config back out and exit\n"
+            + "  --creator-key   key file that signs genesis when bootstrapping a market;\n"
+            + "                  requires creatorUserId in the config. The server keeps its\n"
+            + "                  own key for grants — this one need not stay on the box.\n"
+            + "\n"
+            + "Flags override the config file. Everything has a default.";
+
     public static void main(String[] args) throws Exception {
-        int port = args.length > 0 ? Integer.parseInt(args[0]) : 25555;
-        Path logFile = Paths.get(args.length > 1 ? args[1] : "server-market.jsonl");
-        String hostName = args.length > 2 ? args[2] : "dedicated";
-        String hostUserId = args.length > 3 ? args[3]
-                : "00000000-0000-0000-0000-0000000000ff";
+        Path configFile = Paths.get("server-config.json");
+        Path creatorKeyFile = null;
+        boolean writeConfig = false;
 
-        String marketName = args.length > 4 ? args[4] : hostName + "'s market";
+        // Read --config first: the rest override what it loaded, so it has to be known
+        // before any of them are applied.
+        for (int i = 0; i < args.length - 1; i++) {
+            if ("--config".equals(args[i])) configFile = Paths.get(args[i + 1]);
+        }
 
+        // Said out loud, because a server quietly running on defaults is how an operator
+        // ends up enforcing a policy they did not choose. Absent is a legitimate state —
+        // a first run has no file — but it is not one to discover from the outside when
+        // somebody who should have been refused walks in.
+        if (!Files.exists(configFile)) {
+            System.out.println("[host] no " + configFile + " — starting on defaults:"
+                    + " open admission, no deposit cap, no world checks");
+        }
+
+        ServerConfig cfg;
+        try {
+            cfg = ServerConfig.load(configFile);
+        } catch (IOException e) {
+            // Existing-but-unreadable. Defaults would be a guess at policy that mints
+            // money, so this stops instead — see ServerConfig.load.
+            System.err.println("[host] " + e.getMessage());
+            System.exit(2);
+            return;
+        }
+
+        try {
+            for (int i = 0; i < args.length; i++) {
+                switch (args[i]) {
+                    case "--config":       i++; break;   // already handled
+                    case "--write-config": writeConfig = true; break;
+                    case "--creator-key":  creatorKeyFile = Paths.get(args[++i]); break;
+                    case "--port":         cfg.port = Integer.parseInt(args[++i]); break;
+                    case "--log":          cfg.logFile = args[++i]; break;
+                    case "--name":         cfg.hostName = args[++i]; break;
+                    case "--market":       cfg.marketName = args[++i]; break;
+                    case "--bind":         cfg.bindAddress = args[++i]; break;
+                    case "--help":
+                    case "-h":
+                        System.out.println(USAGE);
+                        return;
+                    default:
+                        System.err.println("unknown argument: " + args[i]);
+                        System.err.println(USAGE);
+                        System.exit(2);
+                }
+            }
+        } catch (ArrayIndexOutOfBoundsException e) {
+            System.err.println("missing value for the last argument");
+            System.err.println(USAGE);
+            System.exit(2);
+        } catch (NumberFormatException e) {
+            System.err.println("expected a number: " + e.getMessage());
+            System.exit(2);
+        }
+
+        String bad = cfg.problem();
+        if (bad != null) {
+            System.err.println("[host] " + bad);
+            System.exit(2);
+        }
+
+        if (writeConfig) {
+            cfg.save(configFile);
+            System.out.println("[host] wrote " + configFile.toAbsolutePath());
+            return;
+        }
+
+        // Reached only from the standalone launcher, so this is what "dedicated" means:
+        // started from a command line rather than from inside somebody's game. Forced
+        // rather than read, so a config copied from a client cannot claim otherwise.
+        cfg.dedicated = true;
+
+        Path logFile = Paths.get(cfg.logFile);
         System.out.println("[host] log file: " + logFile.toAbsolutePath());
+
         PlayerKeys keys = PlayerKeys.loadOrCreate(logFile.resolveSibling("server-identity.key"));
         PeerCache peers = new PeerCache(logFile.resolveSibling("server-peers.json"));
+
+        // Remembered once rather than defaulted every start. The old fallback was a
+        // hardcoded UUID, so two dedicated servers that never had one configured were
+        // literally the same participant — fine while there was one of them, wrong the
+        // moment any client met both.
+        if (cfg.hostUserId == null || cfg.hostUserId.trim().isEmpty()) {
+            cfg.hostUserId = UUID.randomUUID().toString();
+            cfg.save(configFile);
+            System.out.println("[host] assigned this server the identity " + cfg.hostUserId);
+        }
 
         // A dedicated server starting on an empty log is deliberately creating a
         // market — unlike a player clicking Host, there is no ambiguity about intent.
         EventLog log = new EventLog(logFile);
         if (log.lastSeq() == 0) {
-            MarketBootstrap.createMarket(log, UUID.fromString(hostUserId), marketName, keys);
+            try {
+                bootstrap(log, cfg, keys, creatorKeyFile);
+            } catch (IOException e) {
+                // An operator misconfiguration, not a crash. A stack trace here buries
+                // the one line that says what to change.
+                System.err.println("[host] " + e.getMessage());
+                System.exit(2);
+            }
+        } else if (creatorKeyFile != null) {
+            System.out.println("[host] --creator-key ignored: this log already holds a market");
         }
 
-        new HostServer(port, logFile, hostName, hostUserId, keys, peers).start();
+        try {
+            new HostServer(cfg, logFile, keys, peers).start();
+        } catch (java.net.BindException e) {
+            // The in-game path has named this fix since the two-client dev setup made it
+            // routine; the launcher was still dumping a stack trace at an operator who
+            // has no Port field to look at. Same cause, overwhelmingly: something else
+            // is already on the port, usually a client still hosting from inside a game.
+            System.err.println("[host] port " + cfg.port + " is already in use.");
+            System.err.println("[host] Something else is listening there — commonly a"
+                    + " Minecraft client still hosting from the Network tab, or an"
+                    + " earlier server that did not exit.");
+            System.err.println("[host] Either stop that one, or start this server on a"
+                    + " different port: --port " + (cfg.port + 1));
+            System.exit(2);
+        } catch (IOException e) {
+            // Anything else that stops it listening: a bind address that is not on this
+            // machine, a permission problem on a low port, an unreadable log.
+            System.err.println("[host] could not start: " + e.getMessage());
+            System.exit(2);
+        }
+    }
+
+    /**
+     * Writes genesis, signed by the operator's key when one is supplied.
+     *
+     * Creator-gating is currently unused — WelcomeGrant checks only its target, never
+     * its author, which is what lets hosting rotate — so the creator identity is free
+     * to become the rule for who may set policy later. Recording the operator rather
+     * than the box is what makes that worth having: compromising the server then gets
+     * grant-signing and denial of service, not authority over the market.
+     */
+    private static void bootstrap(EventLog log, ServerConfig cfg, PlayerKeys serverKeys,
+                                  Path creatorKeyFile) throws Exception {
+        String name = cfg.marketName != null && !cfg.marketName.trim().isEmpty()
+                ? cfg.marketName
+                : cfg.hostName + "'s market";
+
+        if (creatorKeyFile == null) {
+            // The server is its own creator. Simplest case, and the only one that needs
+            // nothing kept anywhere else.
+            UUID creatorId = UUID.fromString(cfg.hostUserId);
+            MarketBootstrap.createMarket(log, creatorId, name, serverKeys);
+            System.out.println("[host] created '" + name + "' owned by this server");
+            writeInitialPolicy(log, cfg, creatorId, serverKeys);
+            return;
+        }
+
+        if (cfg.creatorUserId == null || cfg.creatorUserId.trim().isEmpty()) {
+            throw new IOException("--creator-key needs creatorUserId set in the config file"
+                    + " — the key signs the market into existence, but the identity is"
+                    + " what gets recorded as owning it");
+        }
+        if (!Files.exists(creatorKeyFile)) {
+            throw new IOException("no such key file: " + creatorKeyFile.toAbsolutePath());
+        }
+
+        PlayerKeys creator = PlayerKeys.loadOrCreate(creatorKeyFile);
+        UUID creatorId = UUID.fromString(cfg.creatorUserId.trim());
+        MarketBootstrap.createMarket(log, creatorId, name, creator);
+        System.out.println("[host] created '" + name + "' owned by " + cfg.creatorUserId
+                + " — that key is not needed on this machine again");
+        writeInitialPolicy(log, cfg, creatorId, creator);
+    }
+
+    /**
+     * Records the configured welcome grant as the new market's policy.
+     *
+     * Only at creation, and only when it differs from the default every market starts
+     * with. After this the figure is the market's, not the server's: a host joining a
+     * market it did not create has no authority to change what newcomers are given, and
+     * a grant that disagreed with policy would be rejected by every replica including
+     * its own.
+     *
+     * Signed by the creator, because policy is creator-gated — which is the whole
+     * reason --creator-key records an operator rather than the box.
+     */
+    private static void writeInitialPolicy(EventLog log, ServerConfig cfg,
+                                           UUID creatorId, PlayerKeys creatorKeys) {
+        if (cfg.welcomeGrant == ServerConfig.DEFAULT_WELCOME_GRANT) return;
+
+        try {
+            Event.MarketPolicy mp = new Event.MarketPolicy();
+            mp.userId = creatorId;
+            mp.marketId = log.marketId();
+            mp.taxBps = 0;
+            mp.grantAmount = cfg.welcomeGrant;
+            mp.clientEventId = UUID.randomUUID().toString();
+            mp.timestamp = System.currentTimeMillis();
+
+            log.append(mp, creatorKeys.sign(EventCanonical.canonicalPayload(mp)));
+            System.out.println("[host] welcome grant for this market set to "
+                    + cfg.welcomeGrant);
+        } catch (Exception e) {
+            // Not fatal: the market exists and works, it just uses the default grant.
+            // Saying so is better than a server that quietly ignores its own config.
+            System.err.println("[host] could not record the configured welcome grant ("
+                    + e.getMessage() + ") — this market will use "
+                    + ServerConfig.DEFAULT_WELCOME_GRANT);
+        }
     }
 }

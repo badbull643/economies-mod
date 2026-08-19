@@ -81,10 +81,62 @@ public class MarketClient {
 
     public MarketState state() { return state; }
     public boolean isConnected() { return connected; }
+
+    /**
+     * Whether the host we synced from calls itself a dedicated server.
+     *
+     * Self-reported and only knowable once connected, which is why nothing offline
+     * claims the opposite — "not dedicated" and "not yet known" are different answers
+     * and only one of them is safe to draw.
+     */
+    private volatile boolean hostDedicated = false;
+    public boolean hostIsDedicated() { return hostDedicated; }
+
+    /**
+     * What to tell a host about the world we are trading from, or null to say nothing.
+     *
+     * Set from outside rather than read here: describing a Minecraft world means
+     * touching Minecraft, and core does not. The client package fills this in before
+     * connecting.
+     */
+    private volatile WorldAttestation attestation;
+
+    public void setAttestation(WorldAttestation a) { this.attestation = a; }
+
+    /**
+     * Tells the host the world has changed since the handshake described it.
+     *
+     * The handshake is a photograph, and connecting from a clean world before opening
+     * it to LAN with cheats enabled would otherwise leave the host acting on a
+     * description that stopped being true a minute later. Sent only when something
+     * actually differs — see MarketStateHolder, which does the comparing.
+     */
+    public void reattest(WorldAttestation a) {
+        if (a == null || !connected || channel == null) return;
+        this.attestation = a;
+        Message.Attest msg = new Message.Attest();
+        msg.attestation = a;
+        channel.send(msg);
+    }
     public EventLog log() { return log; }
     public long lastSeq() { return appliedSeq; }
 
     public void setOnRejected(Consumer<String> handler) { this.onRejected = handler; }
+
+    /**
+     * Called with the clientEventId of a proposal the host turned down.
+     *
+     * Split from onRejected, which exists to put words on a screen. This one exists
+     * because a refused deposit has already taken the items out of somebody's
+     * inventory, and until this fired they came back only on the next startup, when the
+     * journal was settled against the log — a rejected deposit meant losing your items
+     * until you restarted the game.
+     */
+    private Consumer<String> onProposalRefused = id -> {};
+
+    public void setOnProposalRefused(Consumer<String> handler) {
+        this.onProposalRefused = handler;
+    }
     public void setOnStateChanged(Runnable handler) { this.onStateChanged = handler; }
 
 
@@ -118,6 +170,7 @@ public class MarketClient {
         UUID myMarket = log.marketId();
         hello.marketId = myMarket != null ? myMarket.toString() : null;
         hello.marketName = log.marketName();
+        hello.attestation = attestation;
 
         System.out.println("[client] hello: lastSeq=" + hello.lastSeq
                 + " appliedSeq=" + appliedSeq + " persist=" + persist);
@@ -136,6 +189,7 @@ public class MarketClient {
         }
 
         Message.Sync sync = (Message.Sync) reply;
+        hostDedicated = sync.dedicated;
 
         // The host already refused a mismatch, but check our own copy too — a client
         // should not adopt events into a log whose identity it did not agree to.
@@ -330,7 +384,14 @@ public class MarketClient {
                     onStateChanged.run();
                     if (!ok) break;
                 } else if (msg instanceof Message.Rejected) {
-                    onRejected.accept(((Message.Rejected) msg).reason);
+                    Message.Rejected r = (Message.Rejected) msg;
+                    onRejected.accept(r.reason);
+                    // Separately from the message, because a refusal is not only
+                    // something to say: a deposit takes the items out of the inventory
+                    // before proposing, so somebody has to give them back.
+                    if (r.clientEventId != null) {
+                        onProposalRefused.accept(r.clientEventId);
+                    }
                 } else if (msg instanceof Message.Error) {
                     onRejected.accept("host error: " + ((Message.Error) msg).reason);
                     break;
@@ -367,6 +428,21 @@ public class MarketClient {
     private volatile long appliedSeq = 0;
 
     /**
+     * The sequence number that arrived when we were expecting an earlier one, or -1.
+     *
+     * Set on the reader thread, read from the game thread by whoever owns this
+     * connection. Never cleared: a client that has missed events cannot catch up in
+     * place, so recovery replaces the whole client rather than resetting a flag.
+     */
+    private volatile long gapAt = -1;
+
+    /** True once a broadcast has arrived out of order — see gapAt. */
+    public boolean needsResync() { return gapAt != -1; }
+
+    /** Which sequence number exposed the gap. Meaningless unless needsResync(). */
+    public long gapAt() { return gapAt; }
+
+    /**
      * Applies one broadcast or sync line. Returns false if the host sent something
      * unverifiable, in which case the caller must tear the connection down.
      *
@@ -385,10 +461,38 @@ public class MarketClient {
             return false;
         }
 
+        // Already have it. Not a fault and not worth mentioning: a resync asks the host
+        // for everything after our lastSeq, so a broadcast that was already in flight
+        // when we reconnected lands a second time as a matter of course.
+        if (se.seq <= appliedSeq) {
+            return true;
+        }
+
         if (se.seq != appliedSeq + 1) {
+            // Events are missing. Nothing after this one can be applied either — the
+            // chain check in appendRaw would reject it and appliedSeq would never
+            // advance past the hole — so tolerating it silently is what turned one
+            // dropped broadcast into a client that stayed "connected" and applied
+            // nothing for the rest of the session.
+            if (replaying) {
+                // The hole is in the host's own sync stream, which it built from our
+                // lastSeq. Reconnecting would ask the same host the same question and
+                // get the same answer, so this is a refusal, not something to retry.
+                System.err.println("[client] host's sync skips from " + appliedSeq
+                        + " to " + se.seq + " — refusing");
+                return false;
+            }
+
+            // A live broadcast. Recovery is a reconnect: the handshake sends our
+            // lastSeq and the host replies with everything after it, which is the
+            // same path that already backfills a client joining late. Performed by
+            // the owner of the connection, not here — this runs on the reader thread
+            // and during sync on the connecting thread, and tearing the channel down
+            // from either would strand the other.
             System.err.println("[client] sequence gap: expected " + (appliedSeq + 1)
-                    + " got " + se.seq + " (persist=" + persist + ")");
-            return true;   // a gap is not grounds to distrust the host
+                    + " got " + se.seq + " — resync needed");
+            gapAt = se.seq;
+            return true;
         }
 
         // Check the signature before this event goes anywhere near our log or state.
