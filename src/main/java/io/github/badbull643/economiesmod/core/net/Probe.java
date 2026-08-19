@@ -65,6 +65,7 @@ public class Probe {
     public static String queryPayload(Message.QueryReply r, String nonce) {
         return nonce + "|" + r.userId + "|" + r.hostName + "|"
                 + r.lastSeq + "|" + r.lastHash + "|" + r.clientCount
-                + "|" + r.marketId + "|" + r.marketName;
+                + "|" + r.marketId + "|" + r.marketName
+                + "|" + r.dedicated;
     }
 }

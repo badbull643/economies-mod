@@ -134,3 +134,40 @@ tasks.register('replayGuardTest', JavaExec) {
     mainClass = 'io.github.badbull643.economiesmod.core.net.ReplayGuardTest'
     classpath = sourceSets.main.runtimeClasspath
 }
+
+tasks.register('gapRecoveryTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks a missed broadcast is noticed and can be recovered from.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.GapRecoveryTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
+tasks.register('admissionTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks admission policy holds on every door, including pre-handshake.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.AdmissionTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
+tasks.register('depositCapTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks a deposit cap is enforced against a real client.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.DepositCapTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
+tasks.register('attestationTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks a world attestation reaches the host and is acted on.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.AttestationTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
+// Lets the dedicated launcher be exercised from a shell the same way an operator
+// would run it, rather than only through a JavaExec task with baked-in arguments.
+tasks.register('hostServer', JavaExec) {
+    group = 'application'
+    description = 'Runs the standalone dedicated server (no Minecraft).'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.HostServer'
+    classpath = sourceSets.main.runtimeClasspath
+}

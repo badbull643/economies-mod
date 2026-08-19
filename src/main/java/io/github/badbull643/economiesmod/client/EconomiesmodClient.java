@@ -36,6 +36,8 @@ public class EconomiesmodClient implements ClientModInitializer {
         MarketKeybinds.register();
         // A second way in, for players who have no reason to know about the keybind.
         InventoryMarketButton.register();
+        // A third, for reading the market without leaving what you were doing.
+        TradeCommands.register();
 
 
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
@@ -67,6 +69,32 @@ public class EconomiesmodClient implements ClientModInitializer {
             // Batched fills wait for their window to close, so something has to come
             // back and flush them.
             FILLS.tick();
+
+            // Noted whether or not a market is open, because the interesting order is
+            // to enable cheats first and connect afterwards. Minecraft forgets this on
+            // reload; the mod does not.
+            WorldFacts.noteCheatsIfSeen(mc.getServer());
+
+            // A deposit the host refused took the items out of the inventory before it
+            // was proposed. Handing them back here, on the thread that owns the
+            // inventory, rather than leaving the journal to settle it at next startup —
+            // which is what happened until now, and meant a refused deposit cost you
+            // your items until you restarted the game.
+            if (mc.player != null) {
+                PendingOps.Op refund;
+                while ((refund = MarketStateHolder.nextRefundDue()) != null) {
+                    InventoryBridge.give(mc.player, MinecraftIds.idToItem(refund.itemId),
+                            (int) refund.quantity);
+                    System.out.println("[economiesmod] returned " + refund.quantity + " "
+                            + refund.itemId + " — the host refused that deposit");
+                }
+            }
+
+            // Here rather than in the market screen's render, which is where it started
+            // and where it could never have worked: Open to LAN is reached from the
+            // pause menu, so the screen that was doing the checking is closed at exactly
+            // the moment the world changes. A tick happens whether anyone is looking.
+            MarketStateHolder.reattestIfChanged();
 
             if (pendingOpsSettled) return;
             if (mc.player == null || mc.getServer() == null) return;
@@ -157,7 +185,7 @@ public class EconomiesmodClient implements ClientModInitializer {
         }
 
         int total = recovery.refunds.size() + recovery.unconfirmed.size();
-        MarketScreen.reportRecovery(recovery.refunds.size(), recovery.unconfirmed.size());
+        MarketStateHolder.reportRecovery(recovery.refunds.size(), recovery.unconfirmed.size());
         System.out.println("[economiesmod] settled " + total
                 + " interrupted inventory operation(s) from a previous session");
     }
