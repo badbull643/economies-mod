@@ -30,7 +30,6 @@ public class PlayerKeys {
     }
 
     public PublicKey publicKey()   { return keyPair.getPublic(); }
-    public PrivateKey privateKey() { return keyPair.getPrivate(); }
 
     /** Base64 of the public key, suitable for sharing with a host. */
     public String publicKeyString() {
