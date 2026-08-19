@@ -2222,22 +2222,6 @@ public class MarketTests {
                 + " — expected " + expected + ", got " + actual);
     }
 
-    private static long restingSellVolume(MarketState m, String itemId) {
-        long total = 0;
-        for (Deque<Order> q : m.bookFor(itemId).asks().values()) {
-            for (Order o : q) total += o.volume();
-        }
-        return total;
-    }
-
-    private static long restingBidReservation(MarketState m, String itemId) {
-        long total = 0;
-        for (Deque<Order> q : m.bookFor(itemId).bids().values()) {
-            for (Order o : q) total += o.volume() * o.value();
-        }
-        return total;
-    }
-
     private static PlayerKeys testKeys;
 
     /** One keypair for the whole suite — generating RSA keys is the slow part. */

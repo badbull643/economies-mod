@@ -79,12 +79,10 @@ public class MessageChannel implements AutoCloseable {
         switch (type) {
             case "Hello":    return Message.Hello.class;
             case "Propose":  return Message.Propose.class;
-            case "Ping":     return Message.Ping.class;
             case "Sync":     return Message.Sync.class;
             case "Accepted": return Message.Accepted.class;
             case "Rejected": return Message.Rejected.class;
             case "Error":    return Message.Error.class;
-            case "Pong":     return Message.Pong.class;
             case "QueryReply":  return Message.QueryReply.class;
             case "Query":       return Message.Query.class;
             case "MigrateRequest": return Message.MigrateRequest.class;
