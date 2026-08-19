@@ -612,12 +612,14 @@ public class MarketStateHolder {
 
         disconnectIfConnected();
 
-
+        // Declared out here so the failure paths can still reach it — see
+        // adoptAfterFailedConnect for why dropping it was the bug.
+        EventLog log = null;
         try {
             // Always re-open from disk rather than reusing localLog. A reused instance
             // carries an in-memory lastSeq/lastHash that may have gone stale — which is
             // precisely what let a duplicate sequence number get appended before.
-            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            log = new EventLog(logPathFor(currentWorldDir));
 
             MarketClient c = new MarketClient(userId, displayName, keys, log, persist,
                     peerCache, myHostPort);
@@ -655,9 +657,52 @@ public class MarketStateHolder {
             lastRefusal = e;
             onRejected.accept(e.getMessage() + explainRemedy(e.code, lossIfReset));
             System.err.println("[economiesmod] refused: " + e.getMessage());
+            adoptAfterFailedConnect(log);
         } catch (IOException e) {
             onRejected.accept("connect failed: " + e.getMessage());
             System.err.println("[economiesmod] connect failed: " + e);
+            adoptAfterFailedConnect(log);
+        }
+    }
+
+    /**
+     * Takes over the log opened for a connect that did not succeed.
+     *
+     * The success path above installs this instance as localLog; the failure paths used
+     * to simply drop it, which left two EventLog objects on one file. That is the exact
+     * situation assertSoleWriter exists to catch: a client that got far enough to append
+     * sync lines before failing has grown the file, and the still-installed localLog is
+     * holding a byte count from before it. The next local write then dies with "log file
+     * changed underneath us", having written nothing — safe, but the market is stuck
+     * until the world is reloaded.
+     *
+     * Installing it rather than discarding it leaves exactly one live instance, and this
+     * is the one whose position is right, because it is the handle that did the writing.
+     * State is replayed from it for the same reason: if it appended, localState is a
+     * record of the log as it was before those lines.
+     *
+     * Skipped while still connected. A failed resync stays in CONNECTED mode with the
+     * previous client installed, and that client still owns the log it was handed —
+     * swapping underneath it would recreate the very problem this closes.
+     */
+    private static void adoptAfterFailedConnect(EventLog log) {
+        if (log == null || log == localLog || isConnected()) return;
+
+        try {
+            localLog = log;
+            chainBrokenAt = log.verifyChain();
+            damageReason = log.damageReason();
+            localState = EventApplier.replay(log);
+            seedActivity(log);
+        } catch (Exception e) {
+            // Same reasoning as loadLocal: this runs on a UI-driven path, and a throw
+            // here would strand the player with no way back to their own market.
+            System.err.println("[economiesmod] could not reopen the local log after a"
+                    + " failed connect: " + e);
+            localLog = null;
+            localState = new MarketState();
+            chainBrokenAt = 0;
+            damageReason = "could not be read at all (" + e.getMessage() + ")";
         }
     }
 
