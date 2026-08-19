@@ -1,0 +1,22 @@
+{
+  "port": 25610,
+  "bindAddress": "127.0.0.1",
+  "maxConnections": 8,
+  "outboundQueueDepth": 256,
+  "maxDepositUnitsPerWindow": 0,
+  "depositWindowMinutes": 60,
+  "requireAttestation": false,
+  "refuseCreativeWorlds": false,
+  "refuseCheatWorlds": false,
+  "maxDepositUnitsPerPlayHour": 0,
+  "maxDepositMultipleOfHandled": 0,
+  "admission": "open",
+  "allow": [],
+  "deny": [],
+  "banOnWorldChange": false,
+  "hostName": "dedicated-one",
+  "dedicated": false,
+  "logFile": "server-market.jsonl",
+  "creatorUserId": "00000000-0000-0000-0000-000000000001",
+  "welcomeGrant": 250
+}
