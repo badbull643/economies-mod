@@ -40,9 +40,6 @@ public abstract class Message {
         public Propose() { type = "Propose"; }
     }
 
-    public static class Ping extends Message {
-        public Ping() { type = "Ping"; }
-    }
 
     // ─── Server → Client ───
 
@@ -100,9 +97,6 @@ public abstract class Message {
         public Error() { type = "Error"; }
     }
 
-    public static class Pong extends Message {
-        public Pong() { type = "Pong"; }
-    }
 
     /**
      * "Here is the market I'm abandoning — work out what I'm owed."

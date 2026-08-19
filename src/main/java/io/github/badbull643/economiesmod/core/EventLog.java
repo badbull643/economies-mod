@@ -119,7 +119,6 @@ public class EventLog {
     // asks whether the log is usable.
     private volatile long unreadableAt = -1;
 
-    public long unreadableAt() { return unreadableAt; }
     public boolean isUnreadable() { return unreadableAt != -1; }
 
     /**

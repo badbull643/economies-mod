@@ -117,11 +117,18 @@ rather than silently freezing. Any occurrence is worth reporting.
 
 ## Group C — dedicated server
 
-Each item needs a `server-config.json` change and a restart. Group them into one sitting.
+Each item needs a config change and a restart. Group them into one sitting.
+
+**Use `docs/testing/group-c-runbook.md`** — the configs below are written out there as
+ready-to-swap files, in a run order that puts the destructive one last, each with every
+*other* rule switched off so a refusal cannot be misattributed. The JSON in this section
+is kept as the statement of what each test is about; the runbook is what to type.
 
 ```bash
-./gradlew hostServer --args="--config server-config.json --write-config"
+./gradlew hostServer --args="--config docs/testing/c1-admission.json"
 ```
+
+Note `--write-config` writes the file and **exits** — it does not start a server.
 
 ### C1. Admission control
 
