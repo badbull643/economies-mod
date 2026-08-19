@@ -128,6 +128,17 @@ public class EventApplier {
             return Result.ok(Collections.emptyList());
         }
 
+        if (e instanceof Event.MarketPolicy) {
+            // Takes effect from here forward only. Fills already sequenced settled at
+            // the rate in force when they were applied, which replay reproduces without
+            // anything here having to know about it.
+            Event.MarketPolicy applied = (Event.MarketPolicy) e;
+            state.setTaxBps(applied.taxBps);
+            state.setWelcomeGrant(applied.grantAmount);
+            state.setListingFee(applied.listingFee);
+            return Result.ok(Collections.emptyList());
+        }
+
         if (e instanceof Event.MigrateBalance) {
             Event.MigrateBalance mb = (Event.MigrateBalance) e;
             if (mb.credits > 0) state.wallets().adjust(mb.beneficiary, mb.credits);
@@ -231,6 +242,23 @@ public class EventApplier {
             Event.WelcomeGrant wg = (Event.WelcomeGrant) e;
             if (wg.amount <= 0) return Result.reject("amount must be positive");
             if (wg.targetUserId == null) return Result.reject("missing targetUserId");
+
+            // The amount must be the one this market publishes, not merely positive.
+            //
+            // Nothing checks who authors a grant, and nothing can: hosting rotates, so
+            // a replica reading the log later cannot know who was sequencing at that
+            // point. Without this line the author did not matter because the amount did
+            // not either — any identity could sign itself a grant for any sum and every
+            // replica would accept it. Two ways in: a server configured with a zero
+            // grant never marks anyone granted, so hasBeenGranted below never fires; and
+            // a grant authored in one's own local world migrates in at full value.
+            //
+            // Pinning the amount makes authorship moot. The most a liar can give
+            // themselves is what an honest host would have given them anyway, once.
+            if (wg.amount != state.welcomeGrant()) {
+                return Result.reject("grant must be exactly this market's "
+                        + state.welcomeGrant() + ", not " + wg.amount);
+            }
             if (state.hasBeenGranted(wg.targetUserId)) {
                 return Result.reject("already granted in this market");
             }
@@ -242,6 +270,47 @@ public class EventApplier {
             // concentrate its grants into one migrant and collect a second set.
             if (state.isAccountedElsewhere(wg.targetUserId)) {
                 return Result.reject("already accounted for by a migration");
+            }
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.MarketPolicy) {
+            Event.MarketPolicy mp = (Event.MarketPolicy) e;
+
+            // Bounds are checked here, not at the UI that offers the control, because
+            // this is the gate every replica passes through. A fat-fingered 10000% must
+            // be rejected identically by everyone rather than faithfully replayed into
+            // a market where selling costs more than it earns.
+            if (mp.taxBps < 0) {
+                return Result.reject("tax cannot be negative");
+            }
+            if (mp.taxBps > MarketState.MAX_TAX_BPS) {
+                return Result.reject("tax may not exceed "
+                        + (MarketState.MAX_TAX_BPS / 100) + "%");
+            }
+            if (mp.grantAmount < 0) {
+                return Result.reject("welcome grant cannot be negative");
+            }
+            if (mp.grantAmount > MarketState.MAX_WELCOME_GRANT) {
+                return Result.reject("welcome grant may not exceed "
+                        + MarketState.MAX_WELCOME_GRANT);
+            }
+            if (mp.listingFee < 0) {
+                return Result.reject("listing fee cannot be negative");
+            }
+            if (mp.listingFee > MarketState.MAX_LISTING_FEE) {
+                return Result.reject("listing fee may not exceed "
+                        + MarketState.MAX_LISTING_FEE);
+            }
+
+            // Creator-signed. The market's own genesis names who may set its policy,
+            // which is why bootstrapping with --creator-key records the operator rather
+            // than the server: compromising a host then buys no authority over the rate.
+            if (state.creator() == null) {
+                return Result.reject("this market has no creator recorded");
+            }
+            if (!state.creator().equals(e.userId)) {
+                return Result.reject("only the market's creator can set policy");
             }
             return Result.ok(Collections.emptyList());
         }

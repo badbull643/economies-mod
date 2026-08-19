@@ -57,6 +57,56 @@ public abstract class Event {
     }
 
     /**
+     * The market's economic policy. Currently one number: the transaction tax.
+     *
+     * An event rather than a host setting, and that is not a stylistic choice. Every
+     * client replays the log independently and must reach the same balances; a rate
+     * that lived in a host's config would be invisible to replayers, so the moment a
+     * host applied it the market would fork. Policy that changes settlement has to be
+     * ordered in the log alongside the trades it changes.
+     *
+     * Basis points, not a percentage. A double would be one decimal-representation
+     * difference away from two replicas computing different balances, which is the
+     * cheapest imaginable way to fork a market. 100 bps = 1%.
+     *
+     * Non-retroactive for free: replay applies events in order, so fills sequenced
+     * before this event settle at whatever rate was in force then. That falls out of
+     * the design rather than being implemented, which is exactly why it is worth a
+     * test — nothing in the code says it, so nothing protects it.
+     */
+    public static class MarketPolicy extends Event {
+        /** Transaction tax on fills, in basis points. 0 means no tax. */
+        public int taxBps;
+
+        /**
+         * What a new identity is granted on first registering.
+         *
+         * Here rather than in a host's config, and that is a correctness requirement
+         * rather than tidiness. WelcomeGrant carries its own amount and is validated by
+         * every replica; with nothing in the log to compare against, "is this the right
+         * amount" was unanswerable and any signed grant for any sum validated. It also
+         * stops two hosts of one market handing out different amounts depending on who
+         * happened to be online.
+         */
+        public long grantAmount;
+
+        /**
+         * Flat credits charged for placing an order, whichever way it goes.
+         *
+         * Flat and not a percentage, because what it exists to discourage is the number
+         * of orders rather than their size — a percentage would let somebody paper the
+         * book with hundreds of one-credit orders for almost nothing, which is the
+         * behaviour being priced.
+         *
+         * Not refunded when an order is cancelled. A refundable fee deters nothing. The
+         * cost of that is real and is the reason this should stay small: cancelling and
+         * relisting at a better price pays it twice, and repricing is something a
+         * healthy market wants people doing.
+         */
+        public long listingFee;
+    }
+
+    /**
      * Carries a player's holdings across from a market they're abandoning.
      *
      * Authored by the host, which verified the incoming branch and recomputed the

@@ -1250,6 +1250,866 @@ public class MarketTests {
                     "minecraft:iron_ingot".equals(p.lastItem()) ? 1 : 0, 1);
         }
 
+        section("R1: server config round-trips");
+        {
+            Path f = scratch("test-serverconfig-r1.json");
+            Files.deleteIfExists(f);
+
+            ServerConfig cfg = ServerConfig.friendGroup(25610);
+            cfg.hostName = "dedicated-one";
+            cfg.welcomeGrant = 250;
+            cfg.maxConnections = 8;
+            cfg.bindAddress = "127.0.0.1";
+            cfg.creatorUserId = ALICE.toString();
+            cfg.save(f);
+
+            ServerConfig back = ServerConfig.load(f);
+            check("port survives", back.port, 25610);
+            check("grant survives", back.welcomeGrant, 250);
+            check("connection cap survives", back.maxConnections, 8);
+            check("bind address survives",
+                    "127.0.0.1".equals(back.bindAddress) ? 1 : 0, 1);
+            check("creator survives",
+                    ALICE.toString().equals(back.creatorUserId) ? 1 : 0, 1);
+        }
+
+        section("R2: a server nobody could use is refused, not clamped");
+        {
+            // Named rather than corrected: a port silently changed out from under an
+            // operator is worse than a refusal that says which field is wrong.
+            ServerConfig bad = ServerConfig.friendGroup(99999);
+            check("out-of-range port refused", bad.problem() != null ? 1 : 0, 1);
+
+            ServerConfig noRoom = ServerConfig.friendGroup(25555);
+            noRoom.maxConnections = 0;
+            check("zero connections refused", noRoom.problem() != null ? 1 : 0, 1);
+
+            ServerConfig negative = ServerConfig.friendGroup(25555);
+            negative.welcomeGrant = -1;
+            check("negative grant refused", negative.problem() != null ? 1 : 0, 1);
+
+            check("a sane config is accepted",
+                    ServerConfig.friendGroup(25555).problem() == null ? 1 : 0, 1);
+        }
+
+        section("R3: no config is defaults, an unreadable one is a refusal");
+        {
+            // The two are deliberately not the same. No file means no policy has been
+            // expressed. A file that exists and cannot be parsed means policy WAS
+            // expressed and cannot be seen — and defaulting there would quietly restore
+            // welcomeGrant to 1000, minting money into a log that is never rewritten.
+            Path none = scratch("test-serverconfig-none.json");
+            Files.deleteIfExists(none);
+            ServerConfig absent = ServerConfig.load(none);
+            check("absent file gives defaults", absent.port, 25555);
+            check("and the default grant", absent.welcomeGrant,
+                    ServerConfig.DEFAULT_WELCOME_GRANT);
+
+            Path junk = scratch("test-serverconfig-r3.json");
+            Files.deleteIfExists(junk);
+            Files.write(junk, "not json at all".getBytes());
+            boolean refused = false;
+            try {
+                ServerConfig.load(junk);
+            } catch (IOException e) {
+                refused = true;
+            }
+            check("damaged file is refused, not defaulted", refused ? 1 : 0, 1);
+
+            Path empty = scratch("test-serverconfig-r3c.json");
+            Files.deleteIfExists(empty);
+            Files.write(empty, "   ".getBytes());
+            boolean emptyRefused = false;
+            try {
+                ServerConfig.load(empty);
+            } catch (IOException e) {
+                emptyRefused = true;
+            }
+            check("an empty file is refused too", emptyRefused ? 1 : 0, 1);
+
+            // A file written by an older build is still valid JSON and still policy —
+            // only the fields it never had fall back.
+            Path partial = scratch("test-serverconfig-r3b.json");
+            Files.deleteIfExists(partial);
+            Files.write(partial, "{\"port\":25611}".getBytes());
+            ServerConfig p = ServerConfig.load(partial);
+            check("known field read", p.port, 25611);
+            check("absent field keeps its default", p.maxConnections, 64);
+        }
+
+        section("S1: an open server admits anyone");
+        {
+            ServerConfig open = ServerConfig.friendGroup(25555);
+            check("a stranger is admitted", open.refuses(ALICE.toString()) == null ? 1 : 0, 1);
+            check("but not a missing identity", open.refuses(null) != null ? 1 : 0, 1);
+            check("nor an empty one", open.refuses("  ") != null ? 1 : 0, 1);
+        }
+
+        section("S2: an allowlist admits only who is on it");
+        {
+            ServerConfig cfg = ServerConfig.friendGroup(25555);
+            cfg.admission = ServerConfig.ALLOWLIST;
+            cfg.allow.add(ALICE.toString());
+
+            check("a listed identity is admitted",
+                    cfg.refuses(ALICE.toString()) == null ? 1 : 0, 1);
+            check("an unlisted one is not",
+                    cfg.refuses(BOB.toString()) != null ? 1 : 0, 1);
+
+            // A UUID reaches the config by being typed or pasted, so case is not a
+            // meaningful difference and must not decide who gets in.
+            check("case does not decide admission",
+                    cfg.refuses(ALICE.toString().toUpperCase()) == null ? 1 : 0, 1);
+            check("nor does stray whitespace",
+                    cfg.refuses("  " + ALICE.toString() + " ") == null ? 1 : 0, 1);
+        }
+
+        section("S3: deny beats allow");
+        {
+            // An identity on both lists is one somebody is arguing about. Refusing is
+            // the reading that can be undone.
+            ServerConfig cfg = ServerConfig.friendGroup(25555);
+            cfg.admission = ServerConfig.ALLOWLIST;
+            cfg.allow.add(ALICE.toString());
+            cfg.deny.add(ALICE.toString());
+            check("denied even though allowed",
+                    cfg.refuses(ALICE.toString()) != null ? 1 : 0, 1);
+
+            ServerConfig openCfg = ServerConfig.friendGroup(25555);
+            openCfg.deny.add(BOB.toString());
+            check("deny applies on an open server too",
+                    openCfg.refuses(BOB.toString()) != null ? 1 : 0, 1);
+            check("and leaves everyone else alone",
+                    openCfg.refuses(ALICE.toString()) == null ? 1 : 0, 1);
+        }
+
+        section("S4: an admission policy that locks everyone out is refused");
+        {
+            // Including the operator. This is a config that cannot be what was meant,
+            // and finding out by being unable to connect is a bad way to learn it.
+            ServerConfig empty = ServerConfig.friendGroup(25555);
+            empty.admission = ServerConfig.ALLOWLIST;
+            check("allowlist with nobody on it is refused",
+                    empty.problem() != null ? 1 : 0, 1);
+
+            ServerConfig typo = ServerConfig.friendGroup(25555);
+            typo.admission = "allow-list";
+            check("a misspelt mode does not silently mean open",
+                    typo.problem() != null ? 1 : 0, 1);
+
+            ServerConfig fine = ServerConfig.friendGroup(25555);
+            fine.admission = ServerConfig.ALLOWLIST;
+            fine.allow.add(ALICE.toString());
+            check("a usable allowlist is accepted", fine.problem() == null ? 1 : 0, 1);
+        }
+
+        section("T1: the rounding rule, pinned");
+        {
+            // Every replica computes this independently and must agree to the credit.
+            check("1% of 1000", MarketState.taxOn(1000, 100), 10);
+            check("2.5% of 1000", MarketState.taxOn(1000, 250), 25);
+            check("50% of 1000", MarketState.taxOn(1000, MarketState.MAX_TAX_BPS), 500);
+            check("no rate, no tax", MarketState.taxOn(1000, 0), 0);
+            check("a negative rate cannot pay anyone", MarketState.taxOn(1000, -100), 0);
+
+            // Rounds down, so small trades are taxed nothing rather than
+            // disproportionately. 1% of 99 is 0.99.
+            check("rounds down, not up", MarketState.taxOn(99, 100), 0);
+            check("and at the boundary", MarketState.taxOn(100, 100), 1);
+            check("199 at 1%", MarketState.taxOn(199, 100), 1);
+
+            check("nothing is taxed on nothing", MarketState.taxOn(0, 500), 0);
+            check("the tax never exceeds the trade",
+                    MarketState.taxOn(1, MarketState.MAX_TAX_BPS), 0);
+
+            // Large but realistic: 100k units at 100k each would overflow a naive
+            // int multiply long before this.
+            check("large fills do not overflow",
+                    MarketState.taxOn(1_000_000_000L, 100), 10_000_000L);
+        }
+
+        section("T1b: where a rate stops being worth anything");
+        {
+            // Reported from a live market: a 2.5% fee appeared to take nothing. It was
+            // working — the sales were worth 10 to 20 credits, and 2.5% of 20 floors to
+            // zero. The arithmetic was right and the screen said nothing about it.
+            check("2.5% needs a 40-credit sale",
+                    MarketState.smallestTaxableSale(250), 40);
+            check("10% needs only 10", MarketState.smallestTaxableSale(1000), 10);
+            check("3.7% rounds up to 28", MarketState.smallestTaxableSale(370), 28);
+            check("50% bites at 2", MarketState.smallestTaxableSale(5000), 2);
+            check("no rate, no threshold", MarketState.smallestTaxableSale(0), 0);
+
+            // The threshold must agree with the tax itself, or the screen would promise
+            // something the settlement does not do.
+            for (int bps : new int[]{100, 250, 370, 1000, 5000}) {
+                long floor = MarketState.smallestTaxableSale(bps);
+                check("at " + bps + " bps, one under the threshold is free",
+                        MarketState.taxOn(floor - 1, bps), 0);
+                check("at " + bps + " bps, the threshold itself is not",
+                        MarketState.taxOn(floor, bps) > 0 ? 1 : 0, 1);
+            }
+        }
+
+        section("T1c: a listing fee prices orders, not order value");
+        {
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 100);
+            m.wallets().setBalance(ALICE, 1000L);
+            m.setListingFee(25);
+
+            long before = m.wallets().getBalance(ALICE);
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));
+            check("a sell pays to be listed", m.wallets().getBalance(ALICE), before - 25);
+            check("and still reserves its goods",
+                    m.itemBalances().getBalance(ALICE, IRON), 90);
+
+            // Flat, so ten small orders cost ten times what one does. That is the whole
+            // point: what is being discouraged is the count, not the value.
+            long beforeSmall = m.wallets().getBalance(ALICE);
+            m.submitOrder(new Order(2, 1, IRON, 1, false, ALICE));
+            check("a tiny order costs the same",
+                    m.wallets().getBalance(ALICE), beforeSmall - 25);
+
+            // Not refunded. A refundable fee deters nothing, and this is the only
+            // charge in the market that can be paid for an order that never traded.
+            long beforeCancel = m.wallets().getBalance(ALICE);
+            m.cancelOrder(1, IRON, false, ALICE);
+            check("cancelling returns the goods",
+                    m.itemBalances().getBalance(ALICE, IRON), 99);
+            check("but not the listing fee",
+                    m.wallets().getBalance(ALICE), beforeCancel);
+        }
+
+        section("T1d: an order that cannot pay to be listed is refused");
+        {
+            // The awkward consequence of pricing placement: a seller holding goods and
+            // no credits cannot list at all. Refused up front rather than discovered
+            // during settlement, where the order would already have been accepted.
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 100);
+            m.wallets().setBalance(ALICE, 10L);
+            m.setListingFee(25);
+
+            check("a seller who cannot pay the fee is refused",
+                    m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE)).accepted ? 1 : 0, 0);
+            check("and keeps their goods",
+                    m.itemBalances().getBalance(ALICE, IRON), 100);
+            check("and their credits", m.wallets().getBalance(ALICE), 10);
+
+            // A buy has to cover both its reservation and the fee, or it would be
+            // accepted and then be unable to pay for itself.
+            MarketState b = new MarketState();
+            b.wallets().setBalance(BOB, 100L);
+            b.setListingFee(25);
+            check("a buy needing 100 plus the fee is refused",
+                    b.submitOrder(new Order(1, 10, IRON, 10, true, BOB)).accepted ? 1 : 0, 0);
+            check("one that leaves room for it is not",
+                    b.submitOrder(new Order(2, 7, IRON, 10, true, BOB)).accepted ? 1 : 0, 1);
+            check("paying reservation and fee together",
+                    b.wallets().getBalance(BOB), 100 - 70 - 25);
+        }
+
+        section("T2: the tax comes off the seller, and is burned");
+        {
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 10);
+            m.wallets().setBalance(BOB, 1000L);
+            m.setTaxBps(1000);              // 10%
+
+            long supplyBefore = m.wallets().getBalance(ALICE) + m.wallets().getBalance(BOB);
+
+            // Order is (id, price, item, volume, isBid, who) — price before volume.
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));   // ask 10 @ 50
+            m.submitOrder(new Order(2, 50, IRON, 10, true, BOB));      // buy 10 @ 50
+
+            // 10 units at 50 = 500. 10% of 500 = 50.
+            check("seller is credited net of tax", m.wallets().getBalance(ALICE), 450);
+            check("buyer pays the full price", m.wallets().getBalance(BOB), 500);
+            check("buyer gets the goods", m.itemBalances().getBalance(BOB, IRON), 10);
+
+            long supplyAfter = m.wallets().getBalance(ALICE) + m.wallets().getBalance(BOB);
+            check("the tax left the system entirely", supplyBefore - supplyAfter, 50);
+        }
+
+        section("T3: a rate change is not retroactive");
+        {
+            // Replay gives this for free — fills settle against the rate in force when
+            // they were applied, and nothing in the code says so. Which is exactly why
+            // it is worth a test: it is correctness by construction that a later
+            // refactor could remove without any other check noticing.
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 20);
+            m.wallets().setBalance(BOB, 2000L);
+
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));
+            m.submitOrder(new Order(2, 50, IRON, 10, true, BOB));
+            check("untaxed while the rate was zero", m.wallets().getBalance(ALICE), 500);
+
+            m.setTaxBps(1000);              // 10%, from here on
+
+            m.submitOrder(new Order(3, 50, IRON, 10, false, ALICE));
+            m.submitOrder(new Order(4, 50, IRON, 10, true, BOB));
+            // Second trade: 500 gross, 50 tax, 450 net. First trade keeps its full 500.
+            check("only the later trade is taxed", m.wallets().getBalance(ALICE), 950);
+        }
+
+        section("V1: a deposit cap counts a window, on the host's clock");
+        {
+            // Time is passed in rather than read, so this tests the rule instead of
+            // testing whether the suite can outrun a wall clock.
+            long minute = 60_000L;
+            DepositLimiter lim = new DepositLimiter(100, 10 * minute);
+            long t = 1_000_000L;
+
+            check("under the cap is allowed", lim.allows(ALICE, 60, t) ? 1 : 0, 1);
+            lim.record(ALICE, IRON, 60, t);
+            check("and is counted", lim.usedBy(ALICE, t), 60);
+            check("what is left", lim.remainingFor(ALICE, t), 40);
+
+            check("exactly reaching the cap is allowed", lim.allows(ALICE, 40, t) ? 1 : 0, 1);
+            check("one past it is not", lim.allows(ALICE, 41, t) ? 1 : 0, 0);
+
+            // One identity's spending is not another's.
+            check("a different identity is unaffected", lim.usedBy(BOB, t), 0);
+            check("and has its whole allowance", lim.remainingFor(BOB, t), 100);
+
+            // The window slides rather than resetting on a boundary.
+            check("still counted just inside the window",
+                    lim.usedBy(ALICE, t + 9 * minute), 60);
+            check("gone once it has passed", lim.usedBy(ALICE, t + 11 * minute), 0);
+            check("and the allowance is whole again",
+                    lim.allows(ALICE, 100, t + 11 * minute) ? 1 : 0, 1);
+        }
+
+        section("V2: an unconfigured cap refuses nothing");
+        {
+            // Off by default: a friend group has no cheating problem worth a ceiling,
+            // and a limit that surprises people mid-session is worse than none.
+            DepositLimiter off = new DepositLimiter(0, 60_000L);
+            check("no ceiling is enforced", off.enabled() ? 1 : 0, 0);
+            check("allows an absurd deposit",
+                    off.allows(ALICE, 1_000_000_000L, 1L) ? 1 : 0, 1);
+
+            // Counting and enforcing are separate switches. The attestation check needs
+            // a running total even with no ceiling set, or it would compare each deposit
+            // alone against claimed play time and never a sum — which is a hundred units
+            // as often as you like.
+            off.record(ALICE, IRON, 500, 1L);
+            check("but deposits are still counted", off.usedBy(ALICE, 1L), 500);
+
+            DepositLimiter untracked = new DepositLimiter(0, 0L);
+            check("with no window, nothing is kept", untracked.tracking() ? 1 : 0, 0);
+            untracked.record(ALICE, IRON, 500, 1L);
+            check("and nothing is counted", untracked.usedBy(ALICE, 1L), 0);
+
+            check("a default config has no cap",
+                    ServerConfig.friendGroup(25555).maxDepositUnitsPerWindow, 0);
+
+            // A cap with no window would refuse everything forever, since nothing could
+            // ever age out of it.
+            ServerConfig bad = ServerConfig.friendGroup(25555);
+            bad.maxDepositUnitsPerWindow = 500;
+            bad.depositWindowMinutes = 0;
+            check("a cap with no window is refused", bad.problem() != null ? 1 : 0, 1);
+
+            ServerConfig fine = ServerConfig.friendGroup(25555);
+            fine.maxDepositUnitsPerWindow = 500;
+            check("a cap with the default window is fine",
+                    fine.problem() == null ? 1 : 0, 1);
+        }
+
+        section("Z1: an event must be stamped with its market before it is validated");
+        {
+            // The bug this pins: the local submit path stamped marketId after calling
+            // validate, so checkGenesis saw null and refused everything non-genesis as
+            // belonging to a different market. It surfaced as the fee control being
+            // rejected, but it applied to every event authored offline.
+            MarketState m = new MarketState();
+            UUID marketId = UUID.randomUUID();
+            m.setMarketIdentity(marketId, "stamping market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+
+            Event.MarketPolicy unstamped = new Event.MarketPolicy();
+            unstamped.userId = ALICE;
+            unstamped.taxBps = 250;
+            unstamped.grantAmount = m.welcomeGrant();
+            unstamped.timestamp = 1L;
+            // marketId deliberately left null, as the old order of operations left it
+
+            SequencedEvent probe = new SequencedEvent();
+            probe.seq = 2;
+            probe.event = unstamped;
+            check("an unstamped event is refused",
+                    EventApplier.validate(m, probe).accepted ? 1 : 0, 0);
+
+            unstamped.marketId = marketId;
+            check("the same event is accepted once stamped",
+                    EventApplier.validate(m, probe).accepted ? 1 : 0, 1);
+        }
+
+        section("Z2: a market can be removed from a world, except the first");
+        {
+            Path world = scratch("test-slots-z2");
+            deleteRecursively(world);
+            Files.createDirectories(world);
+
+            Path def = MarketSlots.logPath(world, MarketSlots.DEFAULT);
+            Files.createDirectories(def.getParent());
+            Files.write(def, "{}".getBytes());
+
+            String extra = MarketSlots.createNext(world);
+            Path extraLog = MarketSlots.logPath(world, extra);
+            Files.write(extraLog, "{}".getBytes());
+            // Everything a market owns sits beside its log, so removal has to take the
+            // directory — a stale high-water mark would be inherited by whatever
+            // occupied the name next.
+            Files.write(extraLog.resolveSibling("high-water.json"), "{}".getBytes());
+
+            check("both are there", MarketSlots.list(world).size(), 2);
+
+            MarketSlots.delete(world, extra);
+            check("the extra one is gone", MarketSlots.list(world).contains(extra) ? 1 : 0, 0);
+            check("its files went with it",
+                    Files.exists(extraLog.getParent()) ? 1 : 0, 0);
+            check("the first one is untouched", Files.exists(def) ? 1 : 0, 1);
+
+            // There has to be one slot that always exists, and it is where a
+            // single-market world already keeps its market.
+            boolean refused = false;
+            try {
+                MarketSlots.delete(world, MarketSlots.DEFAULT);
+            } catch (IOException e) {
+                refused = true;
+            }
+            check("the first market cannot be removed", refused ? 1 : 0, 1);
+            check("and is still there", Files.exists(def) ? 1 : 0, 1);
+        }
+
+        section("Y1: a market name is a label, not a path");
+        {
+            // These become directory names, so this is the boundary between the two.
+            check("an ordinary name", MarketSlots.isValidName("friends") ? 1 : 0, 1);
+            check("spaces, dashes and digits are fine",
+                    MarketSlots.isValidName("Big Server-2") ? 1 : 0, 1);
+            check("the default is always valid",
+                    MarketSlots.isValidName(MarketSlots.DEFAULT) ? 1 : 0, 1);
+
+            check("parent directories are refused",
+                    MarketSlots.isValidName("..") ? 1 : 0, 0);
+            check("so is anything with a separator",
+                    MarketSlots.isValidName("a/b") ? 1 : 0, 0);
+            check("and a backslash",
+                    MarketSlots.isValidName("a\\b") ? 1 : 0, 0);
+            check("and an absolute path",
+                    MarketSlots.isValidName("C:\\windows") ? 1 : 0, 0);
+            check("and a traversal buried in the middle",
+                    MarketSlots.isValidName("ok/../../etc") ? 1 : 0, 0);
+            check("empty is not a name", MarketSlots.isValidName("  ") ? 1 : 0, 0);
+            check("null is not a name", MarketSlots.isValidName(null) ? 1 : 0, 0);
+
+            // logPath refuses rather than sanitising, so a bad name cannot become a
+            // path that merely looks different from what was asked for.
+            Path world = scratch("test-slots-y1");
+            check("a refused name yields no path",
+                    MarketSlots.logPath(world, "../escape") == null ? 1 : 0, 1);
+        }
+
+        section("Y2: slots are separate markets, and the active one is remembered");
+        {
+            Path world = scratch("test-slots-y2");
+            deleteRecursively(world);
+            Files.createDirectories(world);
+
+            // A slot is a place a world can be, not a place with something in it. The
+            // default is always available, including in a world that has never had a
+            // market — otherwise a freshly made slot would be impossible to switch to.
+            check("an empty world still offers the default",
+                    MarketSlots.list(world).size(), 1);
+            check("and reports it as active",
+                    MarketSlots.DEFAULT.equals(MarketSlots.active(world)) ? 1 : 0, 1);
+            check("with no market in it yet",
+                    MarketSlots.marketNameIn(world, MarketSlots.DEFAULT) == null ? 1 : 0, 1);
+
+            // The default slot stays exactly where a single-market world already keeps
+            // it, so nothing existing has to move.
+            Path def = MarketSlots.logPath(world, MarketSlots.DEFAULT);
+            Files.createDirectories(def.getParent());
+            Files.write(def, "{}".getBytes());
+            check("the default sits where it always did",
+                    def.endsWith(Paths.get("economiesmod", "market.jsonl")) ? 1 : 0, 1);
+
+            Path other = MarketSlots.logPath(world, "big");
+            Files.createDirectories(other.getParent());
+            Files.write(other, "{}".getBytes());
+
+            List<String> slots = MarketSlots.list(world);
+            check("both are listed", slots.size(), 2);
+            check("default first", MarketSlots.DEFAULT.equals(slots.get(0)) ? 1 : 0, 1);
+
+            // Everything a market owns is a sibling of its log, so the slots cannot
+            // share a high-water mark — which would otherwise reset on every switch.
+            check("their files do not collide",
+                    def.resolveSibling("high-water.json")
+                            .equals(other.resolveSibling("high-water.json")) ? 1 : 0, 0);
+
+            MarketSlots.setActive(world, "big");
+            check("the choice survives being written and re-read",
+                    "big".equals(MarketSlots.active(world)) ? 1 : 0, 1);
+
+            // A pointer at a market that no longer exists must leave a usable world.
+            Files.write(world.resolve("economiesmod").resolve("active-slot"),
+                    "../escape".getBytes());
+            check("a hand-edited pointer falls back to the default",
+                    MarketSlots.DEFAULT.equals(MarketSlots.active(world)) ? 1 : 0, 1);
+
+            // A new slot has to be reachable the moment it is made, or the feature has
+            // no way in: a world starts with one and nothing else creates them.
+            String made = MarketSlots.createNext(world);
+            check("a new slot appears immediately",
+                    MarketSlots.list(world).contains(made) ? 1 : 0, 1);
+            check("and holds no market yet",
+                    MarketSlots.marketNameIn(world, made) == null ? 1 : 0, 1);
+            check("making another gives a different name",
+                    made.equals(MarketSlots.createNext(world)) ? 1 : 0, 0);
+        }
+
+        section("X1: a fork reset only offers back what the fork actually cost");
+        {
+            // Orders placed before the divergence point come back on reconnecting,
+            // because that history is shared. Offering those too would invite someone to
+            // place a second copy of an order the host still holds.
+            Path p = scratch("test-branchdiff-x1.jsonl");
+            Files.deleteIfExists(p);
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(p);
+            MarketBootstrap.createMarket(log, ALICE, "fork diff market", keys);
+            UUID marketId = log.marketId();
+
+            Event.Deposit dep = new Event.Deposit();
+            dep.userId = ALICE;
+            dep.marketId = marketId;
+            dep.itemId = IRON;
+            dep.quantity = 100;
+            dep.timestamp = 1L;
+            log.append(dep, keys.sign(EventCanonical.canonicalPayload(dep)));
+
+            // Two orders before the split, two after.
+            long forkSeq = -1;
+            for (int i = 0; i < 4; i++) {
+                Event.PlaceOrder po = new Event.PlaceOrder();
+                po.userId = ALICE;
+                po.marketId = marketId;
+                po.itemId = IRON;
+                po.volume = 5;
+                po.price = 10 + i;      // distinct prices, so a failure is legible
+                po.isBid = false;
+                po.timestamp = 2L + i;
+                SequencedEvent se = log.append(po, keys.sign(EventCanonical.canonicalPayload(po)));
+                if (i == 1) forkSeq = se.seq;    // the last event both branches agree on
+            }
+
+            List<Order> lost = BranchDiff.ordersOnlyAfter(log, forkSeq, ALICE);
+            check("only the post-fork orders are offered back", lost.size(), 2);
+
+            // The boundary is inclusive, and getting it wrong is silent either way: one
+            // order too many invites a duplicate, one too few loses a real order.
+            long lowest = Long.MAX_VALUE;
+            for (Order o : lost) lowest = Math.min(lowest, o.value());
+            check("the order at the fork point is not among them", lowest, 12);
+
+            check("someone else's orders are not offered to us",
+                    BranchDiff.ordersOnlyAfter(log, forkSeq, BOB).size(), 0);
+
+            // A market that never diverged loses nothing by this measure.
+            check("no divergence, nothing lost",
+                    BranchDiff.ordersOnlyAfter(log, log.lastSeq(), ALICE).size(), 0);
+
+            // And a fork at genesis costs every order placed since.
+            check("a fork at the very start costs all four",
+                    BranchDiff.ordersOnlyAfter(log, 1, ALICE).size(), 4);
+        }
+
+        section("W3: deposits are weighed against the player's own statistics");
+        {
+            // The one figure here the player did not write. Minecraft counts mined,
+            // crafted and picked up during ordinary play; /give increments none of them,
+            // so somebody handing over far more than they have ever handled is
+            // contradicting a record they cannot quietly restate.
+            WorldAttestation a = new WorldAttestation();
+            a.gameMode = "survival";
+            a.handledByItem = new java.util.HashMap<>();
+            a.handledByItem.put(IRON, 500L);
+
+            check("what it says about that item", a.handledOf(IRON), 500);
+            check("and nothing about others", a.handledOf(DIAMOND), 0);
+            check("or about an item it was never given",
+                    new WorldAttestation().handledOf(IRON), 0);
+
+            // Per item, so a large haul of one thing says nothing about another.
+            DepositLimiter lim = new DepositLimiter(0, 60_000L);
+            long t = 1_000L;
+            lim.record(ALICE, IRON, 300, t);
+            lim.record(ALICE, DIAMOND, 40, t);
+            check("iron is counted as iron", lim.usedBy(ALICE, IRON, t), 300);
+            check("diamonds separately", lim.usedBy(ALICE, DIAMOND, t), 40);
+            check("and together for the overall cap", lim.usedBy(ALICE, t), 340);
+
+            // Splitting a deposit must not get round it, which is why the running total
+            // is what the rule reads rather than the single event.
+            lim.record(ALICE, IRON, 300, t);
+            check("a second deposit adds to the first",
+                    lim.usedBy(ALICE, IRON, t), 600);
+        }
+
+        section("W4: what the market gave you, you can always give back");
+        {
+            // A withdrawal reaches an inventory through insertStack, which increments no
+            // statistic — the same reason /give leaves no trace. So without counting
+            // them, the statistics rule would refuse somebody re-depositing the very
+            // goods this market handed them, which is the one case where provenance is
+            // not in question at all.
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 100);
+
+            check("nothing withdrawn yet", m.withdrawnBy(ALICE, IRON), 0);
+
+            check("withdrawing succeeds", m.withdraw(ALICE, IRON, 40) ? 1 : 0, 1);
+            check("and is remembered", m.withdrawnBy(ALICE, IRON), 40);
+
+            check("withdrawing again adds to it",
+                    m.withdraw(ALICE, IRON, 25) ? 1 : 0, 1);
+            check("cumulatively", m.withdrawnBy(ALICE, IRON), 65);
+
+            // Only grows. Putting items back does not reduce what was handed out, or
+            // the allowance would evaporate the moment it was used.
+            m.deposit(ALICE, IRON, 65);
+            check("depositing does not undo it", m.withdrawnBy(ALICE, IRON), 65);
+
+            // Per person and per item, since it stands in for provenance of one thing
+            // in one pair of hands.
+            check("another item is separate", m.withdrawnBy(ALICE, DIAMOND), 0);
+            check("another person is separate", m.withdrawnBy(BOB, IRON), 0);
+
+            // A refused withdrawal must not count — it never left the ledger.
+            check("overdrawing fails", m.withdraw(BOB, IRON, 10) ? 1 : 0, 0);
+            check("and records nothing", m.withdrawnBy(BOB, IRON), 0);
+        }
+
+        section("W1: an attestation is judged by contradiction, not belief");
+        {
+            // Nothing here can be verified. What can be done is to notice that two
+            // statements cannot both be true — the same shape as catching a client that
+            // claims to be vanilla while registering plugin channels.
+            ServerConfig cfg = ServerConfig.friendGroup(25555);
+            cfg.maxDepositUnitsPerPlayHour = 100;
+
+            WorldAttestation young = new WorldAttestation();
+            young.gameMode = "survival";
+            young.worldAgeTicks = WorldAttestation.TICKS_PER_HOUR / 2;   // half an hour
+
+            check("half an hour reads as half an hour",
+                    (long) Math.round(young.claimedHours() * 10), 5);
+            check("a plausible haul passes",
+                    young.objections(cfg, 40).isEmpty() ? 1 : 0, 1);
+            check("more than that half hour could yield does not",
+                    young.objections(cfg, 400).isEmpty() ? 1 : 0, 0);
+
+            // Claiming a longer history lifts the ceiling — which is the point. The lie
+            // is not prevented, it is made specific and recorded.
+            WorldAttestation old = new WorldAttestation();
+            old.gameMode = "survival";
+            old.worldAgeTicks = WorldAttestation.TICKS_PER_HOUR * 40;
+            check("forty claimed hours affords the same haul",
+                    old.objections(cfg, 400).isEmpty() ? 1 : 0, 1);
+
+            // Off unless configured, like everything else in this area.
+            ServerConfig noPolicy = ServerConfig.friendGroup(25555);
+            check("no policy, no objection",
+                    young.objections(noPolicy, 1_000_000).isEmpty() ? 1 : 0, 1);
+        }
+
+        section("W2: the claims that stand on their own");
+        {
+            ServerConfig strict = ServerConfig.friendGroup(25555);
+            strict.refuseCreativeWorlds = true;
+            strict.refuseCheatWorlds = true;
+
+            WorldAttestation creative = new WorldAttestation();
+            creative.gameMode = "creative";
+            check("a creative world is objected to",
+                    creative.objections(strict, 0).isEmpty() ? 1 : 0, 0);
+            check("and it is recognised as creative", creative.isCreative() ? 1 : 0, 1);
+
+            WorldAttestation cheats = new WorldAttestation();
+            cheats.gameMode = "survival";
+            cheats.commandsAllowed = true;
+            check("so is one with commands enabled",
+                    cheats.objections(strict, 0).isEmpty() ? 1 : 0, 0);
+
+            // The Open to LAN route: a world created without cheats, with "Allow
+            // Cheats" ticked afterwards. openToLan calls PlayerManager.setCheatsAllowed
+            // and leaves the saved settings alone, so the world goes on reporting
+            // commandsAllowed false for the rest of its life while /give works. Reading
+            // only the saved flag made this the obvious way past every rule here.
+            WorldAttestation lan = new WorldAttestation();
+            lan.gameMode = "survival";
+            lan.commandsAllowed = false;
+            lan.cheatsLive = true;
+            check("cheats enabled after creation are caught too",
+                    lan.objections(strict, 0).isEmpty() ? 1 : 0, 0);
+            check("and are reported as the later switch they are",
+                    lan.cheatsEnabledLater() ? 1 : 0, 1);
+            check("unlike a world that always had them",
+                    cheats.cheatsEnabledLater() ? 1 : 0, 0);
+            check("both count as cheats being available",
+                    lan.cheatsAvailable() && cheats.cheatsAvailable() ? 1 : 0, 1);
+
+            // Enable cheats, take what you want, quit to the title, come back. Minecraft
+            // clears the LAN flag on reload and never wrote anything to the save, so the
+            // world truthfully reports having never had commands while the goods are
+            // still in the inventory. The only thing that knows better is the note the
+            // mod wrote at the time.
+            WorldAttestation reloaded = new WorldAttestation();
+            reloaded.gameMode = "survival";
+            reloaded.commandsAllowed = false;
+            reloaded.cheatsLive = false;
+            reloaded.cheatsEverSeen = true;
+            check("a world reloaded to clear the flag is still caught",
+                    reloaded.objections(strict, 0).isEmpty() ? 1 : 0, 0);
+            check("and is not mistaken for one that has them right now",
+                    reloaded.cheatsEnabledLater() ? 1 : 0, 0);
+
+            WorldAttestation plain = new WorldAttestation();
+            plain.gameMode = "survival";
+            check("an ordinary survival world is not",
+                    plain.objections(strict, 0).isEmpty() ? 1 : 0, 1);
+            check("and has no cheats by any route",
+                    plain.cheatsAvailable() ? 1 : 0, 0);
+
+            // A host that has not asked for any of this must not start refusing people.
+            ServerConfig lax = ServerConfig.friendGroup(25555);
+            check("and neither is refused by a host that did not ask",
+                    creative.objections(lax, 0).isEmpty() ? 1 : 0, 1);
+        }
+
+        section("U1: a welcome grant must be the amount this market publishes");
+        {
+            // Nothing checks who authors a grant, and nothing can: hosting rotates, so a
+            // replica replaying the log cannot know who was sequencing at that point.
+            // The amount is therefore the only enforceable part, and before it was
+            // checked, any identity could sign itself a grant for any sum and every
+            // replica accepted it. Two ways in: a server configured with a zero grant
+            // never marks anyone granted, so the once-per-identity rule never fires; and
+            // a grant authored in one's own local world migrates in at full value.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "grant probe", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.registerKey(BOB, "bob-key");
+
+            check("a self-authored fortune is refused",
+                    grantRejection(m, BOB, BOB, 1_000_000_000L) != null ? 1 : 0, 1);
+            check("so is one credit too many",
+                    grantRejection(m, BOB, BOB, m.welcomeGrant() + 1) != null ? 1 : 0, 1);
+
+            // The fix must not simply disable grants — an honest host still issues them,
+            // and the amount a liar can take is now the one they would have been given.
+            check("the market's own figure is accepted",
+                    grantRejection(m, ALICE, BOB, m.welcomeGrant()) == null ? 1 : 0, 1);
+
+            // A market that grants nothing grants nothing to anybody, including the
+            // people who would previously have exploited exactly this configuration.
+            MarketState none = new MarketState();
+            none.setMarketIdentity(UUID.randomUUID(), "no grants", ALICE);
+            none.registerKey(ALICE, "alice-key");
+            none.registerKey(BOB, "bob-key");
+            none.setWelcomeGrant(0);
+            check("a zero-grant market grants nobody anything",
+                    grantRejection(none, BOB, BOB, 1000) != null ? 1 : 0, 1);
+        }
+
+        section("U2: the grant amount is policy, and bounded like the fee");
+        {
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "policy market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+
+            check("the default is what markets used before policy existed",
+                    m.welcomeGrant(), ServerConfig.DEFAULT_WELCOME_GRANT);
+            check("a sane grant is allowed",
+                    policyRejection(m, ALICE, 0, 50) == null ? 1 : 0, 1);
+            check("zero is allowed — a market may grant nothing",
+                    policyRejection(m, ALICE, 0, 0) == null ? 1 : 0, 1);
+            check("negative is refused",
+                    policyRejection(m, ALICE, 0, -1) != null ? 1 : 0, 1);
+            check("above the ceiling is refused",
+                    policyRejection(m, ALICE, 0, MarketState.MAX_WELCOME_GRANT + 1)
+                            != null ? 1 : 0, 1);
+        }
+
+        section("T5: a fee typed as a percentage becomes exact basis points");
+        {
+            // The one place a human decimal meets a number every replica must agree on.
+            check("whole percent", MarketState.bpsFromPercent("1"), 100);
+            check("half percent", MarketState.bpsFromPercent("0.5"), 50);
+
+            // Double.parseDouble("2.5") * 100 can land on 249.99999999999997, which
+            // truncates to a 2.49% fee nobody asked for.
+            check("the case a double gets wrong", MarketState.bpsFromPercent("2.5"), 250);
+            check("two decimal places", MarketState.bpsFromPercent("0.01"), 1);
+            check("zero turns it off", MarketState.bpsFromPercent("0"), 0);
+            check("surrounding space is not an error",
+                    MarketState.bpsFromPercent("  2.5 "), 250);
+            check("the ceiling", MarketState.bpsFromPercent("50"), 5000);
+
+            // Refused rather than rounded: a fee is not a number to be approximate about.
+            check("finer than basis points is refused",
+                    MarketState.bpsFromPercent("0.005"), -1);
+            check("negative is refused", MarketState.bpsFromPercent("-1"), -1);
+            check("words are refused", MarketState.bpsFromPercent("two"), -1);
+            check("empty is refused", MarketState.bpsFromPercent(""), -1);
+            check("null is refused", MarketState.bpsFromPercent(null), -1);
+        }
+
+        section("T4: only the creator sets policy, and only within bounds");
+        {
+            // Bounds live in EventApplier because that is the gate every replica passes
+            // through. A rate the UI refused but the applier accepted would be a rate
+            // one client could still write and everyone else would replay.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "policy market", ALICE);
+            // Authorship precedes everything else in validate, so both have to exist in
+            // the market before the policy rule is the thing being tested.
+            m.registerKey(ALICE, "alice-key");
+            m.registerKey(BOB, "bob-key");
+
+            check("the creator may set a rate",
+                    policyRejection(m, ALICE, 250) == null ? 1 : 0, 1);
+            check("someone else may not",
+                    policyRejection(m, BOB, 250) != null ? 1 : 0, 1);
+            check("above the ceiling is refused",
+                    policyRejection(m, ALICE, MarketState.MAX_TAX_BPS + 1) != null ? 1 : 0, 1);
+            check("the ceiling itself is allowed",
+                    policyRejection(m, ALICE, MarketState.MAX_TAX_BPS) == null ? 1 : 0, 1);
+            check("negative is refused",
+                    policyRejection(m, ALICE, -1) != null ? 1 : 0, 1);
+            check("zero is allowed — it turns the tax off",
+                    policyRejection(m, ALICE, 0) == null ? 1 : 0, 1);
+
+            // The listing fee is bounded low on purpose: a charge big enough to feel
+            // like a tax is big enough to stop people repricing.
+            check("a sane listing fee is allowed",
+                    policyRejection(m, ALICE, 0, m.welcomeGrant(), 25) == null ? 1 : 0, 1);
+            check("zero is allowed — it turns listing fees off",
+                    policyRejection(m, ALICE, 0, m.welcomeGrant(), 0) == null ? 1 : 0, 1);
+            check("negative is refused",
+                    policyRejection(m, ALICE, 0, m.welcomeGrant(), -1) != null ? 1 : 0, 1);
+            check("above the ceiling is refused",
+                    policyRejection(m, ALICE, 0, m.welcomeGrant(),
+                            MarketState.MAX_LISTING_FEE + 1) != null ? 1 : 0, 1);
+        }
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");
@@ -1271,6 +2131,24 @@ public class MarketTests {
      */
     private static final Path SCRATCH_DIR = Paths.get("build", "test-scratch");
 
+    /**
+     * Clears a scratch world so a run does not inherit slots from the last one.
+     *
+     * Deepest-first, because a directory cannot be removed while it still holds
+     * anything. Failures are ignored: this only ever runs against build/test-scratch.
+     */
+    private static void deleteRecursively(Path root) throws IOException {
+        if (!Files.exists(root)) return;
+        List<Path> paths = new ArrayList<>();
+        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+            walk.forEach(paths::add);
+        }
+        java.util.Collections.sort(paths, java.util.Collections.reverseOrder());
+        for (Path p : paths) {
+            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+        }
+    }
+
     private static Path scratch(String name) {
         try {
             Files.createDirectories(SCRATCH_DIR);
@@ -1284,28 +2162,64 @@ public class MarketTests {
         System.out.println("  [" + name + "]");
     }
 
+    /**
+     * Why EventApplier would refuse this policy change, or null if it would accept it.
+     *
+     * Goes through validate rather than testing the bounds directly, because the bounds
+     * only mean anything at the gate every replica passes through — checking them
+     * anywhere else would prove something no client actually relies on.
+     */
+    /** Why EventApplier would refuse this grant, or null if it would accept it. */
+    private static String grantRejection(MarketState state, UUID author, UUID target,
+                                         long amount) {
+        Event.WelcomeGrant wg = new Event.WelcomeGrant();
+        wg.userId = author;
+        wg.targetUserId = target;
+        wg.marketId = state.marketId();
+        wg.amount = amount;
+        wg.timestamp = 1L;
+
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 2;
+        se.event = wg;
+
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
+    private static String policyRejection(MarketState state, UUID author, int bps) {
+        return policyRejection(state, author, bps, state.welcomeGrant());
+    }
+
+    private static String policyRejection(MarketState state, UUID author, int bps,
+                                          long grant) {
+        return policyRejection(state, author, bps, grant, state.listingFee());
+    }
+
+    private static String policyRejection(MarketState state, UUID author, int bps,
+                                          long grant, long listingFee) {
+        Event.MarketPolicy mp = new Event.MarketPolicy();
+        mp.userId = author;
+        mp.marketId = state.marketId();
+        mp.taxBps = bps;
+        mp.grantAmount = grant;
+        mp.listingFee = listingFee;
+        mp.timestamp = 1L;
+
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 2;
+        se.event = mp;
+
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
     private static void check(String label, long actual, long expected) {
         checksRun++;
         boolean ok = actual == expected;
         if (!ok) failures++;
         System.out.println((ok ? "    ok   " : "    FAIL ") + label
                 + " — expected " + expected + ", got " + actual);
-    }
-
-    private static long restingSellVolume(MarketState m, String itemId) {
-        long total = 0;
-        for (Deque<Order> q : m.bookFor(itemId).asks().values()) {
-            for (Order o : q) total += o.volume();
-        }
-        return total;
-    }
-
-    private static long restingBidReservation(MarketState m, String itemId) {
-        long total = 0;
-        for (Deque<Order> q : m.bookFor(itemId).bids().values()) {
-            for (Order o : q) total += o.volume() * o.value();
-        }
-        return total;
     }
 
     private static PlayerKeys testKeys;
