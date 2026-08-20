@@ -1,6 +1,7 @@
 package io.github.badbull643.economiesmod.client;
 
 import io.github.badbull643.economiesmod.core.Fill;
+import io.github.badbull643.economiesmod.core.MarketState;
 import io.github.badbull643.economiesmod.core.Settings;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.Item;
@@ -47,20 +48,74 @@ public final class FillNotifier {
         boolean bought = me.equals(fill.buyerId());
         boolean sold = me.equals(fill.sellerId());
         if (!bought && !sold) return;
-        // Trading with yourself nets to nothing and is not news.
-        if (bought && sold) return;
 
-        long delta = bought ? -fill.amount() : fill.amount();
+        long delta;
+        MutableText chat;
+        MutableText bar;
+
+        if (bought && sold) {
+            // Filling your own order washes out on price — you pay yourself and the
+            // goods come back — but the fee does not. It is taken from the seller's
+            // proceeds and burned, and that side is you as well, so the trade costs
+            // exactly the fee. Silent used to mean free; it only ever meant silent.
+            long fee = selfTradeFee(fill);
+            if (fee <= 0) return;
+            delta = -fee;
+            chat = selfLine(fill, fee);
+            bar = selfShortLine(fill, fee);
+        } else {
+            delta = bought ? -fill.amount() : fill.amount();
+            chat = line(fill, bought, delta, resting);
+            bar = shortLine(fill, bought, delta);
+        }
 
         rollWindow();
         int limit = settings.notifyMaxPerMinute();
         if (limit > 0 && sentThisWindow < limit) {
             sentThisWindow++;
-            send(settings, line(fill, bought, delta, resting), shortLine(fill, bought, delta));
+            send(settings, chat, bar);
         } else {
             batchedFills++;
             batchedNet += delta;
         }
+    }
+
+    /**
+     * What filling your own order actually cost.
+     *
+     * Zero at a zero rate, where the trade genuinely nets to nothing and there is
+     * nothing worth saying. Above it the credits leave the market altogether — the fee
+     * is burned rather than paid to anyone — so neither side of you gets them back.
+     *
+     * Read from the market rather than the fill, because the rate is policy and the
+     * fill only records what changed hands.
+     */
+    private static long selfTradeFee(Fill fill) {
+        MarketState market = MarketStateHolder.get();
+        if (market == null) return 0;
+        return MarketState.taxOn(fill.amount(), market.taxBps());
+    }
+
+    /** Named as your own doing, since nobody traded with you and nothing is owed. */
+    private MutableText selfLine(Fill fill, long fee) {
+        return prefix()
+                .append(new LiteralText("You filled your own order: ")
+                        .formatted(Formatting.GRAY))
+                .append(new LiteralText(fill.quantity() + " " + itemName(fill))
+                        .formatted(Formatting.WHITE))
+                .append(new LiteralText(" @ ").formatted(Formatting.DARK_GRAY))
+                .append(new LiteralText(String.valueOf(fill.price()))
+                        .formatted(Formatting.YELLOW))
+                .append(new LiteralText(" · fee ").formatted(Formatting.DARK_GRAY))
+                .append(credits(-fee));
+    }
+
+    private MutableText selfShortLine(Fill fill, long fee) {
+        return new LiteralText("Own order " + fill.quantity() + " ")
+                .formatted(Formatting.GRAY)
+                .append(new LiteralText(itemName(fill)).formatted(Formatting.WHITE))
+                .append(new LiteralText(" fee ").formatted(Formatting.DARK_GRAY))
+                .append(credits(-fee));
     }
 
     /** Flushes any batched fills once their window closes. Call from the client tick. */
