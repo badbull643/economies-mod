@@ -246,7 +246,7 @@ beside a limit of 156 and multiplying gave 160. It now states the rate and enoug
 precision to reconcile.
 
 **C6. The statistics multiple — DONE.** Not in the original list; added with the runbook
-because the rule ships enabled in the friend-group defaults and had no live test.
+because the rule had no live test of any kind.
 
 ```json
 { "maxDepositMultipleOfHandled": 3, "maxDepositUnitsPerWindow": 1000000 }
