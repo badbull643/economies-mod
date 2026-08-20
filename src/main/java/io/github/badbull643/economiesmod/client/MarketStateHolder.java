@@ -562,6 +562,20 @@ public class MarketStateHolder {
                 System.err.println("[economiesmod] diverged from host at seq "
                         + refusal.hostSeq + " (ours " + ourHashAtTheirHead
                         + ", theirs " + refusal.hostHash + ") — not a fast-forward");
+
+                // This is where a fork is actually found in practice, and it used to end
+                // here — noted on the console, shown to the player, and forgotten. But a
+                // reset computes its re-place checklist from divergence, so leaving it
+                // null meant the reset that this very message recommends had nothing to
+                // offer back. The only thing that ever set it was the discovery poll,
+                // which is why the list appeared after Refresh and not before.
+                //
+                // The three values are already in hand and are exactly what the poll
+                // records: their head, their hash there, ours at the same seq. Safe as a
+                // split point because AHEAD means their head is below ours, so anything
+                // after it on our chain is genuinely ours alone.
+                divergence = new Divergence(refusal.hostName, refusal.hostSeq,
+                        refusal.hostHash, ourHashAtTheirHead);
                 return false;
             }
 
@@ -655,6 +669,7 @@ public class MarketStateHolder {
                     + " at seq " + c.lastSeq());
         } catch (MarketClient.Refused e) {
             lastRefusal = e;
+            noteForkFromRefusal(log, e);
             onRejected.accept(e.getMessage() + explainRemedy(e.code, lossIfReset));
             System.err.println("[economiesmod] refused: " + e.getMessage());
             adoptAfterFailedConnect(log);
@@ -662,6 +677,49 @@ public class MarketStateHolder {
             onRejected.accept("connect failed: " + e.getMessage());
             System.err.println("[economiesmod] connect failed: " + e);
             adoptAfterFailedConnect(log);
+        }
+    }
+
+    /**
+     * Raises the FORKED banner when a refusal says our chain disagrees with the host's.
+     *
+     * This is the narrower of the two fork routes, and worth telling apart from the one
+     * in offerCatchUp. A FORK refusal is only sent when we are at or behind the host —
+     * the host tests AHEAD first — so the seq it names is our own head, and the hash it
+     * sends is theirs at that point. That is enough to know we disagree and to say so.
+     *
+     * It is NOT enough to compute a re-place checklist. The split is somewhere at or
+     * before our head, and locating it would need hashes below that point which neither
+     * side sends, so ordersOnlyAfter is handed our head and correctly finds nothing.
+     * That errs the safe way: a split point guessed too low would offer back orders the
+     * host still holds, which is how a reset creates duplicates.
+     *
+     * The case that produces a usable checklist is the opposite ordering — we are ahead,
+     * the host's head sits below ours, and everything after it on our chain is
+     * demonstrably ours alone. That is AHEAD, and offerCatchUp records it.
+     *
+     * The host's name rides along because observeHostHead clears a divergence by
+     * matching the name it stored; a mismatched label would strand the banner.
+     */
+    private static void noteForkFromRefusal(EventLog log, MarketClient.Refused e) {
+        if (log == null || e == null) return;
+        if (!HostServer.Refusal.FORK.equals(e.code)) return;
+        if (e.hostSeq <= 0 || e.hostHash == null) return;
+
+        try {
+            if (e.hostSeq > log.lastSeq()) return;
+            String ours = log.hashAt(e.hostSeq);
+            if (ours == null || ours.equals(e.hostHash)) return;
+
+            divergence = new Divergence(e.hostName, e.hostSeq, e.hostHash, ours);
+            System.err.println("[economiesmod] divergence: "
+                    + (e.hostName == null ? "that host" : e.hostName)
+                    + " reports " + e.hostHash + " at event " + e.hostSeq
+                    + ", we have " + ours);
+        } catch (IOException io) {
+            // The refusal still reaches the player either way; only the checklist that
+            // a later reset could have offered is lost.
+            System.err.println("[economiesmod] could not locate the split point: " + io);
         }
     }
 
@@ -1489,8 +1547,23 @@ public class MarketStateHolder {
         try {
             // The arithmetic lives in core so it can be tested without Minecraft; all
             // that belongs here is knowing whose keyboard this is.
+            //
+            // One before the divergence, because the two numbers mean different things.
+            // Divergence.seq is where the hashes were seen to *disagree*, which is what
+            // its own message reports; ordersOnlyAfter wants the last seq both branches
+            // *agree* on, and that can be no later than one before. Passing the
+            // disagreement point straight through treated the first event of the split
+            // as shared, so a fork found at our own head — the ordinary case when both
+            // sides have written the same number of events — asked for orders after our
+            // last event and correctly found none.
+            //
+            // Still only an upper bound: the real split may be earlier, which under-
+            // reports. That is the safe direction. Guessing lower would offer back
+            // orders the host still holds, and re-placing those is how a reset ends up
+            // creating duplicates.
             EventLog log = new EventLog(logPathFor(currentWorldDir));
-            for (Order o : BranchDiff.ordersOnlyAfter(log, split.seq, me)) {
+            long sharedThrough = Math.max(0, split.seq - 1);
+            for (Order o : BranchDiff.ordersOnlyAfter(log, sharedThrough, me)) {
                 out.add(new OldOrder(o.itemID(), o.value(), o.volume(), o.isBid()));
             }
         } catch (Exception e) {
