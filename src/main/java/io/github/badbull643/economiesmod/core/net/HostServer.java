@@ -347,21 +347,6 @@ public class HostServer {
     private volatile IOException bindError;
 
     public void start() throws IOException {
-        // Both of these exist because MarketBootstrap writes MarketCreated straight to
-        // the log, bypassing processProposal — so the KeyRegistered path that normally
-        // registers a player and issues their grant never runs for whoever is hosting.
-        try {
-            ensureHostRegistered();
-            issueWelcomeGrant(creatorUserId());
-            issueWelcomeGrant(hostUserIdAsUuid());
-        } catch (Exception e) {
-            System.err.println("[host] startup grants failed: " + e.getMessage());
-        }
-
-        sequencerThread = new Thread(this::sequencerLoop, "market-sequencer");
-        sequencerThread.setDaemon(true);
-        sequencerThread.start();
-
         try {
             // An explicit bindAddress listens on that interface only. Absent, this is
             // the same all-interfaces socket as before.
@@ -381,6 +366,27 @@ public class HostServer {
         System.out.println("[host] listening on port " + port
                 + (config.bindAddress == null || config.bindAddress.trim().isEmpty()
                         ? "" : " (" + config.bindAddress.trim() + " only)"));
+
+        // After the bind, deliberately. Both of these write to the log, and a server
+        // that cannot listen has no business changing the market — a failed start on a
+        // busy port used to register the host and grant it anyway, which is a market
+        // fact created by a server that never served. Idempotent afterwards, so it did
+        // not accumulate, but the first attempt still wrote two events nobody asked for.
+        //
+        // They exist at all because MarketBootstrap writes MarketCreated straight to the
+        // log, bypassing processProposal — so the KeyRegistered path that normally
+        // registers a player and issues their grant never runs for whoever is hosting.
+        try {
+            ensureHostRegistered();
+            issueWelcomeGrant(creatorUserId());
+            issueWelcomeGrant(hostUserIdAsUuid());
+        } catch (Exception e) {
+            System.err.println("[host] startup grants failed: " + e.getMessage());
+        }
+
+        sequencerThread = new Thread(this::sequencerLoop, "market-sequencer");
+        sequencerThread.setDaemon(true);
+        sequencerThread.start();
 
         try {
             while (running) {

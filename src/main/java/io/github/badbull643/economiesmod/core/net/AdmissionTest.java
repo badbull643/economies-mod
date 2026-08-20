@@ -94,6 +94,7 @@ public class AdmissionTest {
         }
 
         peerSharingRespectsDedicated();
+        aFailedStartWritesNothing();
 
         System.out.println();
         if (failures == 0) {
@@ -193,6 +194,51 @@ public class AdmissionTest {
         check("refused at the gate, not for being empty",
                 result != null && result.reason != null
                         && result.reason.contains("invited") ? 1 : 0, 1);
+    }
+
+    /**
+     * A server that cannot listen does not change the market.
+     *
+     * start() registers the host and issues its grant, because MarketBootstrap writes
+     * genesis straight to the log and the usual KeyRegistered path never runs for
+     * whoever is hosting. Those writes used to happen before the bind, so starting on a
+     * busy port — the single most common startup failure there is — appended two events
+     * and then failed. Idempotent on the next attempt, so it did not accumulate, but a
+     * market fact had been created by a server that never served.
+     */
+    private static void aFailedStartWritesNothing() throws Exception {
+        System.out.println("  [A6: a start that cannot bind leaves the log alone]");
+
+        Path hostLog = dir.resolve("adm-busy.jsonl");
+        Files.deleteIfExists(hostLog);
+        Files.deleteIfExists(dir.resolve("adm-busy-peers.json"));
+
+        PlayerKeys keys = PlayerKeys.generate();
+        EventLog log = new EventLog(hostLog);
+        MarketBootstrap.createMarket(log, HOST, "busy port market", keys);
+        long before = log.lastSeq();
+
+        // Hold the port so the bind cannot succeed, exactly as another host would.
+        try (ServerSocket squatter = new ServerSocket(0)) {
+            ServerConfig cfg = ServerConfig.friendGroup(squatter.getLocalPort());
+            cfg.hostName = "unlucky";
+            cfg.hostUserId = HOST.toString();
+
+            HostServer host = new HostServer(cfg, hostLog, keys,
+                    new PeerCache(dir.resolve("adm-busy-peers.json")));
+
+            int refused = 0;
+            try {
+                host.start();
+            } catch (IOException expected) {
+                refused = 1;
+            } finally {
+                host.stop();
+            }
+
+            check("the start fails", refused, 1);
+            check("and the market is untouched", new EventLog(hostLog).lastSeq(), before);
+        }
     }
 
     /**
