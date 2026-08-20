@@ -18,17 +18,18 @@ below assumes they pass.
 - Dedicated launcher: `--help`, `--write-config`, bootstrap, `--creator-key`, bad port,
   unknown argument, busy port
 - **A1** `/trade` queries, **A2** multiple markets, **A3** the trading fee control,
-  **A5** the listing fee, **A6** removing a market
+  **A5** the listing fee, **A6** removing a market, **A4** the fork-reset re-place
+  checklist, **B2** fork then reset
 - Deposit caps and all three cheat routes, confirmed live while debugging them: created
   with cheats, enabled later via Open to LAN, and enabled-then-reloaded
 
-**Everything in Group A is done except A4**, which needs a fork and so belongs with B2.
+**Group A is complete.** A4 was the last one, run against the fork from B2.
 
 ---
 
 ## Group A — one client, no server
 
-Only A4 remains here, and it needs a fork — do it straight after B2.
+Nothing outstanding here.
 
 ### A5. Listing fee — DONE
 
@@ -62,7 +63,24 @@ Creator only, on the Market tab beside the trading fee.
 
 </details>
 
-### A4. Fork-reset re-place checklist — the one still to do here
+### A4. Fork-reset re-place checklist — DONE
+
+Passed live on two machines. Two things it turned up, both now fixed:
+
+- The list only appeared after pressing **Refresh hosts** while forked. `divergence` was
+  set in one place only — the discovery poll — so the reset offered an empty checklist.
+  The fork in this recipe arrives as `AHEAD`, not `FORK`: the host tests "client ahead
+  of me" first, and Bob has out-traded Alice by step 3. `offerCatchUp` was already
+  finding the divergence and printing it, but not recording it. It does now, so
+  connecting is enough.
+- Note which refusal you get. `AHEAD` (`diverged ... not a fast-forward`) yields the
+  checklist; a true `FORK` cannot, because the split point is unknown and guessing low
+  would offer back orders the host still holds.
+- The box jumped to the other side of the screen on a tab change, because its column
+  was chosen from the active tab. It now sits in the third column on every tab.
+
+<details>
+<summary>Kept for reference</summary>
 
 Needs a fork (see B2), then:
 
@@ -73,6 +91,11 @@ Needs a fork (see B2), then:
 - Clicking a row re-places that order; clicking the title dismisses the list
 - **The one that matters:** only orders placed *after* the divergence appear. Orders from
   before it come back on reconnecting, and offering those too would create duplicates.
+
+Note the list only counts orders still **resting** — anything that filled or was
+cancelled is not offered back, so place the post-split order away from the best price.
+
+</details>
 
 ---
 
@@ -95,7 +118,12 @@ Needs a fork (see B2), then:
 - Place one that crosses → it should say it should trade now
 - Place the first order on an untouched item → "nobody is buying yet"
 
-### B2. Fork, then reset
+### B2. Fork, then reset — DONE
+
+Passed live on two machines, following the recipe below. Ran A4 against the result.
+
+<details>
+<summary>Kept for reference</summary>
 
 The recipe that worked last time — the trap is that only one side advancing gives you
 `CatchUp`, not a fork:
@@ -106,6 +134,8 @@ The recipe that worked last time — the trap is that only one side advancing gi
 4. Bob connects to Alice → expect `diverged ... not a fast-forward`, the FORKED banner,
    and the Market tab offering **Reset** and not Migrate
 5. Then run A4 against it
+
+</details>
 
 ### B3. Sequence-gap recovery — never fired live
 
