@@ -121,6 +121,13 @@ public class EventApplier {
             return Result.ok(Collections.emptyList());
         }
 
+        if (e instanceof Event.Stipend) {
+            Event.Stipend st = (Event.Stipend) e;
+            state.wallets().adjust(st.userId, st.amount);
+            state.markStipended(st.userId, state.fillsEver());
+            return Result.ok(Collections.emptyList());
+        }
+
         if (e instanceof Event.WelcomeGrant) {
             Event.WelcomeGrant wg = (Event.WelcomeGrant) e;
             state.wallets().adjust(wg.targetUserId, wg.amount);
@@ -136,6 +143,8 @@ public class EventApplier {
             state.setTaxBps(applied.taxBps);
             state.setWelcomeGrant(applied.grantAmount);
             state.setListingFee(applied.listingFee);
+            state.setListingFreeOrders(applied.listingFreeOrders);
+            state.setStipend(applied.stipendAmount, applied.stipendEveryFills);
             return Result.ok(Collections.emptyList());
         }
 
@@ -274,6 +283,31 @@ public class EventApplier {
             return Result.ok(Collections.emptyList());
         }
 
+        if (e instanceof Event.Stipend) {
+            Event.Stipend st = (Event.Stipend) e;
+
+            // Self-claimed, so there is no author question to answer — but the amount is
+            // still the market's, for the same reason the welcome grant's is: nothing
+            // can check who was sequencing, so the figure has to come from the log.
+            if (st.amount != state.stipendAmount()) {
+                return Result.reject("stipend must be exactly this market's "
+                        + state.stipendAmount() + ", not " + st.amount);
+            }
+            if (state.stipendAmount() <= 0) {
+                return Result.reject("this market pays no stipend");
+            }
+            if (!state.isRegistered(st.userId)) {
+                return Result.reject("only a registered identity can claim a stipend");
+            }
+            long since = state.fillsEver() - state.stipendedAtFill(st.userId);
+            if (since < state.stipendEveryFills()) {
+                return Result.reject("this market has settled " + since + " fills since"
+                        + " your last claim, and pays every "
+                        + state.stipendEveryFills());
+            }
+            return Result.ok(Collections.emptyList());
+        }
+
         if (e instanceof Event.MarketPolicy) {
             Event.MarketPolicy mp = (Event.MarketPolicy) e;
 
@@ -297,6 +331,53 @@ public class EventApplier {
             }
             if (mp.listingFee < 0) {
                 return Result.reject("listing fee cannot be negative");
+            }
+            if (mp.listingFreeOrders < 0) {
+                return Result.reject("free order allowance cannot be negative");
+            }
+            if (mp.stipendAmount < 0) {
+                return Result.reject("stipend cannot be negative");
+            }
+            if (mp.stipendAmount > MarketState.MAX_STIPEND) {
+                return Result.reject("stipend may not exceed " + MarketState.MAX_STIPEND);
+            }
+            if (mp.stipendAmount > 0 && mp.stipendEveryFills < 1) {
+                return Result.reject("a stipend needs an interval of at least one fill");
+            }
+            // The interlock, and the reason a stipend is not a mint.
+            //
+            // Credits paid per fill must cost more to earn than they are worth, or
+            // anybody can trade with themselves indefinitely and print money. Producing
+            // one fill means two orders crossing, so at least two listing fees at the
+            // base rate — the rate a lone order pays, since that is the cheapest any
+            // order can ever be.
+            //
+            // Checked here rather than left to whoever writes the config, because a
+            // market whose policy is only safe when set carefully is a market that mints
+            // the first time somebody is careless. Every replica reaches this verdict
+            // from the log alone.
+            if (mp.stipendAmount > 0) {
+                long costPerFill;
+                try {
+                    costPerFill = Math.multiplyExact(mp.listingFee, 2L);
+                } catch (ArithmeticException overflow) {
+                    costPerFill = Long.MAX_VALUE;
+                }
+                long earnedPerFill;
+                try {
+                    earnedPerFill = mp.stipendAmount;
+                } catch (ArithmeticException overflow) {
+                    earnedPerFill = Long.MAX_VALUE;
+                }
+                // stipendAmount per stipendEveryFills fills, against costPerFill each.
+                // Cross-multiplied to stay in whole numbers.
+                if (earnedPerFill >= Math.multiplyExact(costPerFill, mp.stipendEveryFills)) {
+                    return Result.reject("a stipend of " + mp.stipendAmount + " every "
+                            + mp.stipendEveryFills + " fills pays more than the "
+                            + mp.listingFee + " listing fee costs to earn — anyone could"
+                            + " trade with themselves for it. Raise the listing fee,"
+                            + " lengthen the interval, or lower the stipend");
+                }
             }
             if (mp.listingFee > MarketState.MAX_LISTING_FEE) {
                 return Result.reject("listing fee may not exceed "

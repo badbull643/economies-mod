@@ -72,9 +72,32 @@ public class MarketState {
     /** Called only by EventApplier. First registration for a userId wins. */
     void registerKey(UUID userId, String publicKey) {
         keyDirectory.put(userId, publicKey);
+        // Their stipend interval starts here, so joining a market that has already
+        // traded thousands of times does not pay out on arrival. Done here rather than
+        // at the call site because there is more than one way to become registered —
+        // genesis registers the creator — and the two drifting apart is how this kind of
+        // rule stops holding. putIfAbsent so a re-registration cannot reset the clock.
+        stipendedAtFill.putIfAbsent(userId, fillsEver);
     }
 
     void markGranted(UUID userId) { granted.add(userId); }
+
+    // How many fills this market had settled the last time each identity claimed the
+    // stipend. Set on registration too, so a newcomer waits a full interval like
+    // everyone else rather than claiming immediately off the back of other people's
+    // trading — otherwise joining a busy market would pay out at once, and joining
+    // several would pay out several times.
+    private final Map<UUID, Long> stipendedAtFill = new ConcurrentHashMap<>();
+
+    /** Fills settled when this identity last claimed, or registered. */
+    public long stipendedAtFill(UUID userId) {
+        Long at = stipendedAtFill.get(userId);
+        return at == null ? 0 : at;
+    }
+
+    void markStipended(UUID userId, long atFill) {
+        stipendedAtFill.put(userId, atFill);
+    }
 
     /** Called only by EventApplier when it applies the genesis event. */
     void setMarketIdentity(UUID id, String name, UUID creator) {
@@ -132,6 +155,81 @@ public class MarketState {
     public long listingFee() { return listingFee; }
 
     void setListingFee(long fee) { this.listingFee = fee; }
+
+    /**
+     * How many orders an identity may hold open before the fee starts climbing.
+     *
+     * A flat fee prices every order the same, which prices the wrong thing: somebody
+     * repricing one order pays exactly as much per order as somebody papering the book
+     * with two hundred, and the flat amount lands hardest on whoever has least. This
+     * charges the base fee up to the allowance and adds one base fee per order beyond
+     * it, so the cost falls on the behaviour that motivated the fee.
+     *
+     * Never free, even inside the allowance — the base fee still applies. A zero
+     * marginal cost would make events costless to produce, and the stipend is only safe
+     * because producing the activity it pays out on is not.
+     *
+     * Zero means no escalation at all, matching every other policy field here, so a
+     * market that predates this keeps exactly the flat fee it had.
+     */
+    private volatile int listingFreeOrders = 0;
+
+    public int listingFreeOrders() { return listingFreeOrders; }
+
+    void setListingFreeOrders(int n) { this.listingFreeOrders = n; }
+
+    /** Credits claimable once per stipendEveryFills fills. Zero, and off, by default. */
+    private volatile long stipendAmount = 0;
+    private volatile long stipendEveryFills = 0;
+
+    public long stipendAmount() { return stipendAmount; }
+    public long stipendEveryFills() { return stipendEveryFills; }
+
+    void setStipend(long amount, long everyFills) {
+        this.stipendAmount = amount;
+        this.stipendEveryFills = everyFills;
+    }
+
+    /**
+     * The most a market may pay out per interval.
+     *
+     * A ceiling on a fat finger like MAX_WELCOME_GRANT, not a security boundary — the
+     * security is the interlock in validate, which refuses a stipend that pays out more
+     * than producing the fills to earn it would cost.
+     */
+    public static final long MAX_STIPEND = 100_000L;
+
+    /**
+     * What listing costs this identity right now, given what they already have resting.
+     *
+     * A pure function of state, so every replica charges the same — which is why it
+     * counts open orders rather than orders placed lately. "Lately" would need a clock,
+     * and a rule whose answer depends on when it is asked cannot live in the replicated
+     * layer without forking replicas. See DepositLimiter for the same argument.
+     */
+    public long listingFeeFor(UUID userId) {
+        if (listingFee <= 0) return 0;
+        // Zero means off, as it does for every other policy field here — so a market
+        // that never sets an allowance keeps the flat fee it had before this existed,
+        // and escalation is something somebody turns on.
+        if (listingFreeOrders <= 0) return listingFee;
+
+        long over = Math.max(0, openOrderCount(userId) - listingFreeOrders);
+        return Math.multiplyExact(listingFee, over + 1);
+    }
+
+    /** Orders this identity has resting across every book. */
+    public long openOrderCount(UUID userId) {
+        if (userId == null) return 0;
+        long n = 0;
+        for (String itemId : activeItems()) {
+            OrderBook book = peekBook(itemId);
+            if (book == null) continue;
+            for (Order o : book.restingAsks()) if (userId.equals(o.userID())) n++;
+            for (Order o : book.restingBids()) if (userId.equals(o.userID())) n++;
+        }
+        return n;
+    }
 
     /**
      * The most a market may charge to list.
@@ -224,8 +322,27 @@ public class MarketState {
         if (fills == null) return;
         for (Fill f : fills) {
             trades.record(new Trade(seq, timestamp, f));
+            fillsEver++;
         }
     }
+
+    /**
+     * How many fills this market has ever settled. The stipend's clock.
+     *
+     * Counted rather than timed, because a replica replaying a year later must reach the
+     * same answer as the host that wrote it — the same reason the deposit cap cannot
+     * live in this layer at all.
+     *
+     * Fills specifically, and not sequence numbers, because sequence is free to
+     * manufacture: Deposit, Withdraw and CancelOrder all advance it and cost nothing, so
+     * a stipend paid per sequence number could be farmed in a market of one by
+     * depositing the same dirt over and over. A fill needs two orders to cross, and
+     * placing an order costs a listing fee that is never zero. That is the whole reason
+     * the fee has a floor.
+     */
+    private volatile long fillsEver = 0;
+
+    public long fillsEver() { return fillsEver; }
 
     // Get-or-create the order book for a given item
     public OrderBook bookFor(String itemId) {
@@ -274,8 +391,12 @@ public class MarketState {
 
         // Charged on placement, kept on cancellation, and burned like the trading fee.
         // Refunding it would deter nothing, which is the only thing it is for.
-        if (listingFee > 0) {
-            wallets.adjust(order.userID(), -listingFee);
+        //
+        // Read before the order joins the book, so the order being placed is not itself
+        // counted in the allowance it is being charged against.
+        long fee = listingFeeFor(order.userID());
+        if (fee > 0) {
+            wallets.adjust(order.userID(), -fee);
         }
 
         // Reserve
@@ -337,8 +458,9 @@ public class MarketState {
             // A sell offers goods but still pays to be listed, so it needs credits it
             // is not otherwise spending. Checked here rather than discovered during
             // settlement, where the order would already have been accepted.
-            if (listingFee > 0 && wallets.getBalance(order.userID()) < listingFee) {
-                return SubmitResult.reject("listing costs " + listingFee
+            long fee = listingFeeFor(order.userID());
+            if (fee > 0 && wallets.getBalance(order.userID()) < fee) {
+                return SubmitResult.reject("listing costs " + fee
                         + " credits and you have "
                         + wallets.getBalance(order.userID()));
             }
@@ -346,14 +468,16 @@ public class MarketState {
             long maxCost;
             try {
                 maxCost = Math.addExact(
-                        Math.multiplyExact(order.volume(), order.value()), listingFee);
+                        Math.multiplyExact(order.volume(), order.value()),
+                        listingFeeFor(order.userID()));
             } catch (ArithmeticException e) {
                 return SubmitResult.reject("order value too large");
             }
             if (wallets.getBalance(order.userID()) < maxCost) {
-                return SubmitResult.reject(listingFee > 0
+                long fee = listingFeeFor(order.userID());
+                return SubmitResult.reject(fee > 0
                         ? "insufficient credits — this costs " + maxCost
-                                + " including the " + listingFee + " listing fee"
+                                + " including the " + fee + " listing fee"
                         : "insufficient credits");
             }
         }
