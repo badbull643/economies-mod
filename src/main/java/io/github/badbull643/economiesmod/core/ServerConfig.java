@@ -394,10 +394,12 @@ public class ServerConfig {
             return "maxDepositUnitsPerWindow cannot be negative, not "
                     + maxDepositUnitsPerWindow;
         }
-        // A window of zero with a cap set would refuse every deposit forever, since
-        // nothing would ever age out of it.
-        if (maxDepositUnitsPerWindow > 0 && depositWindowMinutes < 1) {
-            return "depositWindowMinutes must be at least 1 when a deposit cap is set";
+        // A window of zero would refuse every deposit forever under a cap, since
+        // nothing would ever age out of it — and under the other two rules it silently
+        // stops deposits being counted at all, which is worse than refusing: the rule
+        // still answers, it just answers about one deposit instead of the window.
+        if (countsDeposits() && depositWindowMinutes < 1) {
+            return "depositWindowMinutes must be at least 1 when any deposit rule is set";
         }
         // A misspelt mode must not quietly read as "open". An operator who typed
         // "allowlist " or "allow-list" and got an open server would have no way to tell
@@ -411,6 +413,24 @@ public class ServerConfig {
                     + " that server would refuse everyone, including you";
         }
         return null;
+    }
+
+    /**
+     * Whether any configured rule needs deposits counted over a window.
+     *
+     * One place, asked by both the host that builds the limiter and the validation that
+     * insists on a usable window, because the two disagreeing is the bug this closes.
+     * maxDepositMultipleOfHandled was missing from the host's version, so setting the
+     * statistics rule alone gave a limiter with a zero-length window: it tracked
+     * nothing, every deposit was judged on its own against the multiple, and somebody
+     * with ten handled could deposit thirty as often as they liked. See DepositLimiter,
+     * whose tracking() exists for exactly this and was written up for the play-hour
+     * rule before this one existed.
+     */
+    public boolean countsDeposits() {
+        return maxDepositUnitsPerWindow > 0
+                || maxDepositUnitsPerPlayHour > 0
+                || maxDepositMultipleOfHandled > 0;
     }
 
     /** The defaults a client hosting for friends uses. Explicit, so it reads as a choice. */

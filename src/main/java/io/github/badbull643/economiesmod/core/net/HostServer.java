@@ -260,13 +260,13 @@ public class HostServer {
         }
 
         this.config = config;
-        // Counting is switched on by either feature. The cap needs a total to compare
-        // against a ceiling; the attestation check needs one to compare against claimed
-        // play time. With neither configured the window is zero and nothing is kept.
-        boolean needsCounting = config.maxDepositUnitsPerWindow > 0
-                || config.maxDepositUnitsPerPlayHour > 0;
+        // Every deposit rule needs a running total, not just the cap: the cap compares
+        // one against a ceiling, the play-hour check against claimed time, and the
+        // statistics multiple against what the player has handled. Asked of the config
+        // rather than spelled out here, because this list having drifted from the one in
+        // problem() is what let the statistics rule run with no window at all.
         this.depositLimiter = new DepositLimiter(config.maxDepositUnitsPerWindow,
-                needsCounting ? config.depositWindowMinutes * 60_000L : 0L);
+                config.countsDeposits() ? config.depositWindowMinutes * 60_000L : 0L);
         this.welcomeGrantAmount = config.welcomeGrant;
         this.port = config.port;
         this.hostName = config.hostName;

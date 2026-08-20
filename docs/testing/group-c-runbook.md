@@ -16,7 +16,7 @@ Stop the server, change the `--config`, start it again. That is the whole loop.
 
 `./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest depositCapTest attestationTest`
 
-Last run 2026-08-17: all seven green, 374 / 6 / 5 / 16 / 9 / 6 / 12.
+Last run: all seven green, 394 / 6 / 5 / 16 / 16 / 6 / 12.
 
 ## Three things that will waste an hour if you don't know them
 
@@ -57,9 +57,8 @@ start.
 The three deposit rules run in sequence on the same event — window cap, then statistics
 multiple, then claimed play time — and each rejects with its own message. Leaving a
 second one on means a refusal you attribute to the rule under test may be a different
-rule firing. The live baseline has `maxDepositMultipleOfHandled: 3`, which is exactly the
-one that would silently confound C2. So each file here enables its own rule and zeroes
-the rest.
+rule firing. So each file here enables its own rule and zeroes the rest — the statistics
+multiple in particular would silently confound C2 if left on.
 
 `requireAttestation: true` wherever the rule needs a claim. Both the statistics check
 (`HostServer.java:1193`) and the play-hour check (`:1229`) are guarded on
@@ -136,7 +135,8 @@ fresh 100 — don't read that as a bug, and don't restart mid-test.
 
 ### 8 — C6 statistics multiple · `c6-statistics-multiple.json` — new, not on the checklist
 
-`maxDepositMultipleOfHandled` ships enabled in the live baseline and has no live test.
+`maxDepositMultipleOfHandled` had no live test of any kind. It is off by default, like
+the other two deposit rules.
 
 - Deposit more than three times what your own statistics say you have ever handled of
   that item → refused
@@ -144,34 +144,29 @@ fresh 100 — don't read that as a bug, and don't restart mid-test.
   `handled × 3 + what this market has withdrawn to you`. This is the regression closed
   in `cfc9163`
 
-**Note the `maxDepositUnitsPerWindow: 1000000` in that file.** It is not a cap under
-test — it is there to switch deposit *counting* on, and needing it is a real gap:
-
-> `HostServer.java:266` enables counting when `maxDepositUnitsPerWindow > 0 ||
-> maxDepositUnitsPerPlayHour > 0` — `maxDepositMultipleOfHandled` is not in that list. So
-> with the statistics rule set **alone**, as the live baseline has it,
-> `DepositLimiter.tracking()` is false, `usedBy` always returns 0, and every deposit is
-> judged on its own rather than against the running total. Someone with 10 handled iron
-> can deposit 30, repeatedly, for as long as they like. `DepositLimiter.tracking()`
-> (`DepositLimiter.java:89`) exists precisely to stop this for the play-hour rule — its
-> javadoc says counting tied to the cap "would have seen each deposit alone and never a
-> sum". The statistics rule has the same hole and was not added to the same fix.
-
-Worth fixing before this step is meaningful on the default config.
+**No window cap needed in that file any more.** It used to carry a large
+`maxDepositUnitsPerWindow` purely to switch deposit *counting* on, because the host
+enabled counting for the cap and the play-hour rule but not for the statistics multiple.
+Set alone, the limiter had a zero-length window, `usedBy` always answered 0, and each
+deposit was judged in isolation — so ten handled iron authorised thirty deposited, then
+thirty more. Fixed: all three rules now ask `ServerConfig.countsDeposits()`, and a zero
+window under any of them is refused at startup rather than quietly accepted.
 
 ### 9 — C4 welcome grant · `c4-welcome-grant.json` — last, and destructive
 
-`welcomeGrant` is only ever written at genesis, and only when it differs from the default
-1000 (`writeInitialPolicy`, `HostServer.java:1686`). The current log has no `MarketPolicy`
-event at all for that reason, and runs on the built-in 1000. So this needs a new market:
+`welcomeGrant` is only ever written at genesis. It sets the amount for a market this
+server creates itself and reaches no existing one, so this needs a new market:
 
 ```bash
 rm server-market.jsonl
 ./gradlew hostServer --args="--config docs/testing/c4-welcome-grant.json"
 ```
 
-- Console: `[host] welcome grant for this market set to 50`
+- Console: `created '<name>' (<id>) — welcome grant 50`. That line only appears when the
+  policy is actually written, so it is the confirmation the bootstrap took
 - A joining identity receives 50, not 1000
+- Start against an existing market whose figure differs and you get the mismatch warning
+  instead, naming both and what a newcomer will actually receive
 
 Deleting the log changes the market id, so any client that had synced to the old market
 will now be refused as a different market. That is correct behaviour, not a failure —
@@ -179,6 +174,6 @@ but it is why this goes last.
 
 ## Afterwards
 
-`server-config.json` is the live baseline and is gitignored; the files in this directory
+`server-config.json` is the live baseline; the files in this directory
 are fixtures and are tracked. Nothing here writes to the baseline unless you point the
 launcher at it.
