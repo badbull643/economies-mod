@@ -122,6 +122,15 @@ public abstract class Message {
         /** False on every chunk but the last — a whole history in one frame can
          *  exceed MessageChannel's per-line cap, so the transfer is split. */
         public boolean complete = true;
+        /**
+         * What the sender says about the world they are migrating from, on the first
+         * chunk only, exactly as Hello carries it.
+         *
+         * Migration is a bulk import of goods that never passes through a deposit, so
+         * without this the whole attestation side of the door applies to everybody
+         * except the one path that hands over the most at once.
+         */
+        public WorldAttestation attestation;
         public MigrateRequest() { type = "MigrateRequest"; }
     }
 

@@ -943,6 +943,15 @@ public class HostServer {
                 return;
             }
 
+            String implausible = migrationObjection(who, position, first.attestation);
+            if (implausible != null) {
+                System.out.println("[host] refused migration from " + who + ": "
+                        + implausible);
+                reply.reason = implausible;
+                channel.send(reply);
+                return;
+            }
+
             Event.MigrateBalance mb = new Event.MigrateBalance();
             mb.userId = hostUserIdAsUuid();
             mb.marketId = state.marketId();
@@ -1468,6 +1477,60 @@ public class HostServer {
             acc.logLine = log.rawLineFor(se.seq);
             broadcast(acc);
         }
+    }
+
+    /**
+     * Why this migration should not be honoured, or null when it should.
+     *
+     * Migration was the one way into a market that no deposit rule reached. The three
+     * of them hang off depositUnitsOf in processProposal, and a migration never goes
+     * near it — it is queued as host work and appended directly, so items arrived in
+     * any quantity from any world with nothing consulted but the admission list. Build
+     * a market in a creative world, dump into it, migrate it in on first contact: the
+     * grant guards stop the credits and nothing stopped the goods.
+     *
+     * The statistics multiple is the rule that fits here, and the only one that does.
+     * A migration is a stock transfer, and statistics are a stock measure: goods you
+     * really mined and put in your own market are goods your own statistics counted,
+     * while goods you spawned are not. The window cap is deliberately not applied — it
+     * bounds a rate, and refusing a long-lived market's whole position for arriving at
+     * once would break migration for exactly the people using it honestly. Claimed play
+     * time is not applied for the same reason, and is weak besides.
+     *
+     * Judged against what is being carried in, not what has been deposited lately, so
+     * it needs no window and nothing is recorded here. The market being left is
+     * evidence in itself: its history was verified event by event on the way in.
+     */
+    private String migrationObjection(UUID who, NetPosition position,
+                                      WorldAttestation claim) {
+        if (config.requireAttestation && claim == null) {
+            return "this server needs to know what world you are trading from, and your"
+                    + " client did not say — it may be too old to migrate here";
+        }
+        if (claim == null || config.maxDepositMultipleOfHandled <= 0) return null;
+
+        for (Map.Entry<String, Long> entry : position.items.entrySet()) {
+            String itemId = entry.getKey();
+            long bringing = entry.getValue() == null ? 0 : entry.getValue();
+            if (bringing <= 0) continue;
+
+            long handled = claim.handledOf(itemId);
+            // Plus whatever this market has already handed them, for the same reason the
+            // deposit path allows it: a withdrawal arrives through insertStack and
+            // increments no statistic, so goods this market gave out would otherwise
+            // look spawned on the way back in.
+            long allowed = Math.addExact(
+                    Math.multiplyExact(handled, (long) config.maxDepositMultipleOfHandled),
+                    state.withdrawnBy(who, itemId));
+
+            if (bringing > allowed) {
+                return "you would be bringing " + bringing + " " + itemId
+                        + ", and your own statistics show " + handled
+                        + " ever handled — this server accepts up to "
+                        + config.maxDepositMultipleOfHandled + " times that";
+            }
+        }
+        return null;
     }
 
     private UUID hostUserIdAsUuid() {
