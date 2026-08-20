@@ -303,11 +303,11 @@ public class HostServer {
      * grants that everyone refuses — including itself. The player sees nothing arrive
      * and the operator sees a setting they believe they changed.
      *
-     * Easy to reach without doing anything wrong. writeInitialPolicy only writes a
-     * policy when the configured grant differs from the default, so a market
-     * bootstrapped on the default has no MarketPolicy at all and is pinned to
-     * DEFAULT_WELCOME_GRANT for good. Editing the config afterwards changes what this
-     * server signs and nothing about what the market will accept.
+     * Genesis records the figure now, so a market made from here on can always be asked
+     * what it grants. The check remains for the markets that predate that, which carry
+     * no MarketPolicy at all and fall back to DEFAULT_WELCOME_GRANT — for those,
+     * editing the config changes what this server signs and nothing about what the
+     * market will accept, and the two can disagree indefinitely.
      *
      * Said at startup rather than at the first refusal, because the first refusal
      * happens to a newcomer, which is the worst moment to discover it and the one an
@@ -1706,9 +1706,9 @@ public class HostServer {
             // The server is its own creator. Simplest case, and the only one that needs
             // nothing kept anywhere else.
             UUID creatorId = UUID.fromString(cfg.hostUserId);
-            MarketBootstrap.createMarket(log, creatorId, name, serverKeys);
+            MarketBootstrap.createMarket(log, creatorId, name, serverKeys,
+                    cfg.welcomeGrant);
             System.out.println("[host] created '" + name + "' owned by this server");
-            writeInitialPolicy(log, cfg, creatorId, serverKeys);
             return;
         }
 
@@ -1723,46 +1723,8 @@ public class HostServer {
 
         PlayerKeys creator = PlayerKeys.loadOrCreate(creatorKeyFile);
         UUID creatorId = UUID.fromString(cfg.creatorUserId.trim());
-        MarketBootstrap.createMarket(log, creatorId, name, creator);
+        MarketBootstrap.createMarket(log, creatorId, name, creator, cfg.welcomeGrant);
         System.out.println("[host] created '" + name + "' owned by " + cfg.creatorUserId
                 + " — that key is not needed on this machine again");
-        writeInitialPolicy(log, cfg, creatorId, creator);
-    }
-
-    /**
-     * Records the configured welcome grant as the new market's policy.
-     *
-     * Only at creation, and only when it differs from the default every market starts
-     * with. After this the figure is the market's, not the server's: a host joining a
-     * market it did not create has no authority to change what newcomers are given, and
-     * a grant that disagreed with policy would be rejected by every replica including
-     * its own.
-     *
-     * Signed by the creator, because policy is creator-gated — which is the whole
-     * reason --creator-key records an operator rather than the box.
-     */
-    private static void writeInitialPolicy(EventLog log, ServerConfig cfg,
-                                           UUID creatorId, PlayerKeys creatorKeys) {
-        if (cfg.welcomeGrant == ServerConfig.DEFAULT_WELCOME_GRANT) return;
-
-        try {
-            Event.MarketPolicy mp = new Event.MarketPolicy();
-            mp.userId = creatorId;
-            mp.marketId = log.marketId();
-            mp.taxBps = 0;
-            mp.grantAmount = cfg.welcomeGrant;
-            mp.clientEventId = UUID.randomUUID().toString();
-            mp.timestamp = System.currentTimeMillis();
-
-            log.append(mp, creatorKeys.sign(EventCanonical.canonicalPayload(mp)));
-            System.out.println("[host] welcome grant for this market set to "
-                    + cfg.welcomeGrant);
-        } catch (Exception e) {
-            // Not fatal: the market exists and works, it just uses the default grant.
-            // Saying so is better than a server that quietly ignores its own config.
-            System.err.println("[host] could not record the configured welcome grant ("
-                    + e.getMessage() + ") — this market will use "
-                    + ServerConfig.DEFAULT_WELCOME_GRANT);
-        }
     }
 }

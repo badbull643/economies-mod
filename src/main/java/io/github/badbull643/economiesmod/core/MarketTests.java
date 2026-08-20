@@ -294,13 +294,17 @@ public class MarketTests {
             // Swap in a valid signature from a different event. Without the signature
             // in the hash, this would go undetected.
             List<String> lines = Files.readAllLines(file);
-            String forged = lines.get(1).replaceAll("\"signature\":\"[^\"]*\"",
+            int at = lineOf(lines, "Deposit");
+            String forged = lines.get(at).replaceAll("\"signature\":\"[^\"]*\"",
                     "\"signature\":\"" + testKeys().sign("something else") + "\"");
-            lines.set(1, forged);
+            lines.set(at, forged);
             Files.write(file, lines);
 
             EventLog tampered = new EventLog(file);
-            check("swapped signature breaks the chain", tampered.verifyChain(), 2);
+            // Derived from where the forgery went rather than written out: the seq the
+            // deposit lands on is genesis plus whatever else genesis writes, and hard-
+            // coding it made this assert a layout that was free to change.
+            check("swapped signature breaks the chain", tampered.verifyChain(), at + 1);
         }
 
         section("J3: genesis rules — a market has exactly one birth certificate");
@@ -922,12 +926,13 @@ public class MarketTests {
             apply(log, live, deposit(ALICE, IRON, 100));
 
             List<String> lines = Files.readAllLines(src);
-            String tampered = lines.get(1).replace("\"quantity\":100", "\"quantity\":999999");
+            int at = lineOf(lines, "Deposit");
+            String tampered = lines.get(at).replace("\"quantity\":100", "\"quantity\":999999");
             SequencedEvent se = EventLog.parseLine(tampered);
             // Re-chain it so nothing but the signature is wrong.
             String rehashed = tampered.replace("\"hash\":\"" + se.hash + "\"",
                     "\"hash\":\"" + EventLog.recomputeHash(se) + "\"");
-            lines.set(1, rehashed);
+            lines.set(at, rehashed);
             Files.write(src, lines);
 
             check("chain looks intact to a hash-only check",
@@ -2061,6 +2066,25 @@ public class MarketTests {
             // carries no MarketPolicy at all and is pinned to it for good. Editing the
             // config afterwards changes what the server signs and nothing about what
             // the market will accept.
+            // Genesis records the figure whatever it is, so a market can always be
+            // asked what it grants rather than falling back to a constant.
+            Path chosen = scratch("test-grant-chosen.jsonl");
+            Files.deleteIfExists(chosen);
+            EventLog chosenLog = new EventLog(chosen);
+            MarketBootstrap.createMarket(chosenLog, ALICE, "grant 50 market",
+                    testKeys(), 50);
+            check("genesis records the grant it was given",
+                    EventApplier.replay(chosenLog).welcomeGrant(), 50);
+
+            Path plain = scratch("test-grant-default.jsonl");
+            Files.deleteIfExists(plain);
+            EventLog plainLog = new EventLog(plain);
+            MarketBootstrap.createMarket(plainLog, ALICE, "default grant market",
+                    testKeys());
+            check("and records the default too, rather than leaving it unstated",
+                    EventApplier.replay(plainLog).welcomeGrant(),
+                    ServerConfig.DEFAULT_WELCOME_GRANT);
+
             Path file = scratch("test-grant-mismatch.jsonl");
             Files.deleteIfExists(file);
             EventLog log = new EventLog(file);
@@ -2190,6 +2214,21 @@ public class MarketTests {
             ServerConfig cfg, Path log) throws Exception {
         return new io.github.badbull643.economiesmod.core.net.HostServer(
                 cfg, log, testKeys(), new PeerCache(scratch("test-grant-peers.json")));
+    }
+
+    /**
+     * Which line holds the first event of this type.
+     *
+     * These tests used to index the log by position, which quietly stopped meaning what
+     * it said the moment genesis grew a second event: one of them went on passing while
+     * tampering with the wrong record entirely. Position in the file is not a contract;
+     * the event type is.
+     */
+    private static int lineOf(List<String> lines, String eventType) {
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains("\"eventType\":\"" + eventType + "\"")) return i;
+        }
+        throw new IllegalStateException("no " + eventType + " event in the log");
     }
 
     private static Path scratch(String name) {
