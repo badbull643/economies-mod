@@ -67,15 +67,25 @@ public class MarketClient {
      */
     public static class Refused extends IOException {
         public final String code;   // one of HostServer.Refusal, or null
-        /** Only meaningful for AHEAD — where the refusing host's own log ends. */
+        /** Where the refusing host's own log ends. Sent with AHEAD, so the client can
+         *  tell "I extend you" from "we diverged", and with FORK, so a reset knows the
+         *  point to compute its re-place checklist against. Zero/null otherwise. */
         public final long hostSeq;
         public final String hostHash;
+        /** The refusing host's name, when it sent one. */
+        public final String hostName;
 
         public Refused(String code, String reason, long hostSeq, String hostHash) {
+            this(code, reason, hostSeq, hostHash, null);
+        }
+
+        public Refused(String code, String reason, long hostSeq, String hostHash,
+                       String hostName) {
             super(reason == null ? "connection refused" : reason);
             this.code = code;
             this.hostSeq = hostSeq;
             this.hostHash = hostHash;
+            this.hostName = hostName;
         }
     }
 
@@ -181,7 +191,8 @@ public class MarketClient {
         if (reply instanceof Message.Error) {
             Message.Error err = (Message.Error) reply;
             channel.close();
-            throw new Refused(err.code, err.reason, err.hostSeq, err.hostHash);
+            throw new Refused(err.code, err.reason, err.hostSeq, err.hostHash,
+                    err.hostName);
         }
         if (!(reply instanceof Message.Sync)) {
             channel.close();

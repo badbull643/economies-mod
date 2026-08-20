@@ -91,9 +91,19 @@ public abstract class Message {
         public String code;
         /** Where this host actually is. Sent with AHEAD so the client can work out
          *  whether it merely extends the host's history or has diverged from it —
-         *  the host can't tell, because Hello only carries the client's own head. */
+         *  the host can't tell, because Hello only carries the client's own head.
+         *
+         *  Sent with FORK for a different reason: the client can see that it diverged,
+         *  but not where, and the re-place checklist a reset offers is computed against
+         *  exactly that point. Without it the only thing that ever learned the split
+         *  point was the discovery poll, so a fork found by connecting produced an
+         *  empty checklist. */
         public long hostSeq;
         public String hostHash;
+        /** Who is refusing, so a divergence recorded from a refusal carries the same
+         *  label as one recorded from a poll — they have to match, or the poll cannot
+         *  recognise its own earlier warning to clear it. */
+        public String hostName;
         public Error() { type = "Error"; }
     }
 
