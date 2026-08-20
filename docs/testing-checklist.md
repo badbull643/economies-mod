@@ -160,7 +160,11 @@ is kept as the statement of what each test is about; the runbook is what to type
 
 Note `--write-config` writes the file and **exits** — it does not start a server.
 
-### C1. Admission control
+**C1, C3, C5 and C4 are done.** Still open: **C2** deposit caps, **C5b** claimed play
+time, **C6** the statistics multiple — the three that need deposits rather than just a
+connection.
+
+### C1. Admission control — DONE
 
 ```json
 { "admission": "allowlist", "allow": ["<Alice's uuid>"] }
@@ -181,7 +185,7 @@ Note `--write-config` writes the file and **exits** — it does not start a serv
   consumed any allowance
 - Console shows `[host] deposit cap: <uuid> tried N, has M left of 100`
 
-### C3. World attestation
+### C3. World attestation — DONE
 
 ```json
 { "refuseCreativeWorlds": true }
@@ -191,7 +195,14 @@ Note `--write-config` writes the file and **exits** — it does not start a serv
 - Connect from a survival world → admitted
 - Console logs `reports Nh in a survival world (<hash>)` on connect
 
-**C5. The two cheat routes — new, and the ones worth most here.**
+**C5. The two cheat routes — DONE, and the ones worth most here.**
+
+Confirmed live, including the mid-session drop. Worth knowing it also fired by accident
+twice during other testing: opening a world to LAN with cheats while connected got the
+identity dropped *and banned*, and `ban()` writes the deny entry back into whichever
+config file the host loaded. The next session then fails at the door for what looks like
+an unrelated reason. That is why the runbook fixtures all ship `banOnWorldChange: false`
+— turn it on when you mean to watch it, and clear `deny` afterwards.
 
 ```json
 { "refuseCheatWorlds": true, "refuseCreativeWorlds": false }
@@ -212,15 +223,41 @@ Note `--write-config` writes the file and **exits** — it does not start a serv
 - From a world with only an hour or two of play, deposit far more than that affords →
   refused, naming the contradiction
 
-### C4. Welcome grant policy
+### C4. Welcome grant policy — DONE
+
+Confirmed: the market's log carries `"grantAmount":50` at seq 2 and the joiner's
+`WelcomeGrant` is `"amount":50`.
+
+The first attempt looked like a failure and was not. Editing `welcomeGrant` on an
+**existing** market does nothing at all — the amount is the market's, fixed when it was
+created, and the config only sets it for a market the server creates itself. Two changes
+came out of that:
+
+- Genesis now records the grant whatever it is. It used to be written only when it
+  differed from the default, so a market made on the default carried no policy at all
+  and fell back to a constant that nothing could be compared against.
+- A startup warning when the two disagree, naming both figures and what a newcomer will
+  actually receive. Note it does **not** mean anything is broken — grants still go out
+  at the market's amount, correctly. It means the setting is being ignored.
+
+The console line to look for on a correct run is now
+`created '<name>' (<id>) — welcome grant 50`.
+
+<details>
+<summary>Kept for reference</summary>
 
 ```json
 { "welcomeGrant": 50 }
 ```
 
-- Bootstrap a **new** market with this (delete `server-market.jsonl` first)
+- Bootstrap a **new** market with this (delete `server-market.jsonl` first, with the
+  server stopped)
 - A joining identity should receive 50, not 1000
-- Console: `welcome grant for this market set to 50`
+
+Deleting the log gives the market a new id, so any client that had synced the old one is
+refused as a different market and needs Reset or a fresh world. That is expected.
+
+</details>
 
 ---
 
