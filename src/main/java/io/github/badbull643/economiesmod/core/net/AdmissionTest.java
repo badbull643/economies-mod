@@ -93,6 +93,8 @@ public class AdmissionTest {
             host.stop();
         }
 
+        peerSharingRespectsDedicated();
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");
@@ -191,6 +193,80 @@ public class AdmissionTest {
         check("refused at the gate, not for being empty",
                 result != null && result.reason != null
                         && result.reason.contains("invited") ? 1 : 0, 1);
+    }
+
+    /**
+     * A dedicated server does not hand its clients each other's addresses.
+     *
+     * The roster exists for a market where hosting rotates and the next host is one of
+     * the people already here. A dedicated server never hands over, its clients sit
+     * behind NAT with nothing forwarded, and a residential address is wrong within
+     * days — so the broadcast buys nobody a connection they could make while giving
+     * every joiner the addresses of everyone before them, written to their disk.
+     *
+     * Both halves are checked, because "shares nothing" passes trivially if the roster
+     * was empty to begin with. The seeded peer is on a routable address so the existing
+     * loopback filter cannot be what removes it.
+     */
+    private static void peerSharingRespectsDedicated() throws Exception {
+        System.out.println("  [A5: only a rotating host passes on who else is here]");
+
+        UUID stranger = UUID.fromString("00000000-0000-0000-0000-00000000000c");
+
+        for (boolean dedicated : new boolean[]{false, true}) {
+            String tag = dedicated ? "ded" : "rotating";
+            Path hostLog = dir.resolve("adm-share-" + tag + ".jsonl");
+            Path hostPeers = dir.resolve("adm-share-" + tag + "-host-peers.json");
+            Path clientPeers = dir.resolve("adm-share-" + tag + "-client-peers.json");
+            Path clientLog = dir.resolve("adm-share-" + tag + "-client.jsonl");
+            for (Path p : new Path[]{hostLog, hostPeers, clientPeers, clientLog}) {
+                Files.deleteIfExists(p);
+            }
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(hostLog);
+            MarketBootstrap.createMarket(log, HOST, "roster test market", keys);
+
+            PeerCache hostCache = new PeerCache(hostPeers);
+            hostCache.record(stranger.toString(), "Stranger", "203.0.113.7", 25565, null);
+
+            ServerConfig cfg = ServerConfig.friendGroup(freePort());
+            cfg.hostName = "roster";
+            cfg.hostUserId = HOST.toString();
+            cfg.dedicated = dedicated;
+
+            HostServer host = new HostServer(cfg, hostLog, keys, hostCache);
+            Thread t = new Thread(() -> {
+                try { host.start(); } catch (IOException e) { /* stopped */ }
+            }, "roster-test-host-" + tag);
+            t.setDaemon(true);
+            t.start();
+
+            IOException bindError = host.awaitBound(5000);
+            if (bindError != null) throw bindError;
+
+            try {
+                PeerCache clientCache = new PeerCache(clientPeers);
+                MarketClient joiner = new MarketClient(INVITED, "joiner",
+                        PlayerKeys.generate(), new EventLog(clientLog), true,
+                        clientCache, 0);
+                joiner.connect("127.0.0.1", cfg.port);
+
+                boolean learned = false;
+                for (PeerCache.Peer p : clientCache.all()) {
+                    if (stranger.toString().equals(p.userId)) learned = true;
+                }
+
+                check(dedicated
+                                ? "a dedicated host keeps the roster to itself"
+                                : "a rotating host still shares it",
+                        learned ? 1 : 0, dedicated ? 0 : 1);
+
+                joiner.disconnect();
+            } finally {
+                host.stop();
+            }
+        }
     }
 
     private static MarketClient client(UUID who, String logName) throws Exception {
