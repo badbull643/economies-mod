@@ -290,7 +290,8 @@ public class MarketClient {
      * connect normally; nothing about the local log is touched here.
      */
     public static Message.MigrateResult requestMigration(String host, int port,
-                                                         UUID userId, List<String> logLines)
+                                                         UUID userId, List<String> logLines,
+                                                         WorldAttestation attestation)
             throws IOException {
         Socket socket = new Socket(host, port);
         socket.setSoTimeout(30_000);   // verifying a whole branch is not instant
@@ -307,6 +308,9 @@ public class MarketClient {
                 req.userId = userId.toString();
                 req.logLines = chunks.get(i);
                 req.complete = (i == chunks.size() - 1);
+                // First chunk only, like Sync: the host reads it off the message that
+                // opened the exchange and the rest are just more history.
+                if (i == 0) req.attestation = attestation;
                 ch.send(req);
             }
 

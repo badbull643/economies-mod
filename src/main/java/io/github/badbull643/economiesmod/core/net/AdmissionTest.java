@@ -95,6 +95,7 @@ public class AdmissionTest {
 
         peerSharingRespectsDedicated();
         aFailedStartWritesNothing();
+        migrationIsWeighedAgainstStatistics();
 
         System.out.println();
         if (failures == 0) {
@@ -171,7 +172,7 @@ public class AdmissionTest {
 
         Message.MigrateResult result = MarketClient.requestMigration(
                 "127.0.0.1", port, OUTSIDER,
-                Files.readAllLines(foreignLog));
+                Files.readAllLines(foreignLog), null);
 
         check("migration refused", result != null && !result.accepted ? 1 : 0, 1);
         check("because of admission, not the archive",
@@ -194,6 +195,100 @@ public class AdmissionTest {
         check("refused at the gate, not for being empty",
                 result != null && result.reason != null
                         && result.reason.contains("invited") ? 1 : 0, 1);
+    }
+
+    /**
+     * Migrated goods are weighed the same way deposited ones are.
+     *
+     * This was the way in that no deposit rule reached. All three hang off
+     * depositUnitsOf in processProposal, and a migration never goes near it — it is
+     * queued as host work and appended directly, so items arrived in any quantity from
+     * any world with nothing consulted but the admission list. The grant guards stopped
+     * the credits; nothing stopped the goods.
+     *
+     * Both directions are checked, because refusing everything would pass the first half
+     * on its own and would break migration for the people using it honestly.
+     */
+    private static void migrationIsWeighedAgainstStatistics() throws Exception {
+        System.out.println("  [A7: a migration is weighed against the sender's statistics]");
+
+        final String IRON = "minecraft:iron_ingot";
+
+        for (boolean honest : new boolean[]{true, false}) {
+            String tag = honest ? "honest" : "spawned";
+            Path hostLog = dir.resolve("adm-mig-" + tag + ".jsonl");
+            Path foreignLog = dir.resolve("adm-mig-" + tag + "-foreign.jsonl");
+            Path peers = dir.resolve("adm-mig-" + tag + "-peers.json");
+            for (Path p : new Path[]{hostLog, foreignLog, peers}) Files.deleteIfExists(p);
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(hostLog);
+            MarketBootstrap.createMarket(log, HOST, "migration test market", keys);
+
+            ServerConfig cfg = ServerConfig.friendGroup(freePort());
+            cfg.hostName = "weigher";
+            cfg.hostUserId = HOST.toString();
+            cfg.maxDepositMultipleOfHandled = 3;
+
+            HostServer host = new HostServer(cfg, hostLog, keys, new PeerCache(peers));
+            Thread t = new Thread(() -> {
+                try { host.start(); } catch (IOException e) { /* stopped */ }
+            }, "migration-test-host-" + tag);
+            t.setDaemon(true);
+            t.start();
+            IOException bindError = host.awaitBound(5000);
+            if (bindError != null) throw bindError;
+
+            try {
+                // A foreign market the sender really holds 300 iron in. Whether that is
+                // legitimate is the only thing in question.
+                PlayerKeys mine = PlayerKeys.generate();
+                PlayerKeys otherHost = PlayerKeys.generate();
+                EventLog foreign = new EventLog(foreignLog);
+                MarketBootstrap.createMarket(foreign, HOST, "elsewhere", otherHost);
+                UUID foreignId = foreign.marketId();
+
+                Event.KeyRegistered kr = new Event.KeyRegistered();
+                kr.userId = INVITED;
+                kr.marketId = foreignId;
+                kr.publicKey = mine.publicKeyString();
+                kr.timestamp = System.currentTimeMillis();
+                foreign.append(kr, mine.sign(EventCanonical.canonicalPayload(kr)));
+
+                Event.Deposit dep = new Event.Deposit();
+                dep.userId = INVITED;
+                dep.marketId = foreignId;
+                dep.itemId = IRON;
+                dep.quantity = 300;
+                dep.timestamp = System.currentTimeMillis();
+                foreign.append(dep, mine.sign(EventCanonical.canonicalPayload(dep)));
+
+                // 300 needs 100 handled at a multiple of three. The honest world counted
+                // them; the creative one never touched a pickaxe.
+                io.github.badbull643.economiesmod.core.WorldAttestation claim =
+                        new io.github.badbull643.economiesmod.core.WorldAttestation();
+                claim.gameMode = "survival";
+                claim.handledByItem = new java.util.HashMap<>();
+                claim.handledByItem.put(IRON, honest ? 100L : 0L);
+
+                Message.MigrateResult result = MarketClient.requestMigration(
+                        "127.0.0.1", cfg.port, INVITED,
+                        Files.readAllLines(foreignLog), claim);
+
+                if (honest) {
+                    check("statistics that cover it are let through",
+                            result != null && result.accepted ? 1 : 0, 1);
+                } else {
+                    check("statistics that do not are refused",
+                            result != null && !result.accepted ? 1 : 0, 1);
+                    check("and the refusal says what they show",
+                            result != null && result.reason != null
+                                    && result.reason.contains("statistics") ? 1 : 0, 1);
+                }
+            } finally {
+                host.stop();
+            }
+        }
     }
 
     /**
