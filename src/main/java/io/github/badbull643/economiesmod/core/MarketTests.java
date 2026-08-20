@@ -1467,6 +1467,131 @@ public class MarketTests {
                     free.wallets().getBalance(BOB), untaxed);
         }
 
+        section("T1e: the listing fee climbs with orders held, not with order value");
+        {
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "escalating market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.wallets().setBalance(ALICE, 10_000L);
+            m.deposit(ALICE, IRON, 100);
+            m.setListingFee(2);
+            m.setListingFreeOrders(3);
+
+            check("the first order pays the base fee", m.listingFeeFor(ALICE), 2);
+
+            // Three resting orders fit inside the allowance; the fourth starts climbing.
+            for (int i = 0; i < 3; i++) {
+                m.submitOrder(new Order(100 + i, 50 + i, IRON, 1, false, ALICE));
+            }
+            check("still the base fee at the allowance", m.listingFeeFor(ALICE), 2);
+
+            m.submitOrder(new Order(200, 90, IRON, 1, false, ALICE));
+            check("one past it costs double", m.listingFeeFor(ALICE), 4);
+            m.submitOrder(new Order(201, 91, IRON, 1, false, ALICE));
+            check("and keeps climbing", m.listingFeeFor(ALICE), 6);
+
+            // Cancelling gives the allowance back — the fee prices what you are holding
+            // open, so releasing the book releases the cost.
+            m.cancelOrder(201, IRON, false, ALICE);
+            check("cancelling walks it back down", m.listingFeeFor(ALICE), 4);
+
+            // Never free, which is what the stipend's safety rests on.
+            check("somebody with nothing resting still pays", m.listingFeeFor(BOB), 2);
+
+            // Off by default, so markets written before this keep the flat fee.
+            MarketState flat = new MarketState();
+            flat.setMarketIdentity(UUID.randomUUID(), "flat market", ALICE);
+            flat.registerKey(ALICE, "alice-key");
+            flat.wallets().setBalance(ALICE, 10_000L);
+            flat.deposit(ALICE, IRON, 100);
+            flat.setListingFee(2);
+            flat.submitOrder(new Order(300, 50, IRON, 1, false, ALICE));
+            flat.submitOrder(new Order(301, 51, IRON, 1, false, ALICE));
+            check("no allowance set means no escalation", flat.listingFeeFor(ALICE), 2);
+        }
+
+        section("U4: a stipend pays per fill, and cannot be earned by self-dealing");
+        {
+            // Money otherwise enters only when new people do, while goods accrue for
+            // every hour anybody plays — so prices fall until they reach the integer
+            // floor of 1 and stop meaning anything. This is the counterweight.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "stipend market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.setStipend(10, 5);
+
+            check("nothing owed on arrival", stipendRejection(m, ALICE, 10) != null ? 1 : 0, 1);
+
+            // Four fills is not yet five.
+            m.recordTrades(1, 1L, fillsOf(4));
+            check("still nothing at four fills",
+                    stipendRejection(m, ALICE, 10) != null ? 1 : 0, 1);
+
+            m.recordTrades(2, 2L, fillsOf(1));
+            check("payable at five", stipendRejection(m, ALICE, 10) == null ? 1 : 0, 1);
+
+            // The amount is the market's, for the same reason the grant's is: nothing
+            // can check who was sequencing.
+            check("but only for the market's figure",
+                    stipendRejection(m, ALICE, 11) != null ? 1 : 0, 1);
+
+            // Claiming resets the interval rather than the balance being a one-off.
+            Event.Stipend claim = new Event.Stipend();
+            claim.userId = ALICE;
+            claim.marketId = m.marketId();
+            claim.amount = 10;
+            SequencedEvent se = new SequencedEvent();
+            se.seq = 3; se.event = claim;
+            EventApplier.apply(m, se);
+            check("and pays out", m.wallets().getBalance(ALICE), 10);
+            check("then the interval starts again",
+                    stipendRejection(m, ALICE, 10) != null ? 1 : 0, 1);
+
+            // An identity registering later does not inherit other people's trading.
+            m.registerKey(BOB, "bob-key");
+            check("a newcomer waits their own interval, not the market's history",
+                    stipendRejection(m, BOB, 10) != null ? 1 : 0, 1);
+
+            // Off unless configured.
+            MarketState none = new MarketState();
+            none.setMarketIdentity(UUID.randomUUID(), "no stipend", ALICE);
+            none.registerKey(ALICE, "alice-key");
+            check("no policy, nothing to claim",
+                    stipendRejection(none, ALICE, 10) != null ? 1 : 0, 1);
+        }
+
+        section("U5: a stipend that outpays its own cost is refused as policy");
+        {
+            // The interlock. Producing a fill means two orders crossing, so at least two
+            // listing fees at the base rate. A stipend worth more than that per fill is
+            // a mint anybody can work by trading with themselves — and a market whose
+            // policy is only safe when set carefully mints the first time somebody is
+            // careless.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "interlock market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+
+            // 10 every 5 fills against a fee of 2: earning 5 fills costs 20, pays 10.
+            check("a stipend that costs more to earn than it pays is allowed",
+                    policyStipendRejection(m, ALICE, 2, 10, 5) == null ? 1 : 0, 1);
+
+            // Same stipend, fee of 1: 5 fills cost 10 and pay 10. Break-even is not
+            // safe — self-dealing at no loss is still an unbounded supply of claims.
+            check("break-even is refused",
+                    policyStipendRejection(m, ALICE, 1, 10, 5) != null ? 1 : 0, 1);
+
+            check("and paying more than it costs certainly is",
+                    policyStipendRejection(m, ALICE, 1, 100, 5) != null ? 1 : 0, 1);
+
+            // A fee of zero makes fills free, so no stipend is safe at all.
+            check("no listing fee means no stipend",
+                    policyStipendRejection(m, ALICE, 0, 1, 1000) != null ? 1 : 0, 1);
+
+            check("the refusal says how to fix it",
+                    policyStipendRejection(m, ALICE, 1, 100, 5)
+                            .contains("Raise the listing fee") ? 1 : 0, 1);
+        }
+
         section("T1b: where a rate stops being worth anything");
         {
             // Reported from a live market: a 2.5% fee appeared to take nothing. It was
@@ -2365,6 +2490,47 @@ public class MarketTests {
 
         EventApplier.Result r = EventApplier.validate(state, se);
         return r.accepted ? null : r.reason;
+    }
+
+    /** Why a stipend claim would be refused, or null if it would stand. */
+    private static String stipendRejection(MarketState state, UUID who, long amount) {
+        Event.Stipend st = new Event.Stipend();
+        st.userId = who;
+        st.marketId = state.marketId();
+        st.amount = amount;
+        st.timestamp = 1L;
+        SequencedEvent se = new SequencedEvent();
+        se.seq = state.fillsEver() + 100;   // past genesis; the rule counts fills, not seq
+        se.event = st;
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
+    /** Why a policy setting this stipend against this fee would be refused. */
+    private static String policyStipendRejection(MarketState state, UUID author,
+                                                 long listingFee, long stipend,
+                                                 long everyFills) {
+        Event.MarketPolicy mp = new Event.MarketPolicy();
+        mp.userId = author;
+        mp.marketId = state.marketId();
+        mp.taxBps = 0;
+        mp.grantAmount = state.welcomeGrant();
+        mp.listingFee = listingFee;
+        mp.stipendAmount = stipend;
+        mp.stipendEveryFills = everyFills;
+        mp.timestamp = 1L;
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 2;
+        se.event = mp;
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
+    /** N fills of one iron at one credit, for advancing the market's fill count. */
+    private static List<Fill> fillsOf(int n) {
+        List<Fill> out = new ArrayList<>();
+        for (int i = 0; i < n; i++) out.add(new Fill(ALICE, BOB, 1, 1, IRON));
+        return out;
     }
 
     private static String policyRejection(MarketState state, UUID author, int bps) {

@@ -235,6 +235,7 @@ public class EventLog {
             case "CancelOrder":   return Event.CancelOrder.class;
             case "DepositAndList": return Event.DepositAndList.class;
             case "MarketPolicy":  return Event.MarketPolicy.class;
+            case "Stipend":       return Event.Stipend.class;
             default:
                 throw new IllegalStateException("Unknown event type in log: " + typeName);
         }

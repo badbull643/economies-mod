@@ -41,7 +41,13 @@ public class EventCanonical {
             // adopt it — this file's whole point is that an omitted field is tamperable.
             Event.MarketPolicy mp = (Event.MarketPolicy) e;
             sb.append('|').append(mp.taxBps).append('|').append(mp.grantAmount)
-                    .append('|').append(mp.listingFee);
+                    .append('|').append(mp.listingFee)
+                    .append('|').append(mp.listingFreeOrders)
+                    .append('|').append(mp.stipendAmount)
+                    .append('|').append(mp.stipendEveryFills);
+        } else if (e instanceof Event.Stipend) {
+            Event.Stipend st = (Event.Stipend) e;
+            sb.append('|').append(st.amount);
         } else if (e instanceof Event.WelcomeGrant) {
             Event.WelcomeGrant wg = (Event.WelcomeGrant) e;
             sb.append('|').append(wg.targetUserId).append('|').append(wg.amount);
