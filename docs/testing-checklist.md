@@ -160,9 +160,9 @@ is kept as the statement of what each test is about; the runbook is what to type
 
 Note `--write-config` writes the file and **exits** — it does not start a server.
 
-**C1, C3, C5 and C4 are done.** Still open: **C2** deposit caps, **C5b** claimed play
-time, **C6** the statistics multiple — the three that need deposits rather than just a
-connection.
+**C1, C3, C5, C5b, C6 and C4 are done.** Still open: **C2** deposit caps — the cap
+itself fired, but the check that matters, that a refusal consumes no allowance, needs
+re-running from a fresh window.
 
 ### C1. Admission control — DONE
 
@@ -216,12 +216,58 @@ an unrelated reason. That is why the runbook fixtures all ship `banOnWorldChange
   Open to LAN with cheats. You should be dropped mid-session. The handshake is a
   photograph, and this is the check that the picture is re-taken
 
+**C5b. Claimed play time — DONE, and then switched off on purpose.**
+
 ```json
 { "maxDepositUnitsPerPlayHour": 100, "refuseCreativeWorlds": false }
 ```
 
 - From a world with only an hour or two of play, deposit far more than that affords →
   refused, naming the contradiction
+
+Fired correctly on a 1.56-hour world at 202 items. Kept as a feature, left at the
+default of off, for two reasons found while running it:
+
+- It weighs a rolling window against a lifetime — items deposited inside
+  `depositWindowMinutes` against the whole world's play time. Barely binding on an old
+  world, harsh on a new one, and a restart clears the window anyway.
+- It is a rate limit on a stock. A tree farm fills a chest in minutes; depositing it is
+  refused on a young world however honestly it was grown.
+
+Both costs land on honest players, since the hours are self-reported. The full
+reasoning is on `ServerConfig.maxDepositUnitsPerPlayHour`, where somebody would be
+about to switch it on. Prefer `maxDepositUnitsPerWindow`, which needs no client
+cooperation, and `maxDepositMultipleOfHandled`, which is keyed to statistics the game
+maintains.
+
+Running it also turned up a refusal that contradicted itself: the hours printed to one
+decimal while the ceiling was floored from the real value, so 1.56 hours read "1.6"
+beside a limit of 156 and multiplying gave 160. It now states the rate and enough
+precision to reconcile.
+
+**C6. The statistics multiple — DONE.** Not in the original list; added with the runbook
+because the rule ships enabled in the friend-group defaults and had no live test.
+
+```json
+{ "maxDepositMultipleOfHandled": 3, "maxDepositUnitsPerWindow": 1000000 }
+```
+
+- Deposit more than three times what your statistics say you have handled of that item →
+  refused, naming what they show
+- Then withdraw some and deposit it back → **accepted**, because the allowance is
+  `handled × 3 + what this market has withdrawn to you`
+
+Both confirmed: 62 oak logs against 0 handled were refused, and iron went back in after
+being withdrawn. Note the second is the subtle one — a withdrawal reaches your inventory
+through `insertStack` and increments no statistic, so without that term the market would
+refuse you re-depositing goods it handed you a moment earlier.
+
+Two caveats. The run used 0 handled, which is degenerate — it proves the rule fires, not
+that the ×3 is computed right; for that, mine ~10 of something and try 30 then 31. And
+the large `maxDepositUnitsPerWindow` in that config is not a cap under test: it is there
+to switch deposit counting on, because `maxDepositMultipleOfHandled` does not enable it
+by itself. Set alone, each deposit is judged in isolation and the rule can be walked
+through by splitting one deposit into several. That is an open bug, not a test setting.
 
 ### C4. Welcome grant policy — DONE
 

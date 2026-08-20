@@ -1963,6 +1963,22 @@ public class MarketTests {
             check("forty claimed hours affords the same haul",
                     old.objections(cfg, 400).isEmpty() ? 1 : 0, 1);
 
+            // The refusal has to survive being checked. It printed the hours to one
+            // decimal while flooring the ceiling from the real value, so a world of
+            // 1.56 hours read "1.6 hours" beside a limit of 156 — and multiplying gave
+            // 160. A refusal whose own arithmetic does not add up reads as a broken
+            // server rather than a caught one.
+            WorldAttestation awkward = new WorldAttestation();
+            awkward.gameMode = "survival";
+            awkward.worldAgeTicks = (long) (WorldAttestation.TICKS_PER_HOUR * 1.56);
+            String said = awkward.objections(cfg, 202).get(0);
+            check("the refusal states the rate it used",
+                    said.contains("100 per claimed hour") ? 1 : 0, 1);
+            check("and the hours it used, to where they reconcile",
+                    said.contains("1.56") ? 1 : 0, 1);
+            check("and the ceiling that follows from them",
+                    said.contains("156") ? 1 : 0, 1);
+
             // Off unless configured, like everything else in this area.
             ServerConfig noPolicy = ServerConfig.friendGroup(25555);
             check("no policy, no objection",
