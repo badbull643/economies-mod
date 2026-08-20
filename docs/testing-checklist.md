@@ -249,7 +249,7 @@ precision to reconcile.
 because the rule had no live test of any kind.
 
 ```json
-{ "maxDepositMultipleOfHandled": 3, "maxDepositUnitsPerWindow": 1000000 }
+{ "maxDepositMultipleOfHandled": 3 }
 ```
 
 - Deposit more than three times what your statistics say you have handled of that item →
@@ -262,12 +262,13 @@ being withdrawn. Note the second is the subtle one — a withdrawal reaches your
 through `insertStack` and increments no statistic, so without that term the market would
 refuse you re-depositing goods it handed you a moment earlier.
 
-Two caveats. The run used 0 handled, which is degenerate — it proves the rule fires, not
-that the ×3 is computed right; for that, mine ~10 of something and try 30 then 31. And
-the large `maxDepositUnitsPerWindow` in that config is not a cap under test: it is there
-to switch deposit counting on, because `maxDepositMultipleOfHandled` does not enable it
-by itself. Set alone, each deposit is judged in isolation and the rule can be walked
-through by splitting one deposit into several. That is an open bug, not a test setting.
+One caveat. The run used 0 handled, which is degenerate — it proves the rule fires, not
+that the ×3 is computed right; for that, mine ~10 of something and try 30 then 31.
+
+Running it also turned up that the statistics rule did not switch deposit counting on,
+so each deposit was judged in isolation and the rule could be walked through by splitting
+one into several. Fixed — the fixture no longer needs the large window value it used to
+carry as a workaround.
 
 ### C4. Welcome grant policy — DONE
 

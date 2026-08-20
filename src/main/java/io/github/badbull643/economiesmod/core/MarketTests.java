@@ -1593,6 +1593,50 @@ public class MarketTests {
             check("only the later trade is taxed", m.wallets().getBalance(ALICE), 950);
         }
 
+        section("V1b: every deposit rule needs deposits counted, not just the cap");
+        {
+            // The statistics multiple was left out of the host's list, so setting it
+            // alone built a limiter with a zero-length window. It tracked nothing,
+            // usedBy always answered zero, and each deposit was judged on its own
+            // against the multiple — so ten handled iron authorised thirty deposited,
+            // then thirty more. The rule was walked through by splitting a deposit,
+            // which is the failure DepositLimiter.tracking() was written to prevent for
+            // the play-hour rule before this one existed.
+            ServerConfig statsOnly = ServerConfig.friendGroup(25555);
+            statsOnly.maxDepositMultipleOfHandled = 3;
+            check("the statistics rule counts deposits",
+                    statsOnly.countsDeposits() ? 1 : 0, 1);
+
+            ServerConfig capOnly = ServerConfig.friendGroup(25555);
+            capOnly.maxDepositUnitsPerWindow = 100;
+            check("so does the cap", capOnly.countsDeposits() ? 1 : 0, 1);
+
+            ServerConfig hoursOnly = ServerConfig.friendGroup(25555);
+            hoursOnly.maxDepositUnitsPerPlayHour = 100;
+            check("so does claimed play time", hoursOnly.countsDeposits() ? 1 : 0, 1);
+
+            check("and nothing configured keeps nothing",
+                    ServerConfig.friendGroup(25555).countsDeposits() ? 1 : 0, 0);
+
+            // A zero window under any of them is the same silent failure, so validation
+            // refuses it rather than building a limiter that answers about one deposit.
+            ServerConfig noWindow = ServerConfig.friendGroup(25555);
+            noWindow.maxDepositMultipleOfHandled = 3;
+            noWindow.depositWindowMinutes = 0;
+            check("a zero window is refused, not quietly accepted",
+                    noWindow.problem() != null ? 1 : 0, 1);
+
+            // Tracking without a ceiling is the shape the statistics rule needs: no cap
+            // to enforce, but a running total to be asked about.
+            DepositLimiter tracked = new DepositLimiter(0, 60 * 60_000L);
+            check("a limiter with no cap still tracks", tracked.tracking() ? 1 : 0, 1);
+            check("and enforces nothing", tracked.enabled() ? 1 : 0, 0);
+            tracked.record(ALICE, IRON, 30, 1_000L);
+            tracked.record(ALICE, IRON, 30, 2_000L);
+            check("so splitting a deposit no longer hides it",
+                    tracked.usedBy(ALICE, IRON, 3_000L), 60);
+        }
+
         section("V1: a deposit cap counts a window, on the host's clock");
         {
             // Time is passed in rather than read, so this tests the rule instead of
