@@ -103,10 +103,30 @@ public class ServerConfig {
     /**
      * Items per claimed hour of play that this server finds plausible. Zero disables.
      *
-     * The contradiction check, and the only one here that costs a liar anything. It
-     * cannot tell whether a world is really as old as it says — but it makes a young
-     * world a small allowance and an old one a specific, recorded claim. See
-     * WorldAttestation.
+     * The contradiction check. It cannot tell whether a world is really as old as it
+     * says — but it makes a young world a small allowance and an old one a specific,
+     * recorded claim. See WorldAttestation.
+     *
+     * <h2>Know what this costs before switching it on</h2>
+     *
+     * Weighed live and left off deliberately. Two things make it the weakest of the
+     * three deposit rules:
+     *
+     * It compares a rolling window against a lifetime. The total it judges is what the
+     * identity has deposited inside depositWindowMinutes; the allowance is the whole
+     * world's play time times this rate. So it reads as "items this hour ≤ lifetime
+     * hours × rate" — barely binding on an established world, harsh on a new one, and
+     * keyed to a number that has nothing to do with cheating. A restart clears the
+     * window too, since the limiter keeps it in memory.
+     *
+     * And it is a rate limit applied to a stock. Play time accrues linearly; a farm's
+     * output arrives in bursts. A tree farm fills a chest in minutes, and depositing it
+     * is refused on a young world however honestly it was grown.
+     *
+     * Both costs land on honest players, because the hours are self-reported: a
+     * modified client claims whatever it likes and passes. maxDepositUnitsPerWindow
+     * needs no client cooperation at all, and maxDepositMultipleOfHandled is keyed to
+     * statistics the game maintains and /give does not touch. Prefer those two.
      */
     public long maxDepositUnitsPerPlayHour = 0;
 
