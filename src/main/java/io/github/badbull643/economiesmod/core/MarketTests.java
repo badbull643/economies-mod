@@ -2055,17 +2055,13 @@ public class MarketTests {
 
         section("U3: a host says so when its configured grant is not the market's");
         {
-            // The amount is recorded once, at genesis, and every replica validates
-            // against the log — so a server configured for anything else signs grants
-            // that are refused everywhere. The newcomer joins with nothing while the
-            // operator sees a setting they believe they changed.
+            // Nothing breaks when the two disagree — issueWelcomeGrant takes the amount
+            // from the market and reads the config only as "issue grants, or not", so
+            // what goes out is correct either way. What is worth reporting is that an
+            // operator editing welcomeGrant on an existing market changes a number in a
+            // file and nothing else, because the amount was fixed when the market was
+            // created.
             //
-            // Reachable without doing anything wrong, which is why it is worth saying
-            // out loud: writeInitialPolicy only records a policy when the configured
-            // grant differs from the default, so a market bootstrapped on the default
-            // carries no MarketPolicy at all and is pinned to it for good. Editing the
-            // config afterwards changes what the server signs and nothing about what
-            // the market will accept.
             // Genesis records the figure whatever it is, so a market can always be
             // asked what it grants rather than falling back to a constant.
             Path chosen = scratch("test-grant-chosen.jsonl");
@@ -2101,6 +2097,14 @@ public class MarketTests {
             disagrees.welcomeGrant = 50;
             String warning = hostFor(disagrees, file).grantMismatchWarning();
             check("a mismatch is reported", warning != null ? 1 : 0, 1);
+
+            // Zero is the opt-out from issuing grants at all, not an operator who got
+            // the number wrong, so it must not be reported as one.
+            ServerConfig off = ServerConfig.friendGroup(25555);
+            off.hostUserId = ALICE.toString();
+            off.welcomeGrant = 0;
+            check("but issuing none is a choice, not a mistake",
+                    hostFor(off, file).grantMismatchWarning() == null ? 1 : 0, 1);
             // Both numbers, because "your grant is wrong" without them sends an
             // operator back to the file to work out which way round it is.
             check("and names the market's figure and the server's",
