@@ -742,6 +742,7 @@ public class HostServer {
                     + ", host " + log.lastSeq() + ")";
             err.hostSeq = log.lastSeq();
             err.hostHash = log.lastHash();
+            err.hostName = hostName;
             channel.send(err);
             return false;
         }
@@ -751,12 +752,25 @@ public class HostServer {
         if (ourHash == null || !ourHash.equals(hello.lastHash)) {
             System.err.println("[host] FORK DETECTED at seq " + hello.lastSeq
                     + " — client hash " + hello.lastHash + ", server hash " + ourHash);
-            sendError(channel, Refusal.FORK, "your history diverged from this market at"
-                    + " event " + hello.lastSeq);
+            // The point of disagreement rather than our head: this branch is only
+            // reached when the client is at or behind us, so our head says nothing
+            // about where the two chains parted, while our hash at their head is
+            // exactly the value they cannot compute for themselves.
+            //
+            // It does not locate the split — that is somewhere at or before this seq,
+            // and finding it would need hashes below their head that neither side
+            // sends. It is enough to state the disagreement honestly and to raise the
+            // FORKED banner, which is what a client on this branch needs.
+            Message.Error err = new Message.Error();
+            err.code = Refusal.FORK;
+            err.reason = "your history diverged from this market at event "
+                    + hello.lastSeq;
+            err.hostSeq = hello.lastSeq;
+            err.hostHash = ourHash;
+            err.hostName = hostName;
+            channel.send(err);
             return false;
         }
-
-        // Catch them up.
 
 // Catch them up.
 
