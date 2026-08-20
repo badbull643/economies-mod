@@ -1433,6 +1433,40 @@ public class MarketTests {
                     MarketState.taxOn(1_000_000_000L, 100), 10_000_000L);
         }
 
+        section("T2b: filling your own order is not free once there is a fee");
+        {
+            // Both sides are the same wallet, so the price washes out — but the fee is
+            // taken from the seller's proceeds and burned, and that side is you too.
+            // The cost is exactly the fee, it is silent, and it repeats every time your
+            // own ask undercuts your own bid, which is the ordinary shape of a book
+            // somebody is making on both sides.
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 10);
+            m.wallets().setBalance(ALICE, 1000L);
+            m.setTaxBps(1000);              // 10%
+
+            long before = m.wallets().getBalance(ALICE);
+
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));   // ask 10 @ 50
+            m.submitOrder(new Order(2, 50, IRON, 10, true, ALICE));    // and buy it back
+
+            // 10 at 50 = 500, 10% of which is 50.
+            check("a self-trade costs exactly the fee", before - m.wallets().getBalance(ALICE), 50);
+            check("and the goods come straight back",
+                    m.itemBalances().getBalance(ALICE, IRON), 10);
+
+            // The premise the notifier relies on: with no fee there is genuinely
+            // nothing to report, which is why the quiet case stays quiet.
+            MarketState free = new MarketState();
+            free.deposit(BOB, IRON, 10);
+            free.wallets().setBalance(BOB, 1000L);
+            long untaxed = free.wallets().getBalance(BOB);
+            free.submitOrder(new Order(1, 50, IRON, 10, false, BOB));
+            free.submitOrder(new Order(2, 50, IRON, 10, true, BOB));
+            check("with no fee it really does net to nothing",
+                    free.wallets().getBalance(BOB), untaxed);
+        }
+
         section("T1b: where a rate stops being worth anything");
         {
             // Reported from a live market: a 2.5% fee appeared to take nothing. It was
