@@ -296,34 +296,44 @@ public class HostServer {
     }
 
     /**
-     * Says so when the configured welcome grant is not the one this market publishes.
+     * Says so when the configured welcome grant is not the one this market hands out.
      *
-     * The figure is the market's, not the server's: it is recorded once at genesis and
-     * every replica validates against what the log says, so a host that disagrees signs
-     * grants that everyone refuses — including itself. The player sees nothing arrive
-     * and the operator sees a setting they believe they changed.
+     * Nothing breaks when they disagree, and this deliberately does not claim
+     * otherwise. issueWelcomeGrant already takes the amount from the market and reads
+     * the config only as "issue grants at all, or not" — a host that used its own
+     * figure would be overruling policy it has no authority over, on a market it may
+     * not have created. So the grants that go out are correct whatever this says.
      *
-     * Genesis records the figure now, so a market made from here on can always be asked
-     * what it grants. The check remains for the markets that predate that, which carry
-     * no MarketPolicy at all and fall back to DEFAULT_WELCOME_GRANT — for those,
-     * editing the config changes what this server signs and nothing about what the
-     * market will accept, and the two can disagree indefinitely.
+     * What is worth reporting is the silence. An operator who edits welcomeGrant on a
+     * running market sees the number change in the file and nothing change anywhere
+     * else, because the amount was fixed when the market was created and this setting
+     * only reaches a market this server creates itself. Left unsaid, the natural
+     * conclusion is that the setting is broken.
      *
-     * Said at startup rather than at the first refusal, because the first refusal
-     * happens to a newcomer, which is the worst moment to discover it and the one an
-     * operator is least likely to be watching.
+     * Zero is not a disagreement — it is the documented opt-out from issuing grants,
+     * so it passes silently rather than being reported as a mistake.
+     *
+     * Said at startup rather than at the first join, because the first join is the
+     * moment an operator is least likely to be reading the console.
      */
     public String grantMismatchWarning() {
-        long market = state.welcomeGrant();
-        if (welcomeGrantAmount == market) return null;
+        // Zero is the opt-out, not a disagreement: issueWelcomeGrant reads it as "do
+        // not hand out grants at all", which is a decision a host is entitled to make
+        // about its own sequencing. Nothing to correct.
+        if (config.welcomeGrant <= 0) return null;
 
-        return "this market grants " + market + ", but this server is configured for "
-                + welcomeGrantAmount + " — every grant it signs would be refused by"
-                + " every replica, so newcomers would join with nothing. The amount"
-                + " belongs to the market and is set once, when it is created. Either"
-                + " set welcomeGrant back to " + market + ", or bootstrap a new market"
-                + " with the figure you want (delete " + config.logFile + " first —"
-                + " that discards this market's history).";
+        long market = state.welcomeGrant();
+        if (config.welcomeGrant == market) return null;
+
+        return "this market grants " + market + ", and welcomeGrant is set to "
+                + config.welcomeGrant + " — the configured figure is not used here."
+                + " The amount is the market's, recorded when it was created, so every"
+                + " host of it hands out the same one; this setting only chooses"
+                + " whether this server issues grants at all, and only sets the amount"
+                + " for a market it creates itself. Newcomers will receive " + market
+                + ". To hand out " + config.welcomeGrant + ", create a market with that"
+                + " figure (delete " + config.logFile + " first — that discards this"
+                + " market's history).";
     }
 
     private void warnIfGrantDisagrees() {
