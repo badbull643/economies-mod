@@ -770,11 +770,24 @@ public class HostServer {
 
         List<String> raw = log.rawLinesFrom(hello.lastSeq + 1);
 
-        // Don't propagate loopback addresses — they're only valid on the machine
-        // that recorded them.
+        // Who else is here, for a market where hosting rotates and the next host is one
+        // of these people.
+        //
+        // A dedicated server is not that market. It never hands over, so nobody needs
+        // to reach its clients; those clients are behind NAT with nothing forwarded, so
+        // the port they advertise is one no one can open; and a residential address is
+        // wrong again within days. Sharing the roster buys nobody a connection they
+        // could actually make, and costs every joiner the addresses of everyone who
+        // came before — merged into their own cache and written to disk. So a dedicated
+        // host tells nobody about anybody.
+        //
+        // Still recorded either way: server-peers.json is the operator's own note of
+        // who connected from where, which is an ordinary thing for a server to keep.
+        // The broadcast is what does not survive the reasoning, not the note.
         List<PeerCache.Peer> shareable = new ArrayList<>();
-        if (peerCache != null) {
+        if (peerCache != null && !config.dedicated) {
             for (PeerCache.Peer p : peerCache.all()) {
+                // Loopback is only valid on the machine that recorded it.
                 if (!"127.0.0.1".equals(p.address) && !"localhost".equals(p.address)) {
                     shareable.add(p);
                 }
