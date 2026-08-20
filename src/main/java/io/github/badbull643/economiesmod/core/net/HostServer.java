@@ -291,6 +291,46 @@ public class HostServer {
 
         System.out.println("[host] serving '" + state.marketName() + "' ("
                 + state.marketId() + ") — replayed " + log.lastSeq() + " events");
+
+        warnIfGrantDisagrees();
+    }
+
+    /**
+     * Says so when the configured welcome grant is not the one this market publishes.
+     *
+     * The figure is the market's, not the server's: it is recorded once at genesis and
+     * every replica validates against what the log says, so a host that disagrees signs
+     * grants that everyone refuses — including itself. The player sees nothing arrive
+     * and the operator sees a setting they believe they changed.
+     *
+     * Easy to reach without doing anything wrong. writeInitialPolicy only writes a
+     * policy when the configured grant differs from the default, so a market
+     * bootstrapped on the default has no MarketPolicy at all and is pinned to
+     * DEFAULT_WELCOME_GRANT for good. Editing the config afterwards changes what this
+     * server signs and nothing about what the market will accept.
+     *
+     * Said at startup rather than at the first refusal, because the first refusal
+     * happens to a newcomer, which is the worst moment to discover it and the one an
+     * operator is least likely to be watching.
+     */
+    public String grantMismatchWarning() {
+        long market = state.welcomeGrant();
+        if (welcomeGrantAmount == market) return null;
+
+        return "this market grants " + market + ", but this server is configured for "
+                + welcomeGrantAmount + " — every grant it signs would be refused by"
+                + " every replica, so newcomers would join with nothing. The amount"
+                + " belongs to the market and is set once, when it is created. Either"
+                + " set welcomeGrant back to " + market + ", or bootstrap a new market"
+                + " with the figure you want (delete " + config.logFile + " first —"
+                + " that discards this market's history).";
+    }
+
+    private void warnIfGrantDisagrees() {
+        String warning = grantMismatchWarning();
+        if (warning != null) {
+            System.err.println("[host] welcome grant mismatch: " + warning);
+        }
     }
 
     private final CountDownLatch bound = new CountDownLatch(1);

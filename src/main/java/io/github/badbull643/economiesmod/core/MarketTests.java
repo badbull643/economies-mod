@@ -2048,6 +2048,42 @@ public class MarketTests {
                             != null ? 1 : 0, 1);
         }
 
+        section("U3: a host says so when its configured grant is not the market's");
+        {
+            // The amount is recorded once, at genesis, and every replica validates
+            // against the log — so a server configured for anything else signs grants
+            // that are refused everywhere. The newcomer joins with nothing while the
+            // operator sees a setting they believe they changed.
+            //
+            // Reachable without doing anything wrong, which is why it is worth saying
+            // out loud: writeInitialPolicy only records a policy when the configured
+            // grant differs from the default, so a market bootstrapped on the default
+            // carries no MarketPolicy at all and is pinned to it for good. Editing the
+            // config afterwards changes what the server signs and nothing about what
+            // the market will accept.
+            Path file = scratch("test-grant-mismatch.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketBootstrap.createMarket(log, ALICE, "mismatch market", testKeys());
+
+            ServerConfig agrees = ServerConfig.friendGroup(25555);
+            agrees.hostUserId = ALICE.toString();
+            agrees.welcomeGrant = ServerConfig.DEFAULT_WELCOME_GRANT;
+            check("silent when the server and the market agree",
+                    hostFor(agrees, file).grantMismatchWarning() == null ? 1 : 0, 1);
+
+            ServerConfig disagrees = ServerConfig.friendGroup(25555);
+            disagrees.hostUserId = ALICE.toString();
+            disagrees.welcomeGrant = 50;
+            String warning = hostFor(disagrees, file).grantMismatchWarning();
+            check("a mismatch is reported", warning != null ? 1 : 0, 1);
+            // Both numbers, because "your grant is wrong" without them sends an
+            // operator back to the file to work out which way round it is.
+            check("and names the market's figure and the server's",
+                    warning != null && warning.contains("1000") && warning.contains("50")
+                            ? 1 : 0, 1);
+        }
+
         section("T5: a fee typed as a percentage becomes exact basis points");
         {
             // The one place a human decimal meets a number every replica must agree on.
@@ -2147,6 +2183,13 @@ public class MarketTests {
         for (Path p : paths) {
             try { Files.deleteIfExists(p); } catch (IOException ignored) {}
         }
+    }
+
+    /** A host over an existing log, built but never started — no socket is opened. */
+    private static io.github.badbull643.economiesmod.core.net.HostServer hostFor(
+            ServerConfig cfg, Path log) throws Exception {
+        return new io.github.badbull643.economiesmod.core.net.HostServer(
+                cfg, log, testKeys(), new PeerCache(scratch("test-grant-peers.json")));
     }
 
     private static Path scratch(String name) {
