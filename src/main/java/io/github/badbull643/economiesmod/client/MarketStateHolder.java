@@ -1278,6 +1278,11 @@ public class MarketStateHolder {
             IOException bindErr = hostServer.awaitBound(3000);
             if (bindErr != null) {
                 System.err.println("[economiesmod] could not bind port " + port + ": " + bindErr);
+                // Stopped rather than dropped, like the self-connect failure below.
+                // Nulling the field alone left whatever start() had already brought up
+                // running, holding an EventLog on this world's market — and loadLocal
+                // then opens a second one on the same file.
+                hostServer.stop();
                 hostServer = null;
                 loadLocal(worldDir);
                 // Names the fix, because the overwhelmingly common cause is two clients
