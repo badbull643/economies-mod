@@ -99,6 +99,54 @@ public class EventApplier {
         return null;
     }
 
+    /**
+     * Why this stipend would pay out more than the fills to earn it cost, or null.
+     *
+     * The rule the stipend's safety rests on, and it was wrong twice over.
+     *
+     * It assumed a fill costs two listing fees, on the reasoning that two orders have to
+     * cross. One order crossing a stacked book produces a fill per resting order it
+     * consumes — twenty fills for one fee, measured — so the floor is one fee per fill,
+     * paid by the resting side. Half what was assumed.
+     *
+     * And it counted one claimant. Every registered identity claims once per interval,
+     * so the payout is multiplied by however many people are in the market while the
+     * fees are not. Two colluders halved the real margin; ten wiped it out.
+     *
+     * Both corrected: the fees an interval can collect are listingFee per fill, and they
+     * have to cover a payment to everyone entitled to one.
+     */
+    static String stipendOutpacesItsFees(long amount, long everyFills, long listingFee,
+                                         int claimants) {
+        if (amount <= 0) return null;
+        if (listingFee <= 0) {
+            return "a stipend needs a listing fee — without one, fills cost nothing to"
+                    + " produce and anyone could trade with themselves for it";
+        }
+        long heads = Math.max(1, claimants);
+
+        long collected;
+        long paid;
+        try {
+            collected = Math.multiplyExact(listingFee, everyFills);
+            paid = Math.multiplyExact(amount, heads);
+        } catch (ArithmeticException overflow) {
+            return "those figures are too large to compare safely";
+        }
+
+        if (paid >= collected) {
+            return "a stipend of " + amount + " every " + everyFills + " trades pays "
+                    + paid + " across " + heads + " registered "
+                    + (heads == 1 ? "identity" : "identities")
+                    + ", and " + everyFills + " trades collect at most " + collected
+                    + " in listing fees — so producing the trades costs less than the"
+                    + " stipend pays, and anyone could trade with themselves for it."
+                    + " Raise the listing fee, lengthen the interval, or lower the"
+                    + " stipend";
+        }
+        return null;
+    }
+
     public static Result apply(MarketState state, SequencedEvent se) {
         if (se == null || se.event == null) return Result.reject("null event");
 
@@ -309,6 +357,21 @@ public class EventApplier {
                         + " your last claim, and pays every "
                         + state.stipendEveryFills());
             }
+
+            // Asked again here, not only when the policy was written. The payout is per
+            // identity, so it grows every time somebody joins while the fees an interval
+            // collects do not — a stipend that was affordable for three people is a mint
+            // at thirty. Checked from the log like everything else, so every replica
+            // refuses the same claim.
+            //
+            // Refusing is the right failure: the alternative is paying out of a market
+            // that cannot cover it, which is the thing the whole rule exists to stop.
+            String unsafe = stipendOutpacesItsFees(state.stipendAmount(),
+                    state.stipendEveryFills(), state.listingFee(),
+                    state.registeredCount());
+            if (unsafe != null) {
+                return Result.reject("this market has outgrown its stipend — " + unsafe);
+            }
             return Result.ok(Collections.emptyList());
         }
 
@@ -361,27 +424,9 @@ public class EventApplier {
             // the first time somebody is careless. Every replica reaches this verdict
             // from the log alone.
             if (mp.stipendAmount > 0) {
-                long costPerFill;
-                try {
-                    costPerFill = Math.multiplyExact(mp.listingFee, 2L);
-                } catch (ArithmeticException overflow) {
-                    costPerFill = Long.MAX_VALUE;
-                }
-                long earnedPerFill;
-                try {
-                    earnedPerFill = mp.stipendAmount;
-                } catch (ArithmeticException overflow) {
-                    earnedPerFill = Long.MAX_VALUE;
-                }
-                // stipendAmount per stipendEveryFills fills, against costPerFill each.
-                // Cross-multiplied to stay in whole numbers.
-                if (earnedPerFill >= Math.multiplyExact(costPerFill, mp.stipendEveryFills)) {
-                    return Result.reject("a stipend of " + mp.stipendAmount + " every "
-                            + mp.stipendEveryFills + " fills pays more than the "
-                            + mp.listingFee + " listing fee costs to earn — anyone could"
-                            + " trade with themselves for it. Raise the listing fee,"
-                            + " lengthen the interval, or lower the stipend");
-                }
+                String unsafe = stipendOutpacesItsFees(mp.stipendAmount,
+                        mp.stipendEveryFills, mp.listingFee, state.registeredCount());
+                if (unsafe != null) return Result.reject(unsafe);
             }
             if (mp.listingFee > MarketState.MAX_LISTING_FEE) {
                 return Result.reject("listing fee may not exceed "
