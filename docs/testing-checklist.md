@@ -1,8 +1,10 @@
 # In-game testing checklist
 
-*Everything built this session that a headless test cannot reach. Automated suites cover
-the engine rules and their wiring; this covers the parts that need a keyboard and a
-screen.*
+*Everything a headless test cannot reach. Automated suites cover the engine rules and
+their wiring; this covers the parts that need a keyboard and a screen.*
+
+*Groups A to D are the roadmap work and are finished bar two items that cannot be forced.
+Group E is everything built after it, and none of that has been run yet.*
 
 Run `./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest
 depositCapTest attestationTest` first — if any of those fail, stop, because everything
@@ -321,6 +323,26 @@ everyone else, and the suspended client should eventually be dropped with
 `too far behind to keep up` rather than stalling the server.
 
 ---
+
+## Group E — everything built after the roadmap closed
+
+**Nothing here has been run in game.** The stipend, the escalating listing fee, the
+welcome grant control and a Market column that now scrolls: ten commits with automated
+coverage behind them and zero live minutes.
+
+Full plan in `docs/testing/group-e.md`. **Do E1 first** — the layout changed under every
+other test on that list, so a fault there will look like a fault in whatever you were
+actually testing.
+
+| | |
+| --- | --- |
+| E1 | the Market column: nothing below the panel, four policy rows, scrolling |
+| E2 | the listing fee climbing with orders held open |
+| E3 | the stipend end to end, countdown to claim |
+| E4 | turning the stipend off, and being able to |
+| E5 | the welcome grant control, behind DANGER |
+| E6 | a dedicated server opening a market with rules in its config |
+| E7 | a policy change not wiping the other policy fields |
 
 ## What to report
 
