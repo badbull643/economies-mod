@@ -1786,7 +1786,7 @@ public class HostServer {
             // nothing kept anywhere else.
             UUID creatorId = UUID.fromString(cfg.hostUserId);
             MarketBootstrap.createMarket(log, creatorId, name, serverKeys,
-                    cfg.welcomeGrant);
+                    cfg.welcomeGrant, cfg.listingFee, cfg.stipendAmount);
             System.out.println("[host] created '" + name + "' owned by this server");
             return;
         }
@@ -1802,7 +1802,8 @@ public class HostServer {
 
         PlayerKeys creator = PlayerKeys.loadOrCreate(creatorKeyFile);
         UUID creatorId = UUID.fromString(cfg.creatorUserId.trim());
-        MarketBootstrap.createMarket(log, creatorId, name, creator, cfg.welcomeGrant);
+        MarketBootstrap.createMarket(log, creatorId, name, creator, cfg.welcomeGrant,
+                cfg.listingFee, cfg.stipendAmount);
         System.out.println("[host] created '" + name + "' owned by " + cfg.creatorUserId
                 + " — that key is not needed on this machine again");
     }

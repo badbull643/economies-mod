@@ -1082,9 +1082,15 @@ public class MarketStateHolder {
                 return Submission.failed(check.reason);
             }
 
-            // Sign local appends too. LOCAL mode is read-only for trades, but the
-            // genesis event is written through here, and an unsigned line would make
-            // the whole log unverifiable to anyone who later imports it.
+            // Sign local appends too. Trading is refused in LOCAL mode — but not here,
+            // and looking for the guard at this layer will not find it. It is
+            // requireConnected() in MarketScreen, on every trading action, and it tests
+            // the live socket rather than the mode because being in CONNECTED with a
+            // dead client is the case that used to let a trade through to fail later.
+            //
+            // What still reaches this branch is market management: genesis, policy, and
+            // anything else authored while offline. An unsigned line among those would
+            // make the whole log unverifiable to anyone who later imports it.
             if (keys == null) return Submission.failed("no identity loaded");
             String signature;
             try {

@@ -48,6 +48,28 @@ public class MarketBootstrap {
                                                    String marketName, PlayerKeys keys,
                                                    long welcomeGrant)
             throws IOException {
+        return createMarket(log, creator, marketName, keys, welcomeGrant, 0, 0);
+    }
+
+    /**
+     * As above, with the opening listing fee and stipend as well.
+     *
+     * These exist for the server that has no creator behind it. A dedicated server
+     * bootstrapping the ordinary way is its own creator, and a server has no screen to
+     * set policy from later — so without carrying them here, a market it created could
+     * never charge a listing fee or pay a stipend at all.
+     *
+     * Genesis is applied to a scratch state on the way out, so a market cannot be
+     * written in a shape that would be refused on replay. Getting that wrong would leave
+     * a log that is invalid from its first two events, which nothing downstream can
+     * recover from — and the stipend interlock is exactly the kind of rule a
+     * misconfigured server would trip.
+     */
+    public static Event.MarketCreated createMarket(EventLog log, UUID creator,
+                                                   String marketName, PlayerKeys keys,
+                                                   long welcomeGrant, long listingFee,
+                                                   long stipendAmount)
+            throws IOException {
 
         if (log.lastSeq() != 0) {
             throw new IOException("log already holds a market — reset it first");
@@ -82,9 +104,30 @@ public class MarketBootstrap {
         mp.marketId = mc.marketId;
         mp.taxBps = 0;
         mp.grantAmount = welcomeGrant;
-        mp.listingFee = 0;
+        mp.listingFee = listingFee;
+        mp.stipendAmount = stipendAmount;
+        mp.stipendEveryFills = stipendAmount > 0
+                ? MarketState.DEFAULT_STIPEND_EVERY_FILLS : 0;
         mp.clientEventId = UUID.randomUUID().toString();
         mp.timestamp = System.currentTimeMillis();
+
+        // Replayed against a scratch state before it is trusted. Both events are already
+        // written by the time the second is checked, so a refusal here means deleting
+        // the log rather than leaving half a market behind.
+        MarketState scratch = new MarketState();
+        SequencedEvent probeGenesis = new SequencedEvent();
+        probeGenesis.seq = 1;
+        probeGenesis.event = mc;
+        EventApplier.apply(scratch, probeGenesis);
+
+        SequencedEvent probePolicy = new SequencedEvent();
+        probePolicy.seq = 2;
+        probePolicy.event = mp;
+        EventApplier.Result opening = EventApplier.validate(scratch, probePolicy);
+        if (!opening.accepted) {
+            throw new IOException("this market's opening policy would be refused by"
+                    + " every replica, including its own: " + opening.reason);
+        }
 
         try {
             log.append(mp, keys.sign(EventCanonical.canonicalPayload(mp)));
@@ -94,7 +137,10 @@ public class MarketBootstrap {
         }
 
         System.out.println("[economiesmod] created market '" + mc.marketName
-                + "' (" + mc.marketId + ") — welcome grant " + welcomeGrant);
+                + "' (" + mc.marketId + ") — welcome grant " + welcomeGrant
+                + (listingFee > 0 ? ", listing fee " + listingFee : "")
+                + (stipendAmount > 0 ? ", stipend " + stipendAmount + " every "
+                        + mp.stipendEveryFills + " trades" : ""));
         return mc;
     }
 }

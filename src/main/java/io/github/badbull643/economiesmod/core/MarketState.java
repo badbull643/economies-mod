@@ -202,17 +202,24 @@ public class MarketState {
     /**
      * Trades between stipends when a market turns one on.
      *
-     * Deliberately infrequent. This is a counterweight to prices drifting down over a
-     * market's whole life, not an income anybody should be waiting on — something that
-     * arrives every few minutes reads as the point of playing, and a market where
-     * holding out for the next payment beats trading has been made worse rather than
-     * better. A hundred trades is long enough to go unnoticed until it lands.
+     * Infrequent, but not so infrequent it never lands. This is a counterweight to
+     * prices drifting down over a market's whole life, not an income anybody should be
+     * waiting on — something arriving every few minutes reads as the point of playing,
+     * and a market where holding out for the next payment beats trading has been made
+     * worse rather than better.
      *
-     * Also the figure the interlock is judged against: the fee revenue from a hundred
-     * trades is what has to exceed one payment, so a longer interval is what makes a
-     * larger stipend safe.
+     * Fifty rather than a hundred because this figure is what a rotating market will
+     * actually use: nothing else can set it there, since the interval is not offered as
+     * a control. And fills only accrue while somebody is hosting and connected — there
+     * is no offline trading, so a few friends meeting a couple of evenings a week
+     * produce them slowly. A hundred risked a counterweight that never arrives, which is
+     * the same as not having one.
+     *
+     * Also the figure the interlock is judged against: the fee revenue over an interval
+     * is what has to exceed one payment, so halving this halves the largest stipend a
+     * given listing fee can carry.
      */
-    public static final long DEFAULT_STIPEND_EVERY_FILLS = 100L;
+    public static final long DEFAULT_STIPEND_EVERY_FILLS = 50L;
 
 
     /**
