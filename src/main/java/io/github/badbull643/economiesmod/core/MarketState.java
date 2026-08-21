@@ -200,6 +200,22 @@ public class MarketState {
     public static final long MAX_STIPEND = 100_000L;
 
     /**
+     * Trades between stipends when a market turns one on.
+     *
+     * Deliberately infrequent. This is a counterweight to prices drifting down over a
+     * market's whole life, not an income anybody should be waiting on — something that
+     * arrives every few minutes reads as the point of playing, and a market where
+     * holding out for the next payment beats trading has been made worse rather than
+     * better. A hundred trades is long enough to go unnoticed until it lands.
+     *
+     * Also the figure the interlock is judged against: the fee revenue from a hundred
+     * trades is what has to exceed one payment, so a longer interval is what makes a
+     * larger stipend safe.
+     */
+    public static final long DEFAULT_STIPEND_EVERY_FILLS = 100L;
+
+
+    /**
      * What listing costs this identity right now, given what they already have resting.
      *
      * A pure function of state, so every replica charges the same — which is why it

@@ -51,6 +51,9 @@ public class MarketScreen extends Screen {
     private ButtonWidget feeButton;
     private TextFieldWidget listingFeeField;
     private ButtonWidget listingFeeButton;
+    private TextFieldWidget stipendField;
+    private ButtonWidget stipendButton;
+    private ButtonWidget claimStipendButton;
     private ButtonWidget addMarketButton;
     private ButtonWidget deleteMarketButton;
 
@@ -443,6 +446,20 @@ public class MarketScreen extends Screen {
         this.listingFeeButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
                         new LiteralText("Set listing fee"), b -> onSetListingFee()));
+
+        this.stipendField = new TextFieldWidget(this.textRenderer,
+                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Stipend"));
+        this.stipendField.setMaxLength(6);
+        hint(this.stipendField, "stipend in credits");
+        onScreen(SCREEN_MARKET, this.stipendField);
+
+        this.stipendButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
+                        new LiteralText("Set stipend"), b -> onSetStipend()));
+
+        this.claimStipendButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
+                        new LiteralText("Claim stipend"), b -> onClaimStipend()));
 
         this.addMarketButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
@@ -1338,10 +1355,20 @@ public class MarketScreen extends Screen {
             y = place(feeButton, true, y + 6 + ROW_STEP);
             listingFeeField.y = y + 6;
             y = place(listingFeeButton, true, y + 6 + ROW_STEP);
+            stipendField.y = y + 6;
+            y = place(stipendButton, true, y + 6 + ROW_STEP);
         }  else {
             y = place(feeButton, false, y);
             y = place(listingFeeButton, false, y);
+            y = place(stipendButton, false, y);
         }
+        stipendField.visible = canSetFee;
+        stipendField.active = canSetFee;
+
+        // Offered to anyone the market owes, not only its creator, and only while it
+        // owes them — a button that is always there and usually does nothing teaches
+        // people to stop reading it.
+        y = place(claimStipendButton, stipendClaimable(), y);
 
         // Offered wherever there is a world to put one in — including a world with no
         // market at all, since "another" is only ever one more than however many there
@@ -1436,7 +1463,7 @@ public class MarketScreen extends Screen {
 
         showConfirm(bps == 0 ? "Remove the trading fee?" : "Set the trading fee to "
                 + formatBps(bps) + "?", body, "Set fee",
-                () -> submitPolicy(bps, market == null ? 0 : market.listingFee()));
+                () -> submitPolicy(p -> p.taxBps = bps));
     }
 
     /**
@@ -1512,8 +1539,7 @@ public class MarketScreen extends Screen {
 
         showConfirm(fee == 0 ? "Remove the listing fee?"
                 : "Charge " + fee + " credits to place an order?",
-                body, "Set fee", () -> submitPolicy(
-                        market == null ? 0 : market.taxBps(), fee));
+                body, "Set fee", () -> submitPolicy(p -> p.listingFee = fee));
     }
 
     /**
@@ -1525,7 +1551,130 @@ public class MarketScreen extends Screen {
      * would have set the welcome grant to nothing every time somebody edited a fee.
      * One place to restate them means one place to get that right.
      */
-    private void submitPolicy(int bps, long listingFee) {
+    /**
+     * Sends a policy change, carrying every field that is not being changed.
+     *
+     * A MarketPolicy event is the whole policy, not a patch — so anything this does not
+     * restate is set to zero by the event it writes. That has already cost this project
+     * once, when setting a fee would have wiped the welcome grant, and it caught me
+     * again the moment the stipend fields were added.
+     *
+     * So the policy is built from what the market currently publishes and the caller is
+     * handed it to change. Forgetting a field now means it keeps its value, which is the
+     * failure that does no harm.
+     */
+    /** Whether this market currently owes the local player a stipend. */
+    private boolean stipendClaimable() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        MarketState market = MarketStateHolder.get();
+        if (mc.player == null || market == null) return false;
+        if (market.stipendAmount() <= 0) return false;
+
+        UUID me = MinecraftIds.userIdOf(mc.player);
+        if (!market.isRegistered(me)) return false;
+        return market.fillsEver() - market.stipendedAtFill(me) >= market.stipendEveryFills();
+    }
+
+    /**
+     * Sets what the market pays, and how often, as one decision.
+     *
+     * The interval is not offered separately. It is one of three numbers that have to
+     * agree — the third being the listing fee — and a control that lets somebody set one
+     * of them to a value the other two refuse is a control that mostly produces
+     * rejections. The default interval is deliberately long; a creator who wants a
+     * different one can author the policy directly.
+     */
+    private void onSetStipend() {
+        String raw = stipendField.getText().trim();
+        if (raw.isEmpty()) {
+            status = "Type a stipend first, in credits";
+            return;
+        }
+
+        long amount;
+        try {
+            amount = Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            status = "A stipend must be a whole number of credits";
+            return;
+        }
+        if (amount < 0) {
+            status = "A stipend cannot be negative";
+            return;
+        }
+        if (amount > MarketState.MAX_STIPEND) {
+            status = "The most a market may pay is " + MarketState.MAX_STIPEND;
+            return;
+        }
+
+        MarketState market = MarketStateHolder.get();
+        if (market == null) { status = "No market"; return; }
+        if (amount == market.stipendAmount()) {
+            status = amount == 0 ? "This market already pays no stipend"
+                    : "The stipend is already " + amount;
+            return;
+        }
+
+        long every = MarketState.DEFAULT_STIPEND_EVERY_FILLS;
+
+        // The interlock, checked here so it is explained rather than merely refused.
+        // Every replica checks it again in EventApplier — this is the courtesy, not the
+        // enforcement.
+        if (amount > 0 && market.listingFee() <= 0) {
+            status = "Set a listing fee first — a stipend with nothing to pay for it"
+                    + " could be earned by trading with yourself";
+            return;
+        }
+        if (amount > 0 && amount >= market.listingFee() * 2 * every) {
+            status = "Too much to pay every " + every + " trades at a listing fee of "
+                    + market.listingFee() + " — the most is "
+                    + (market.listingFee() * 2 * every - 1);
+            return;
+        }
+
+        String body = amount == 0
+                ? "Nobody will be paid a stipend from here on. Anything already claimed"
+                        + " stays where it is."
+                : "Every registered player may claim " + amount + " credits once per "
+                        + every + " trades this market settles. It exists because the"
+                        + " welcome grant is otherwise the only way credits ever enter,"
+                        + " so goods pile up against a money supply that never grows and"
+                        + " prices sink. Paid per trade rather than per minute, so it"
+                        + " follows the market being used rather than the clock — and so"
+                        + " it cannot be farmed by somebody trading with themselves,"
+                        + " which the listing fee makes cost more than it pays.";
+
+        showConfirm(amount == 0 ? "Stop paying a stipend?"
+                        : "Pay " + amount + " credits every " + every + " trades?",
+                body, "Set stipend", () -> submitPolicy(p -> {
+                    p.stipendAmount = amount;
+                    p.stipendEveryFills = every;
+                }));
+    }
+
+    /** Claims what the market owes. No confirmation — nothing is spent or lost. */
+    private void onClaimStipend() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        MarketState market = MarketStateHolder.get();
+        if (mc.player == null || market == null) { status = "No market"; return; }
+
+        Event.Stipend claim = new Event.Stipend();
+        claim.userId = MinecraftIds.userIdOf(mc.player);
+        claim.amount = market.stipendAmount();
+        claim.timestamp = System.currentTimeMillis();
+
+        MarketStateHolder.Submission s = MarketStateHolder.submit(claim);
+        if (s.pending) {
+            status = "Stipend claim sent...";
+        } else if (s.accepted) {
+            status = "Claimed " + claim.amount + " credits";
+        } else {
+            status = "Rejected: " + s.reason;
+        }
+        refreshMarketButtons();
+    }
+
+    private void submitPolicy(java.util.function.Consumer<Event.MarketPolicy> change) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) { status = "No player"; return; }
 
@@ -1534,20 +1683,29 @@ public class MarketScreen extends Screen {
 
         Event.MarketPolicy policy = new Event.MarketPolicy();
         policy.userId = MinecraftIds.userIdOf(mc.player);
-        policy.taxBps = bps;
-        policy.listingFee = listingFee;
-        // Not editable from here at all — see onSetFee for why there is no control for
-        // it — so it is carried across untouched.
+        policy.taxBps = market.taxBps();
         policy.grantAmount = market.welcomeGrant();
+        policy.listingFee = market.listingFee();
+        policy.listingFreeOrders = market.listingFreeOrders();
+        policy.stipendAmount = market.stipendAmount();
+        policy.stipendEveryFills = market.stipendEveryFills();
         policy.timestamp = System.currentTimeMillis();
+
+        change.accept(policy);
 
         MarketStateHolder.Submission s = MarketStateHolder.submit(policy);
         if (s.pending) {
             status = "Policy change sent...";
         } else if (s.accepted) {
-            status = "Trading fee " + formatBps(bps) + ", listing fee " + listingFee;
+            status = "Trading fee " + formatBps(policy.taxBps)
+                    + ", listing fee " + policy.listingFee
+                    + (policy.stipendAmount > 0
+                            ? ", stipend " + policy.stipendAmount + " every "
+                                    + policy.stipendEveryFills + " trades"
+                            : "");
             feeField.setText("");
             listingFeeField.setText("");
+            stipendField.setText("");
         } else {
             status = "Rejected: " + s.reason;
         }
@@ -1683,6 +1841,21 @@ public class MarketScreen extends Screen {
         if (listing > 0) {
             y = wrapped(m, "Listing fee: " + listing + " credits to place any order,"
                     + " kept even if you cancel", x, y, 0xFFAA55);
+        }
+
+        long stipend = market.stipendAmount();
+        if (stipend > 0) {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            long owedIn = 0;
+            if (mc.player != null) {
+                UUID me = MinecraftIds.userIdOf(mc.player);
+                owedIn = market.stipendEveryFills()
+                        - (market.fillsEver() - market.stipendedAtFill(me));
+            }
+            y = wrapped(m, "Stipend: " + stipend + " credits every "
+                    + market.stipendEveryFills() + " trades this market settles"
+                    + (owedIn <= 0 ? " — yours is waiting"
+                            : ", yours in " + owedIn + " more"), x, y, 0x88FF88);
         }
 
         // Says who can change it, to whoever cannot. Without this the fee reads as a
