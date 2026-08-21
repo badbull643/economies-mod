@@ -308,6 +308,33 @@ public class ServerConfig {
      */
     public long welcomeGrant = DEFAULT_WELCOME_GRANT;
 
+    /**
+     * Credits charged to place an order, written into this market's opening policy.
+     *
+     * Here for the same reason welcomeGrant is: a dedicated server is the creator of any
+     * market it bootstraps, and a server has no screen to set policy from afterwards.
+     * Without this, a market created by a server the ordinary way could never charge a
+     * listing fee at all — its creator is the box, and only a creator may change policy.
+     *
+     * The way round it was always --creator-key, which names a player as creator and
+     * lets them set policy from their client. That still works and is still the better
+     * answer for a market with a person behind it. This is for the server that has
+     * nobody.
+     */
+    public long listingFee = 0;
+
+    /**
+     * Credits each identity may claim once per interval, written into the opening policy.
+     *
+     * Needs listingFee above it to be non-zero, and small enough that the fees collected
+     * over an interval exceed one payment — otherwise anybody could earn it by trading
+     * with themselves. problem() refuses the pairing rather than letting a server write
+     * a genesis policy every replica would reject, which would leave the market unusable
+     * from its first event.
+     */
+    public long stipendAmount = 0;
+
+
     /** Lives here rather than on HostServer: it is policy, and this is where policy is. */
     public static final long DEFAULT_WELCOME_GRANT = 1000L;
 
@@ -383,6 +410,31 @@ public class ServerConfig {
         }
         if (maxConnections < 1) {
             return "maxConnections must be at least 1, not " + maxConnections;
+        }
+        if (listingFee < 0) {
+            return "listingFee cannot be negative, not " + listingFee;
+        }
+        if (listingFee > MarketState.MAX_LISTING_FEE) {
+            return "listingFee may not exceed " + MarketState.MAX_LISTING_FEE;
+        }
+        if (stipendAmount < 0) {
+            return "stipendAmount cannot be negative, not " + stipendAmount;
+        }
+        if (stipendAmount > MarketState.MAX_STIPEND) {
+            return "stipendAmount may not exceed " + MarketState.MAX_STIPEND;
+        }
+        // Checked here so the server refuses to start rather than writing a genesis
+        // policy every replica would reject — a market unusable from its first event is
+        // worse than one that never got created.
+        if (stipendAmount > 0) {
+            long affordable = listingFee * 2 * MarketState.DEFAULT_STIPEND_EVERY_FILLS;
+            if (stipendAmount >= affordable) {
+                return "stipendAmount " + stipendAmount + " is more than a listingFee of "
+                        + listingFee + " pays for over "
+                        + MarketState.DEFAULT_STIPEND_EVERY_FILLS + " trades — anyone"
+                        + " could earn it by trading with themselves. The most is "
+                        + (affordable - 1) + ", or raise listingFee";
+            }
         }
         if (welcomeGrant < 0) {
             return "welcomeGrant cannot be negative, not " + welcomeGrant;

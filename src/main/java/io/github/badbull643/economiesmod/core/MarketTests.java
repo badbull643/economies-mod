@@ -1623,6 +1623,59 @@ public class MarketTests {
             check("all of them", m.listingFreeOrders(), 0);
         }
 
+        section("U7: a server can open a market with a stipend, or be told why not");
+        {
+            // A dedicated server bootstrapping the ordinary way is its own creator, and
+            // has no screen to set policy from afterwards — so whatever it cannot write
+            // at genesis, that market can never have. That is why these live in the
+            // config at all.
+            ServerConfig ok = ServerConfig.friendGroup(25555);
+            ok.listingFee = 2;
+            ok.stipendAmount = 50;
+            check("a stipend its fees can cover starts fine", ok.problem() == null ? 1 : 0, 1);
+
+            // 50 fills at 2 a side pays 200; a stipend of 200 breaks even, which is not
+            // safe — self-dealing at no loss is still an unbounded supply of claims.
+            ServerConfig breakEven = ServerConfig.friendGroup(25555);
+            breakEven.listingFee = 2;
+            breakEven.stipendAmount = 200;
+            check("break-even is refused", breakEven.problem() != null ? 1 : 0, 1);
+
+            ServerConfig noFee = ServerConfig.friendGroup(25555);
+            noFee.stipendAmount = 10;
+            check("a stipend with no listing fee is refused",
+                    noFee.problem() != null ? 1 : 0, 1);
+            check("and the refusal says to raise the fee",
+                    noFee.problem().contains("listingFee") ? 1 : 0, 1);
+
+            // Refused at startup rather than written into genesis, because a policy every
+            // replica rejects would leave the market unusable from its second event.
+            Path file = scratch("test-genesis-refused.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            int threw = 0;
+            try {
+                MarketBootstrap.createMarket(log, ALICE, "doomed market", testKeys(),
+                        1000, 0, 500);
+            } catch (IOException expected) {
+                threw = 1;
+            }
+            check("genesis refuses a policy it knows would be rejected", threw, 1);
+
+            // And the good case really does land in the log rather than just validating.
+            Path good = scratch("test-genesis-stipend.jsonl");
+            Files.deleteIfExists(good);
+            EventLog goodLog = new EventLog(good);
+            MarketBootstrap.createMarket(goodLog, ALICE, "opening market", testKeys(),
+                    1000, 2, 50);
+            MarketState opened = EventApplier.replay(goodLog);
+            check("the opening stipend is what the market publishes",
+                    opened.stipendAmount(), 50);
+            check("at the default interval", opened.stipendEveryFills(),
+                    MarketState.DEFAULT_STIPEND_EVERY_FILLS);
+            check("with the fee that pays for it", opened.listingFee(), 2);
+        }
+
         section("T1b: where a rate stops being worth anything");
         {
             // Reported from a live market: a 2.5% fee appeared to take nothing. It was
