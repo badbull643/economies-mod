@@ -428,33 +428,33 @@ public class MarketScreen extends Screen {
         // Only the market's creator can author policy, so these appear for exactly one
         // person per market — see refreshMarketActions.
         this.feeField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Trading fee"));
+                rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Trading fee"));
         this.feeField.setMaxLength(6);
-        hint(this.feeField, "fee %, e.g. 2.5");
+        hint(this.feeField, "e.g. 2.5");
         onScreen(SCREEN_MARKET, this.feeField);
 
         this.feeButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
-                        new LiteralText("Set trading fee"), b -> onSetFee()));
+                new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
+                        new LiteralText("Trading fee"), b -> onSetFee()));
 
         this.listingFeeField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Listing fee"));
+                rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Listing fee"));
         this.listingFeeField.setMaxLength(6);
-        hint(this.listingFeeField, "listing fee in credits");
+        hint(this.listingFeeField, "credits");
         onScreen(SCREEN_MARKET, this.listingFeeField);
 
         this.listingFeeButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
-                        new LiteralText("Set listing fee"), b -> onSetListingFee()));
+                new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
+                        new LiteralText("Listing fee"), b -> onSetListingFee()));
 
         this.stipendField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Stipend"));
+                rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Stipend"));
         this.stipendField.setMaxLength(6);
-        hint(this.stipendField, "stipend in credits");
+        hint(this.stipendField, "credits");
         onScreen(SCREEN_MARKET, this.stipendField);
 
         this.stipendButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
+                new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
                         new LiteralText("Set stipend"), b -> onSetStipend()));
 
         this.claimStipendButton = onScreen(SCREEN_MARKET,
@@ -1350,20 +1350,26 @@ public class MarketScreen extends Screen {
         feeField.active = canSetFee;
         listingFeeField.visible = canSetFee;
         listingFeeField.active = canSetFee;
+        stipendField.visible = canSetFee;
+        stipendField.active = canSetFee;
         if (canSetFee) {
-            feeField.y = y + 6;
-            y = place(feeButton, true, y + 6 + ROW_STEP);
-            listingFeeField.y = y + 6;
-            y = place(listingFeeButton, true, y + 6 + ROW_STEP);
-            stipendField.y = y + 6;
-            y = place(stipendButton, true, y + 6 + ROW_STEP);
+            // Each control on one row, field beside its button, rather than the field
+            // stacked above it. Three of these stacked ran the column past the bottom of
+            // its own panel — 58px each against a frame that has about 230 to give, and
+            // adding the third was what tipped it over. One padding before the group
+            // instead of one before each field, for the same reason.
+            y += 6;
+            feeField.y = y;
+            y = place(feeButton, true, y);
+            listingFeeField.y = y;
+            y = place(listingFeeButton, true, y);
+            stipendField.y = y;
+            y = place(stipendButton, true, y);
         }  else {
             y = place(feeButton, false, y);
             y = place(listingFeeButton, false, y);
             y = place(stipendButton, false, y);
         }
-        stipendField.visible = canSetFee;
-        stipendField.active = canSetFee;
 
         // Offered to anyone the market owes, not only its creator, and only while it
         // owes them — a button that is always there and usually does nothing teaches
