@@ -7,6 +7,8 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 
+//the final peer cache file
+
 /**
  * Addresses of peers we've connected to or been connected by. Used to find
  * whoever is hosting without anyone having to share an address.
