@@ -1560,6 +1560,42 @@ public class MarketTests {
                     stipendRejection(none, ALICE, 10) != null ? 1 : 0, 1);
         }
 
+        section("U4b: a market starts paying nothing, and can go back to it");
+        {
+            // Off is the starting state and has to stay reachable. A market whose
+            // creator can turn a payment on but never off has been given a decision it
+            // cannot take back, and the fees it depends on cannot then be lowered
+            // either — the interlock would refuse that while a stipend was still set.
+            Path fresh = scratch("test-stipend-default.jsonl");
+            Files.deleteIfExists(fresh);
+            EventLog log = new EventLog(fresh);
+            MarketBootstrap.createMarket(log, ALICE, "plain market", testKeys());
+            check("a market created the ordinary way pays nothing",
+                    EventApplier.replay(log).stipendAmount(), 0);
+
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "switchable market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.setListingFee(2);
+            m.setStipend(50, 50);
+
+            // Turning it off is a policy like any other, and must not be caught by the
+            // interlock — which only asks about a stipend that pays something.
+            check("setting it to nothing is allowed",
+                    policyStipendRejection(m, ALICE, 2, 0, 50) == null ? 1 : 0, 1);
+            check("and allowed even with no fee to cover it",
+                    policyStipendRejection(m, ALICE, 0, 0, 50) == null ? 1 : 0, 1);
+
+            m.setStipend(0, 0);
+            m.recordTrades(1, 1L, fillsOf(100));
+            check("and then nothing is owed however much trades",
+                    stipendRejection(m, ALICE, 50) != null ? 1 : 0, 1);
+            // Said as "pays no stipend", not as an argument about the figure — a client
+            // holding the old amount is exactly who asks this.
+            check("and says so plainly",
+                    stipendRejection(m, ALICE, 50).contains("pays no stipend") ? 1 : 0, 1);
+        }
+
         section("U5: a stipend that outpays its own cost is refused as policy");
         {
             // The interlock. Producing a fill means two orders crossing, so at least two
