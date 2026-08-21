@@ -54,6 +54,8 @@ public class MarketScreen extends Screen {
     private TextFieldWidget stipendField;
     private ButtonWidget stipendButton;
     private ButtonWidget claimStipendButton;
+    private TextFieldWidget grantField;
+    private ButtonWidget grantButton;
     private ButtonWidget addMarketButton;
     private ButtonWidget deleteMarketButton;
 
@@ -456,6 +458,16 @@ public class MarketScreen extends Screen {
         this.stipendButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
                         new LiteralText("Set stipend"), b -> onSetStipend()));
+
+        this.grantField = new TextFieldWidget(this.textRenderer,
+                rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Welcome grant"));
+        this.grantField.setMaxLength(7);
+        hint(this.grantField, "credits");
+        onScreen(SCREEN_MARKET, this.grantField);
+
+        this.grantButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
+                        new LiteralText("Welcome grant"), b -> onSetGrant()));
 
         this.claimStipendButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
@@ -1330,15 +1342,12 @@ public class MarketScreen extends Screen {
         // and sets absolute positions, so it has to arrive at the same answer the shift
         // in reflowForAlerts gives everything else. Two rules for one column is how the
         // buttons ended up through the tab row.
-        int y = rowY + 4 + alertBandH();
+        int top = rowY + 4 + alertBandH();
+        int y = top - scrollOf("marketcol");
 
-        marketNameField.visible = create;
-        marketNameField.active = create;
-        if (create) {
-            // Above the button that consumes it.
-            marketNameField.y = y;
-            y += ROW_STEP;
-        }
+        placeField(marketNameField, create, y);
+        // Above the button that consumes it.
+        if (create) y += ROW_STEP;
 
         y = place(createButton, create, y);
         y = place(importButton, importFile, y);
@@ -1346,29 +1355,28 @@ public class MarketScreen extends Screen {
         y = place(migrateButton, migrate, y);
         y = place(resetButton, reset, y);
 
-        feeField.visible = canSetFee;
-        feeField.active = canSetFee;
-        listingFeeField.visible = canSetFee;
-        listingFeeField.active = canSetFee;
-        stipendField.visible = canSetFee;
-        stipendField.active = canSetFee;
         if (canSetFee) {
-            // Each control on one row, field beside its button, rather than the field
-            // stacked above it. Three of these stacked ran the column past the bottom of
-            // its own panel — 58px each against a frame that has about 230 to give, and
-            // adding the third was what tipped it over. One padding before the group
-            // instead of one before each field, for the same reason.
+            // Each control on one row, field beside its button. Stacking the field above
+            // the button cost 58px a control, and four of those ran the column past the
+            // bottom of its own panel. One padding before the group, not before each.
             y += 6;
-            feeField.y = y;
+            placeField(feeField, true, y);
             y = place(feeButton, true, y);
-            listingFeeField.y = y;
+            placeField(listingFeeField, true, y);
             y = place(listingFeeButton, true, y);
-            stipendField.y = y;
+            placeField(stipendField, true, y);
             y = place(stipendButton, true, y);
+            placeField(grantField, true, y);
+            y = place(grantButton, true, y);
         }  else {
+            placeField(feeField, false, y);
+            placeField(listingFeeField, false, y);
+            placeField(stipendField, false, y);
+            placeField(grantField, false, y);
             y = place(feeButton, false, y);
             y = place(listingFeeButton, false, y);
             y = place(stipendButton, false, y);
+            y = place(grantButton, false, y);
         }
 
         // Offered to anyone the market owes, not only its creator, and only while it
@@ -1383,8 +1391,16 @@ public class MarketScreen extends Screen {
 
         // Only where there is more than one to choose between, for the same reason the
         // list itself is hidden then: a world with a single market has nothing to leave.
-        place(deleteMarketButton, MarketStateHolder.availableSlots().size() > 1, y);
+        y = place(deleteMarketButton, MarketStateHolder.availableSlots().size() > 1, y);
+
+        // What the column would need if nothing were hidden, measured from where it
+        // started rather than assumed — the rows shown depend on the situation, so a
+        // fixed figure would be wrong for most of them.
+        marketColumnHeight = (y + scrollOf("marketcol")) - top;
     }
+
+    /** Set by refreshMarketActions, read by render to size the scrollable region. */
+    private int marketColumnHeight;
 
     /** Whether the player at this keyboard is the identity named in the genesis event. */
     private boolean amCreator() {
@@ -1403,17 +1419,25 @@ public class MarketScreen extends Screen {
      * overlay though — nothing is destroyed and the next event can put it back, which
      * is the line the overlay kinds are drawn on.
      *
-     * There is deliberately no equivalent control for the welcome grant. Engine-side
-     * the two are symmetric — same event, same creator gate, same ceiling — but the
-     * grant is a one-time mint per identity rather than something felt per trade, so a
-     * casual friend-group creator fat-fingering it has more consequence and less
-     * feedback than fat-fingering a fee. Restricting the amount by hosting mode was
-     * considered and rejected: core has no concept of dedicated vs rotating — that is a
-     * self-reported per-connection flag on Sync/QueryReply, not a property of the log —
-     * so there is nowhere honest to enforce such a split, and the creator's key could
-     * author the event by hand regardless of what the shipped UI offers. Leaving the
-     * button out is the whole mitigation; setWelcomeGrant via ServerConfig at bootstrap
-     * remains the only path, which is deliberate rather than a gap to fill in later.
+     * The welcome grant has a control too now, but a DANGER one rather than this plain
+     * confirm. It used to have none, on the grounds that a fat-fingered grant has more
+     * consequence and less feedback than a fat-fingered fee. The first half holds and is
+     * why the overlay is the harsher kind; the second half did not survive being looked
+     * at, because hasBeenGranted means a grant only ever reaches identities that have
+     * not joined yet. That makes a mistake forward-only and correctable before the next
+     * person arrives — the same recoverability the stipend has.
+     *
+     * What the omission actually cost was worse than what it prevented. A market made
+     * in-game is created with the built-in default and nothing could change it
+     * afterwards, so every rotating market granted exactly a thousand credits against
+     * items trading for one or two. The largest lever on what credits are worth was the
+     * one nobody could reach.
+     *
+     * Restricting the amount by hosting mode was considered and rejected: core has no
+     * concept of dedicated vs rotating — that is a self-reported per-connection flag on
+     * Sync/QueryReply, not a property of the log — so there is nowhere honest to enforce
+     * such a split, and the creator's key could author the event by hand regardless of
+     * what the shipped UI offers. Every control here is a guardrail, never a boundary.
      */
     private void onSetFee() {
         String raw = feeField.getText().trim();
@@ -1569,6 +1593,67 @@ public class MarketScreen extends Screen {
      * handed it to change. Forgetting a field now means it keeps its value, which is the
      * failure that does no harm.
      */
+    /**
+     * Sets what a newcomer is handed on joining.
+     *
+     * There deliberately was no control for this, on the grounds that a fat-fingered
+     * grant has more consequence and less feedback than a fat-fingered fee. The first
+     * half is true and is why this is a DANGER rather than a plain confirm. The second
+     * half did not survive being looked at: hasBeenGranted means a grant only ever
+     * reaches identities that have not joined yet, so a mistake is forward-only and can
+     * be corrected before the next person arrives — the same recoverability the stipend
+     * has, and the stipend has a control.
+     *
+     * What the omission actually cost was worse. A market made in-game is created with
+     * the built-in default and nothing anywhere can change it, so every rotating market
+     * grants exactly a thousand — against items that trade for one or two. The largest
+     * lever on the money supply was the one nobody could reach.
+     */
+    private void onSetGrant() {
+        String raw = grantField.getText().trim();
+        if (raw.isEmpty()) {
+            status = "Type a welcome grant first, in credits";
+            return;
+        }
+
+        long amount;
+        try {
+            amount = Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            status = "A welcome grant must be a whole number of credits";
+            return;
+        }
+        if (amount < 0) {
+            status = "A welcome grant cannot be negative";
+            return;
+        }
+        if (amount > MarketState.MAX_WELCOME_GRANT) {
+            status = "The most a market may grant is " + MarketState.MAX_WELCOME_GRANT;
+            return;
+        }
+
+        MarketState market = MarketStateHolder.get();
+        if (market == null) { status = "No market"; return; }
+        if (amount == market.welcomeGrant()) {
+            status = "The welcome grant is already " + amount;
+            return;
+        }
+
+        String body = "Anyone who joins from here on receives " + amount
+                + " instead of " + market.welcomeGrant() + ". Nobody who has already"
+                + " joined is affected — a grant is once per identity, so this reaches"
+                + " only people who are not here yet, and can be changed again before"
+                + " they arrive."
+                + (amount == 0 ? " At zero, newcomers arrive with nothing and cannot"
+                        + " place a buy order until somebody sells them something."
+                        : "")
+                + " This is the largest single lever on what credits are worth: set it"
+                + " far above what things trade for and prices stop meaning much.";
+
+        showDanger("Grant newcomers " + amount + " credits?", body, "Set grant",
+                () -> submitPolicy(p -> p.grantAmount = amount));
+    }
+
     /** Whether this market currently owes the local player a stipend. */
     private boolean stipendClaimable() {
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -1712,18 +1797,37 @@ public class MarketScreen extends Screen {
             feeField.setText("");
             listingFeeField.setText("");
             stipendField.setText("");
+            grantField.setText("");
         } else {
             status = "Rejected: " + s.reason;
         }
     }
 
+    /**
+     * Puts a button on the next row, or hides it if that row is off the panel.
+     *
+     * This used to stack without a bottom, which is how the Market column came to draw
+     * its last controls below the frame they belong to. Hiding an out-of-view row rather
+     * than drawing it means the panel can be scrolled instead: the cursor still advances
+     * for hidden rows, so what is on screen depends only on the offset.
+     */
     private int place(ButtonWidget button, boolean shown, int y) {
         if (button == null) return y;
-        button.visible = shown;
-        button.active = shown;
+        boolean inView = y >= panelTop() && y + FIELD_HEIGHT <= panelBottom();
+        button.visible = shown && inView;
+        button.active = button.visible;
         if (!shown) return y;
         button.y = y;
         return y + ROW_STEP;
+    }
+
+    /** The same for a text field, which is positioned rather than placed. */
+    private void placeField(TextFieldWidget field, boolean shown, int y) {
+        if (field == null) return;
+        boolean inView = y >= panelTop() && y + FIELD_HEIGHT <= panelBottom();
+        field.visible = shown && inView;
+        field.active = field.visible;
+        if (shown) field.y = y;
     }
 
     /** What is going on, in words, beside the actions that answer it. */
@@ -2682,6 +2786,13 @@ public class MarketScreen extends Screen {
             renderDiscovery(matrices, listX + 4, mouseX, mouseY);
         } else if (activeScreen == SCREEN_MARKET) {
             renderMarketGuidance(matrices, listX + 4);
+            // The controls column, not the panel beside it. It holds more rows than the
+            // frame can show once a creator has policy controls and there are markets to
+            // switch between, and place() now hides what falls outside rather than
+            // drawing past the bottom — so without this the hidden rows would be
+            // unreachable rather than merely off screen.
+            noteScrollable("marketcol", rowX - PAD, frameTop(), controlsW + PAD * 2,
+                    frameH(), marketColumnHeight, mouseX, mouseY);
         } else if (activeScreen == SCREEN_HOME) {
             renderHome(matrices);
         } else {
