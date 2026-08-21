@@ -427,14 +427,17 @@ public class ServerConfig {
         // policy every replica would reject — a market unusable from its first event is
         // worse than one that never got created.
         if (stipendAmount > 0) {
-            long affordable = listingFee * 2 * MarketState.DEFAULT_STIPEND_EVERY_FILLS;
-            if (stipendAmount >= affordable) {
-                return "stipendAmount " + stipendAmount + " is more than a listingFee of "
-                        + listingFee + " pays for over "
-                        + MarketState.DEFAULT_STIPEND_EVERY_FILLS + " trades — anyone"
-                        + " could earn it by trading with themselves. The most is "
-                        + (affordable - 1) + ", or raise listingFee";
-            }
+            // The same rule EventApplier enforces, asked here so the server refuses to
+            // start rather than writing a genesis policy every replica would reject.
+            // Not a second copy of the arithmetic: this had one, with the doubled
+            // cost-per-fill the applier used to have, and the two would have drifted the
+            // moment either was corrected — which is exactly what happened.
+            //
+            // Judged for a single identity, because a market being created has none yet.
+            // The applier asks again at every claim, where the real head count is known.
+            String unsafe = EventApplier.stipendOutpacesItsFees(stipendAmount,
+                    MarketState.DEFAULT_STIPEND_EVERY_FILLS, listingFee, 1);
+            if (unsafe != null) return unsafe;
         }
         if (welcomeGrant < 0) {
             return "welcomeGrant cannot be negative, not " + welcomeGrant;

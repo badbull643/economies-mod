@@ -1518,6 +1518,9 @@ public class MarketTests {
             MarketState m = new MarketState();
             m.setMarketIdentity(UUID.randomUUID(), "stipend market", ALICE);
             m.registerKey(ALICE, "alice-key");
+            // A fee large enough that five trades collect more than the stipend
+            // pays out — see U5 for the rule this has to satisfy.
+            m.setListingFee(10);
             m.setStipend(10, 5);
 
             check("nothing owed on arrival", stipendRejection(m, ALICE, 10) != null ? 1 : 0, 1);
@@ -1596,6 +1599,41 @@ public class MarketTests {
                     stipendRejection(m, ALICE, 50).contains("pays no stipend") ? 1 : 0, 1);
         }
 
+        section("U8: one order fills a whole book, which is what the interlock costs");
+        {
+            // The measurement the corrected rule is built on, kept because the old rule
+            // was wrong precisely by assuming otherwise. A fill was taken to cost two
+            // listing fees, on the reasoning that two orders have to cross. They do not:
+            // one order crossing a stacked book produces a fill per resting order it
+            // consumes, and the fees for those were paid once, when they were placed.
+            //
+            // That halved the real cost, and the policy check was permitting stipends at
+            // twice what the market could collect. One person could rest a book against
+            // themselves, sweep it with a single order, and claim more than the fees had
+            // cost — no confederate needed.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "sweep market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.wallets().setBalance(ALICE, 100_000L);
+            m.deposit(ALICE, IRON, 1000);
+            m.setListingFee(2);
+
+            long before = m.wallets().getBalance(ALICE);
+            for (int i = 0; i < 20; i++) {
+                m.submitOrder(new Order(i + 1, 10, IRON, 1, false, ALICE));
+            }
+            MarketState.SubmitResult swept =
+                    m.submitOrder(new Order(999, 10, IRON, 20, true, ALICE));
+            long spent = before - m.wallets().getBalance(ALICE);
+
+            check("one order fills the whole book", swept.fills.size(), 20);
+            // 21 orders at 2 credits. The trade itself nets to nothing — same wallet on
+            // both sides, no tax set — so every credit lost is a listing fee.
+            check("and 21 fees paid for 20 fills", spent, 42);
+            check("so a fill costs about one fee, not two",
+                    spent < 20 * 2 * 2 ? 1 : 0, 1);
+        }
+
         section("U5: a stipend that outpays its own cost is refused as policy");
         {
             // The interlock. Producing a fill means two orders crossing, so at least two
@@ -1607,25 +1645,47 @@ public class MarketTests {
             m.setMarketIdentity(UUID.randomUUID(), "interlock market", ALICE);
             m.registerKey(ALICE, "alice-key");
 
-            // 10 every 5 fills against a fee of 2: earning 5 fills costs 20, pays 10.
-            check("a stipend that costs more to earn than it pays is allowed",
-                    policyStipendRejection(m, ALICE, 2, 10, 5) == null ? 1 : 0, 1);
+            // A fill costs one listing fee, not two. One order crossing a stacked book
+            // produces a fill per resting order it consumes, and it is the resting side
+            // that already paid — so five fills collect five fees, not ten.
+            check("a stipend its fees can cover is allowed",
+                    policyStipendRejection(m, ALICE, 10, 10, 5) == null ? 1 : 0, 1);
 
-            // Same stipend, fee of 1: 5 fills cost 10 and pay 10. Break-even is not
-            // safe — self-dealing at no loss is still an unbounded supply of claims.
+            // 5 fills at a fee of 10 collect 50. Paying 50 is break-even, and
+            // break-even is not safe: self-dealing at no loss is still an unbounded
+            // supply of claims.
             check("break-even is refused",
-                    policyStipendRejection(m, ALICE, 1, 10, 5) != null ? 1 : 0, 1);
+                    policyStipendRejection(m, ALICE, 10, 50, 5) != null ? 1 : 0, 1);
 
-            check("and paying more than it costs certainly is",
-                    policyStipendRejection(m, ALICE, 1, 100, 5) != null ? 1 : 0, 1);
+            check("and paying more than it collects certainly is",
+                    policyStipendRejection(m, ALICE, 10, 100, 5) != null ? 1 : 0, 1);
+
+            // The old rule assumed two fees per fill and would have allowed this.
+            check("what the doubled estimate used to permit is now refused",
+                    policyStipendRejection(m, ALICE, 10, 60, 5) != null ? 1 : 0, 1);
 
             // A fee of zero makes fills free, so no stipend is safe at all.
             check("no listing fee means no stipend",
                     policyStipendRejection(m, ALICE, 0, 1, 1000) != null ? 1 : 0, 1);
 
             check("the refusal says how to fix it",
-                    policyStipendRejection(m, ALICE, 1, 100, 5)
+                    policyStipendRejection(m, ALICE, 10, 100, 5)
                             .contains("Raise the listing fee") ? 1 : 0, 1);
+
+            // Everyone registered claims once per interval, so the payout multiplies by
+            // however many people are here while the fees do not. This is what two
+            // colluders were doing, and what ten would do without colluding at all.
+            MarketState crowd = new MarketState();
+            crowd.setMarketIdentity(UUID.randomUUID(), "crowded market", ALICE);
+            crowd.registerKey(ALICE, "alice-key");
+            check("affordable for one",
+                    policyStipendRejection(crowd, ALICE, 10, 40, 5) == null ? 1 : 0, 1);
+            crowd.registerKey(BOB, "bob-key");
+            check("and not for two", 
+                    policyStipendRejection(crowd, ALICE, 10, 40, 5) != null ? 1 : 0, 1);
+            check("the refusal counts the heads it is paying",
+                    policyStipendRejection(crowd, ALICE, 10, 40, 5)
+                            .contains("2 registered") ? 1 : 0, 1);
         }
 
         section("U6: a policy event is the whole policy, and drops what it omits");
@@ -1681,8 +1741,8 @@ public class MarketTests {
             noFee.stipendAmount = 10;
             check("a stipend with no listing fee is refused",
                     noFee.problem() != null ? 1 : 0, 1);
-            check("and the refusal says to raise the fee",
-                    noFee.problem().contains("listingFee") ? 1 : 0, 1);
+            check("and the refusal says a listing fee is what is missing",
+                    noFee.problem().contains("listing fee") ? 1 : 0, 1);
 
             // Refused at startup rather than written into genesis, because a policy every
             // replica rejects would leave the market unusable from its second event.
