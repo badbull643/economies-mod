@@ -1592,6 +1592,37 @@ public class MarketTests {
                             .contains("Raise the listing fee") ? 1 : 0, 1);
         }
 
+        section("U6: a policy event is the whole policy, and drops what it omits");
+        {
+            // Not a rule so much as a shape worth pinning, because it has now caught
+            // two people. A MarketPolicy carries every field; anything the author does
+            // not restate is set to zero by the event they write. It nearly wiped the
+            // welcome grant once, and it silently wiped the stipend the moment those
+            // fields were added and the client's fee controls were not updated.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "whole policy market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.setListingFee(2);
+            m.setStipend(10, 5);
+            m.setListingFreeOrders(3);
+
+            // A policy restating only the fee. Everything else goes to zero — this is
+            // the event doing exactly what it is defined to do.
+            Event.MarketPolicy partial = new Event.MarketPolicy();
+            partial.userId = ALICE;
+            partial.marketId = m.marketId();
+            partial.listingFee = 5;
+            partial.grantAmount = m.welcomeGrant();
+            partial.timestamp = 1L;
+            SequencedEvent se = new SequencedEvent();
+            se.seq = 2; se.event = partial;
+            EventApplier.apply(m, se);
+
+            check("the field it set is set", m.listingFee(), 5);
+            check("and the ones it omitted are gone", m.stipendAmount(), 0);
+            check("all of them", m.listingFreeOrders(), 0);
+        }
+
         section("T1b: where a rate stops being worth anything");
         {
             // Reported from a live market: a 2.5% fee appeared to take nothing. It was
