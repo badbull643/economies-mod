@@ -289,12 +289,16 @@ public class EventApplier {
             // Self-claimed, so there is no author question to answer — but the amount is
             // still the market's, for the same reason the welcome grant's is: nothing
             // can check who was sequencing, so the figure has to come from the log.
+            // Asked first, because a market that has just switched the stipend off is
+            // exactly when a client is holding the old figure — and being told the
+            // amount is wrong sends somebody looking for the right one when there is
+            // none.
+            if (state.stipendAmount() <= 0) {
+                return Result.reject("this market pays no stipend");
+            }
             if (st.amount != state.stipendAmount()) {
                 return Result.reject("stipend must be exactly this market's "
                         + state.stipendAmount() + ", not " + st.amount);
-            }
-            if (state.stipendAmount() <= 0) {
-                return Result.reject("this market pays no stipend");
             }
             if (!state.isRegistered(st.userId)) {
                 return Result.reject("only a registered identity can claim a stipend");
