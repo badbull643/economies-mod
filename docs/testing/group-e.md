@@ -43,6 +43,9 @@ down is newer than the sitting:
 - ~~**`E19`**~~ **run 2026-08-22 and correct** — the two post-split deposits came back and
   the four pre-split ones did not. `E19b` is new: the confirmation was rewritten around
   what it found, and has not been run
+- **`E20`** is new from the same sitting: a fork warning that has been answered. Alice's
+  banner survived Bob discarding his branch and joining her, because nothing but the
+  discovery poll could ever retire one
 
 Nothing else on this list has moved since it was run.
 
@@ -734,3 +737,43 @@ like everything was gone, on a screen that was about to hand 61 items back.
 - **Check the buttons are on screen** at 1920×1080 and at the smallest window Minecraft
   allows, with the longest version of the message — four item kinds, orders, and a fork.
   The box used to pin to `y=20` and grow downwards off the bottom
+
+## E20. A fork warning that has been answered
+
+New, never run. Reported from play: Alice warned that Bob was on a different branch, Bob
+discarded his branch and joined her, and **the banner stayed up for the rest of the
+session.**
+
+Only `observeHostHead` ever retired a divergence, and it retires one by watching the
+named host advertise a matching head. Somebody who stops hosting in order to come and
+join you is no longer a host, so nothing could ever revisit the claim. Two ways out now,
+one for each direction the players might settle it in.
+
+**They join you** — you host, they discard and connect:
+
+- Fork as in `B2`. Confirm the FORKED banner is up on the host
+- The other player discards and connects to you
+- The banner must go, within a frame of the Market screen being open. The console says
+  `<name> is synced to this host now — retiring the fork warning about them`
+- **Trading must work immediately.** The banner drives `MS_FORKED`, so a stale one is not
+  cosmetic — check you can place an order without reconnecting first
+
+**You join them** — they host, you discard and connect:
+
+- Same fork, the other way round. The banner must go on connecting
+- Nothing is printed for this one: adopting their chain retires every claim at once,
+  because each was measured against a head you no longer have
+
+Then the two that must **not** clear:
+
+- A fork with a host you have neither joined nor been joined by → the banner stays. Only
+  evidence retires it, never time
+- **Three participants**: fork from Alice, then have Carol join you while still forked
+  from Alice. Carol syncing says nothing about Alice, and the banner must survive it.
+  Matching is by display name, so this is also the check that a second player joining
+  cannot retire somebody else's warning by having a name that happens to collide
+
+The name matching is the known weakness, and it is deliberate: a FORK refusal carries
+`hostName` and no identity, so a name is what the two sides have in common. The cost of a
+collision is a warning retired early on a market the player is already connected to; the
+cost of not asking was a warning that never went away.
