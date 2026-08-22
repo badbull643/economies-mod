@@ -175,8 +175,12 @@ who thinks to check. It does not cover somebody who does not.
 
 **From §0.20 in the session log. `MarketClient.findSplitPoint` exists and works.**
 
-`Divergence` is constructed in three places and only one supplies `splitAt`: the FORK
-refusal in `noteForkFromRefusal`. The discovery poll and the AHEAD path both pass `-1`.
+**Two of the three are done.** `noteForkFromRefusal` has always supplied `splitAt`, and
+`offerCatchUp` does now — see §0.22, where the AHEAD path cost a real run five items and
+five entries on its re-place checklist, under a comment asserting the fallback was safe.
+**The discovery poll is what is left**, and it is the one that runs without anybody
+pressing anything.
+
 So the banner somebody sees without pressing Connect is still the pre-`E18` one — *"differs
 at event N"*, where N is the other side's head — and two clients polling each other show
 two different numbers, neither of which is a split point.
@@ -191,6 +195,12 @@ while the confirmation names what it will hand back. It errs the safe way — un
 cannot create items, and that bound is deliberate — so this is wrong quietly rather than
 dangerously. Bounded, silent, and financial in the way that matters to whoever loses the
 items.
+
+**It has already happened once**, on the sibling path, and nothing caught it: every number
+printed was self-consistent and no test failed. §0.22 was found by comparing what the
+console said went in against what it said came back. A guard that makes failure safe also
+makes it silent, which is the argument for finishing this rather than leaving one third of
+it.
 
 **Why it was built this way, which is worth keeping.** The search is a second round trip
 to a host that has just refused you, on purpose: a failure costs the detail and not the
