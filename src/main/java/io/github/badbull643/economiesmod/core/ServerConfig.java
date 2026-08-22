@@ -493,23 +493,98 @@ public class ServerConfig {
 
     /** Writes this config out, so an operator has a file to edit rather than a guess. */
     public void save(Path file) throws IOException {
-        if (file.getParent() != null) Files.createDirectories(file.getParent());
+        write(file, effectiveTree());
+    }
 
-        // Gson omits nulls, so a Boolean left unset is a setting the operator cannot
-        // discover exists — which is precisely how acceptsMigration shipped invisible:
-        // present in the code, documented in the checklist, and absent from every config
-        // file anyone had. Write the resolved answer instead of the unset marker.
-        //
-        // --help calls this "the effective config", and a default nobody can see is not
-        // effective config. Written as the value it currently resolves to, so an
-        // operator who wants the other one edits a line that is already in front of them
-        // rather than having to know the key's name.
-        //
-        // On a tree rather than by mutating this, so saving a config does not change it.
+    /**
+     * Every setting, with the boxed defaults resolved to what they currently mean.
+     *
+     * Gson omits nulls, so a Boolean left unset is a setting the operator cannot
+     * discover exists — which is precisely how acceptsMigration shipped invisible:
+     * present in the code, documented in the checklist, and absent from every config
+     * file anyone had. Write the resolved answer instead of the unset marker.
+     *
+     * --help calls this "the effective config", and a default nobody can see is not
+     * effective config. Written as the value it currently resolves to, so an operator
+     * who wants the other one edits a line already in front of them rather than having
+     * to know the key's name.
+     *
+     * On a tree rather than by mutating this, so saving a config does not change it.
+     *
+     * One method rather than one per caller: hostRulesTree below subtracts from this,
+     * and a second place resolving the same defaults would be free to resolve them
+     * differently.
+     */
+    private com.google.gson.JsonObject effectiveTree() {
         com.google.gson.JsonObject out = gson.toJsonTree(this).getAsJsonObject();
         out.addProperty("acceptsMigration", acceptsMigration());
         out.addProperty("maxWelcomeGrant", maxWelcomeGrant());
-        Files.write(file, gson.toJson(out).getBytes(StandardCharsets.UTF_8));
+        return out;
+    }
+
+    private static void write(Path file, com.google.gson.JsonObject tree) throws IOException {
+        if (file.getParent() != null) Files.createDirectories(file.getParent());
+        Files.write(file, gson.toJson(tree).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Stamps this config with the facts about the session hosting it from a world.
+     *
+     * Port, name and identity are facts rather than settings — they belong to whoever
+     * pressed Host, not to a file that may have been copied from somewhere else — and
+     * dedicated is the sharpest of them, because it is what acceptsMigration and
+     * maxWelcomeGrant resolve against. A config lifted from a dedicated server's
+     * server-config.json would otherwise claim a 1,000,000 grant ceiling and refuse
+     * migrations, in a world that is neither.
+     *
+     * One method because two callers must reach the same verdict: hosting builds the
+     * config this way, and /trade hostconfig reports what hosting will do. Whichever of
+     * them stamped one field differently would be reporting a market that does not
+     * exist — and the fields are exactly the ones hostRulesTree drops, so no file can
+     * put them back.
+     */
+    public ServerConfig asWorldHost(int port, String hostName, String hostUserId) {
+        this.port = port;
+        this.hostName = hostName;
+        this.hostUserId = hostUserId;
+        this.dedicated = false;
+        return this;
+    }
+
+    /**
+     * Every setting a market hosted from somebody's game can act on, resolved.
+     *
+     * Two groups are left out. MarketStateHolder.hostPolicyFor imposes port, hostName,
+     * hostUserId and dedicated over whatever the file said, because they are facts about
+     * this session rather than settings — and a key written into a file an operator is
+     * about to edit, only to be silently overruled, is worse than one that is absent.
+     * The rest — logFile, marketName, creatorUserId — are read only by the standalone
+     * launcher's main, which bootstraps a market from them; a world's market is created
+     * through the Market screen and never consults them.
+     *
+     * Left in deliberately: bindAddress, which HostServer honours whoever started it,
+     * and welcomeGrant, which for a world decides whether grants are issued at all
+     * rather than the amount — grantMismatchWarning already says that out loud when the
+     * two disagree, and problem() weighs it against maxWelcomeGrant either way.
+     *
+     * Public because /trade hostconfig prints this and saveHostRules writes it, and
+     * those two must not be able to disagree about what a host rule is. A command that
+     * listed a setting the file it writes does not contain — or wrote one it never
+     * mentioned — would send somebody looking for a key that is not there.
+     */
+    public com.google.gson.JsonObject hostRulesTree() {
+        com.google.gson.JsonObject out = effectiveTree();
+        for (String imposed : new String[] {
+                "port", "hostName", "hostUserId", "dedicated",
+                "logFile", "marketName", "creatorUserId" }) {
+            out.remove(imposed);
+        }
+        return out;
+    }
+
+    /** hostRulesTree, written where a world hosting from this game will read it. */
+    public void saveHostRules(Path file) throws IOException {
+        write(file, hostRulesTree());
     }
 
     /**

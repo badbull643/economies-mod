@@ -270,6 +270,9 @@ public class MarketStateHolder {
 
     public static void setMyHostPort(int port) { myHostPort = port; }
 
+    /** The port a market hosted from this game binds. */
+    public static int myHostPort() { return myHostPort; }
+
 
     private static Path identityFile;
 
@@ -1287,13 +1290,37 @@ public class MarketStateHolder {
     }
 
     /**
+     * Where a world keeps the rules it hosts under.
+     *
+     * One method because two callers need the same answer: hosting reads it, and
+     * /trade hostconfig writes it. A command that created the file somewhere other than
+     * where hosting looks would be the §4 defect exactly, and silent — the file would
+     * appear, and nothing would ever read it.
+     *
+     * Normalised, because the world directory arrives with a trailing "." from
+     * getSavePath and the raw form prints as saves\world\.\economiesmod\... — which is
+     * the path an operator is about to go and edit.
+     *
+     * World-level rather than per-slot: the rules belong to whoever hosts, and every
+     * market slot in a world is hosted by the same person on the same port.
+     */
+    public static Path hostConfigPathFor(Path worldDir) {
+        return worldDir.resolve("economiesmod").resolve("host-config.json").normalize();
+    }
+
+    /** The world this client has a market open in, or null when there is none. */
+    public static Path currentWorldDir() {
+        return currentWorldDir;
+    }
+
+    /**
      * The policy this world hosts under.
      *
      * Friend-group defaults unless the world holds a host-config.json, which nothing
-     * creates and everything ignores when absent — so the ordinary case is exactly what
-     * it was, and somebody who wants admission rules, deposit caps or world checks on a
-     * market they host from their own game can have them without running a separate
-     * server.
+     * creates on its own and everything ignores when absent — so the ordinary case is
+     * exactly what it was, and somebody who wants admission rules, deposit caps or world
+     * checks on a market they host from their own game can have them without running a
+     * separate server.
      *
      * Deliberately not server-config.json. That file belongs to the dedicated launcher
      * and lives beside it; a market hosted from a world keeps its settings with that
@@ -1304,11 +1331,7 @@ public class MarketStateHolder {
      */
     private static ServerConfig hostPolicyFor(Path worldDir, int port, String playerName,
                                               UUID userId) {
-        // Normalised, because the world directory arrives with a trailing "." from
-        // getSavePath and the raw form prints as saves\world\.\economiesmod\... — which
-        // is the path an operator is about to go and create a file at.
-        Path file = worldDir.resolve("economiesmod").resolve("host-config.json")
-                .normalize();
+        Path file = hostConfigPathFor(worldDir);
 
         ServerConfig cfg;
         try {
@@ -1320,9 +1343,23 @@ public class MarketStateHolder {
                 // "no rules" and "rules that did not fire" look identical. The file also
                 // belongs to whoever hosts, which is easy to get wrong when two worlds
                 // are involved and only one of them is serving.
+                //
+                // The second line is the discoverability half, and it is here rather
+                // than in the UI because this is the moment the defaults start applying.
+                // A setting nobody can find is the same as a setting that does not
+                // exist — which is how the free-order allowance shipped switched off —
+                // and the welcome-grant ceiling is the sharpest case: a player refused
+                // at 10,000 has no way to learn the figure is movable. Naming the
+                // command rather than the keys, because the command writes every key
+                // with the value it currently resolves to.
                 System.out.println("[economiesmod] no " + file
                         + " — hosting with friend-group settings: open admission,"
-                        + " no deposit caps, no world checks");
+                        + " no deposit caps, no world checks, migrations accepted,"
+                        + " welcome grants capped at "
+                        + ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+                System.out.println("[economiesmod] to change any of that, run"
+                        + " /trade hostconfig write in game — it creates that file with"
+                        + " every setting in it — then edit it and host again");
             }
         } catch (IOException e) {
             // Unreadable rather than absent. Refusing to host would strand somebody
@@ -1333,18 +1370,14 @@ public class MarketStateHolder {
             cfg = ServerConfig.friendGroup(port);
         }
 
-        cfg.port = port;
-        cfg.hostName = playerName;
-        cfg.hostUserId = userId.toString();
-        cfg.dedicated = false;
+        cfg.asWorldHost(port, playerName, userId.toString());
 
         String bad = cfg.problem();
         if (bad != null) {
             System.err.println("[economiesmod] " + file + " is not usable (" + bad
                     + ") — hosting with the usual friend-group settings");
-            cfg = ServerConfig.friendGroup(port);
-            cfg.hostName = playerName;
-            cfg.hostUserId = userId.toString();
+            cfg = ServerConfig.friendGroup(port)
+                    .asWorldHost(port, playerName, userId.toString());
         }
         return cfg;
     }

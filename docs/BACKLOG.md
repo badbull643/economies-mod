@@ -137,6 +137,40 @@ and a layer split makes it structural.
 
 ---
 
+## 6. Host rules on the screen, and what a world does with a config it cannot use
+
+Two loose ends from §0.18 in the session log, kept together because they are the same
+question asked twice: what happens to a host rule nobody is looking at.
+
+**The UI half.** `/trade hostconfig` made host rules reachable; it did not make them
+visible to somebody who never types a command. The two worth surfacing are
+`maxWelcomeGrant` and `acceptsMigration`, because their defaults *do something* — a
+player refused inline at 10,000 has no way to learn the figure is movable, and migrations
+being on or off by deployment type is a rule with no switch on screen. Admission and the
+deposit caps are fine where they are: they are "I have a problem with a specific person"
+settings, and a person goes looking for those.
+
+**Cost of not doing it:** a player who does not know the command is back where §0.18
+started, and the command is discoverable only from a console line printed at host time.
+
+Whoever does this should read backlog item 5 first. It means more of `MarketScreen`,
+which is already 4,293 lines and already the file most defects live in.
+
+**The refusal half.** A world hosting on an unusable `host-config.json` prints one line
+and hosts on the friend-group defaults; the dedicated launcher exits. Deliberate for a
+file that cannot be *read* — refusing "would strand somebody over a file they may not
+know exists" — and arguably wrong for one that parsed fine and states a contradiction,
+where the operator plainly knows the file exists and has written something impossible in
+it. The failure mode is a host running with none of the rules its operator wrote.
+
+**Cost of not doing it:** small and silent, which is the bad combination. One scrolled
+console line stands between an operator and a market with no admission control.
+
+`/trade hostconfig` asks the same `problem()` and answers in chat, which covers somebody
+who thinks to check. It does not cover somebody who does not.
+
+---
+
 ---
 
 ## Dropped
