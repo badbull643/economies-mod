@@ -642,7 +642,21 @@ public class ServerConfig {
         // Caught here rather than at the first policy event, because a market this host
         // bootstraps writes its grant into genesis — and a host that refuses to sequence
         // the figure it just created a market with is a server that argues with itself.
-        if (welcomeGrant > maxWelcomeGrant()) {
+        //
+        // Only a host that bootstraps can argue with itself, which is the launcher and
+        // nothing else: a market hosted from a world is created through the Market
+        // screen by MarketBootstrap, which never reads this file. There welcomeGrant is
+        // the on/off switch and nothing more — issueWelcomeGrant tests it against zero
+        // and takes the amount from the market — so the two settings are about different
+        // things and pairing them refuses a file that says nothing contradictory.
+        //
+        // It is not a harmless refusal either. hostPolicyFor answers an unusable file by
+        // discarding all of it and hosting on the defaults, so lowering the ceiling in a
+        // generated file — where welcomeGrant sits at its default of 1000 — silently
+        // turned off every other rule in it, including the ceiling being lowered. Found
+        // running E17, which is the second time this pair has been wrong in the same
+        // direction: a rule about who is hosting, asked where it does not apply.
+        if (dedicated && welcomeGrant > maxWelcomeGrant()) {
             return "welcomeGrant is " + welcomeGrant + " but this host will not sequence"
                     + " a grant above " + maxWelcomeGrant()
                     + " — raise maxWelcomeGrant if that is really what you want";

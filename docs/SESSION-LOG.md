@@ -16,7 +16,7 @@ in-progress edit to pick up.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `558 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`. If any of it fails on a clean
+Expect `565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`. If any of it fails on a clean
 checkout, that is news — it has only ever been run on one machine (backlog item 4).
 
 **Where the code is.** Branch `trust-model-and-migration`, ahead of its remote and 0
@@ -44,10 +44,10 @@ nothing depends on that.
 4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was §0.18 — a
-command and a console line that make host rules reachable without knowing the file
-exists. Before that, backlog item 1's second piece (returning items a discarded fork
-would destroy); the next piece is named at the top of that entry.
+**What is being worked on right now:** nothing. The last thing finished was §0.19, which
+`E17` turned up the moment §0.18 gave somebody a way to run it: lowering the grant
+ceiling in a world switched off every other host rule in the file. **The rest of `E17`
+and `E17b` have not been run past that point** — see `docs/testing/group-e.md`.
 
 ---
 
@@ -55,14 +55,14 @@ would destroy); the next piece is named at the top of that entry.
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found eighteen defects in code that had 437 passing checks behind it — one a whole
+and it found nineteen defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`558 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`, the eighth being a new `hostTrustTest`, and each
+`565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`, the eighth being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -384,6 +384,43 @@ And an eighteenth, found by somebody trying to run `E17` and asking where the fi
     `problem()` in chat, which is where somebody editing the file is looking. Whether the
     world path should refuse the way the launcher does is open, and in the backlog.
 
+And a nineteenth, found by running `E17` against the command §0.18 had just added:
+
+19. **Lowering the welcome-grant ceiling in a world switched off every other host rule.**
+    `problem()` refused any config where `welcomeGrant` exceeded `maxWelcomeGrant()`, on
+    every host. The file `/trade hostconfig write` generates carries `welcomeGrant` at its
+    compiled default of **1000**, so setting `maxWelcomeGrant: 100` — the one edit the
+    setting exists for — made the file unusable. And `hostPolicyFor` answers unusable by
+    discarding all of it and hosting on the friend-group defaults, so admission, deposit
+    caps, attestation, migration limits **and the ceiling being lowered** all silently
+    stopped applying, reported in one console line.
+
+    The pair is real on the host it was written for and meaningless on the other, which
+    its own comment says without noticing: *"a market this host bootstraps writes its
+    grant into genesis"*. Only the launcher bootstraps from this file. A world's market is
+    created by `MarketBootstrap` through the Market screen, which never reads it — so
+    there `welcomeGrant` is a switch and nothing more, tested against zero by
+    `issueWelcomeGrant`, with the amount taken from the market because the amount is not
+    a host's to overrule. Two settings about different things, refused for disagreeing.
+
+    Now asked only of a host that bootstraps. `R1d`, and the existing `R1b` check that
+    covered this had to be told which host it meant — its comment said "a server that
+    bootstraps a market above its own ceiling" while its config was a world, and it passed
+    for the wrong reason. That is the same sentence being true of one host and asked of
+    both, one layer up.
+
+    **§4 again, and this is the fourth time the rotating/dedicated split has produced it.**
+    Backlog item 3 recorded that a ceiling inside `validate` would be legal on one host
+    and illegal on the next. §0.15 found migration offered by a box that should not take
+    it. §0.17 found Host live on a market a dedicated server already served. Each is one
+    rule that is about *who is hosting* being asked somewhere that cannot tell. Anything
+    else that reads `dedicated`, or that should and does not, is the next one.
+
+    Worth recording how it surfaced: as a screenshot of `/trade hostconfig` correctly
+    reporting a file as unusable. The command worked exactly as designed and the design
+    was right — it was the rule underneath that was wrong, and nothing but running the
+    thing would have separated those two.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -399,12 +436,12 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 558   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 565   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 25   depositCapTest 6   attestationTest 12   hostTrustTest 16
 splitPointTest 22
 ```
 
-*(437 across seven suites when this section was written; the extra 50 checks and the
+*(437 across seven suites when this section was written; the extra 57 checks and the
 eighth suite belong to §0.)*
 
 Every engine change below was verified to **fail** with its fix disabled before being
