@@ -9,7 +9,6 @@ import io.github.badbull643.economiesmod.core.PlayerKeys;
 import io.github.badbull643.economiesmod.core.ServerConfig;
 
 import java.io.IOException;
-import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -149,7 +148,7 @@ public class SplitPointTest {
         check("their branch grew", theirs.lastSeq(), shared + 25);
         check("ours grew differently", ours.lastSeq(), shared + 11);
 
-        int port = freePort();
+        int port = TestPorts.free();
         HostServer host = serve(hostLog, port);
         try {
             check("the split is the last shared event",
@@ -257,11 +256,5 @@ public class SplitPointTest {
         IOException bindError = host.awaitBound(5000);
         if (bindError != null) throw bindError;
         return host;
-    }
-
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
-        }
     }
 }

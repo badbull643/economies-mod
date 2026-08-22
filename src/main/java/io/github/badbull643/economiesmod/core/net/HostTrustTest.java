@@ -115,7 +115,7 @@ public class HostTrustTest {
 
         check("the doctored history is one event longer", log.lastSeq() - honestEvents, 1);
 
-        int port = freePort();
+        int port = TestPorts.free();
         HostServer host = new HostServer(port, hostLog, "minter", HOST.toString(),
                 hostKeys, new PeerCache(dir.resolve("trust-host-peers.json")), 0L);
         Thread hostThread = new Thread(() -> {
@@ -217,7 +217,7 @@ public class HostTrustTest {
 
         long expected = log.lastSeq();
 
-        int port = freePort();
+        int port = TestPorts.free();
         HostServer host = new HostServer(port, hostLog, "honest", HOST.toString(),
                 hostKeys, new PeerCache(dir.resolve("trust-host-peers.json")), 0L);
         Thread hostThread = new Thread(() -> {
@@ -330,11 +330,5 @@ public class HostTrustTest {
         long n = 0;
         for (String l : lines) if (l != null && !l.trim().isEmpty()) n++;
         return n;
-    }
-
-    private static int freePort() throws IOException {
-        try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
-            return s.getLocalPort();
-        }
     }
 }
