@@ -88,6 +88,19 @@ public class EconomiesmodClient implements ClientModInitializer {
                     System.out.println("[economiesmod] returned " + refund.quantity + " "
                             + refund.itemId + " — the host refused that deposit");
                 }
+
+                // The other way items come back: discarding a forked branch destroys the
+                // only record of anything deposited since the split, so those are handed
+                // over rather than lost. Same thread and the same reason — the inventory
+                // belongs to it, and a reset is triggered from a button.
+                MarketStateHolder.Refund owed;
+                while ((owed = MarketStateHolder.nextResetRefund()) != null) {
+                    InventoryBridge.give(mc.player, MinecraftIds.idToItem(owed.itemId),
+                            (int) owed.quantity);
+                    System.out.println("[economiesmod] returned " + owed.quantity + " "
+                            + owed.itemId + " — deposited after the split, and the reset"
+                            + " discarded the only record of them");
+                }
             }
 
             // Here rather than in the market screen's render, which is where it started

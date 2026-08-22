@@ -17,7 +17,7 @@ individual item on it.
 `E11` also had to be rewritten: it pointed at the migrant's own credit counter, which is
 the one number migration guarantees will not change. It looked like a failure and was not.
 
-### Four items want a short re-check
+### Five items want a short re-check
 
 Everything was tested against the code as it stood. Two runtime changes landed at 13:58
 after the session ended (`59eb94f`), both in `MarketScreen`, and `E17` is new work since:
@@ -33,6 +33,7 @@ after the session ended (`59eb94f`), both in `MarketScreen`, and `E17` is new wo
 - **`E17`** is new since the sitting and has not been run at all: the welcome-grant
   ceiling now differs by who is hosting. Worth five minutes on its own
 - **`E18`** is also new: the FORK banner now says where two branches parted
+- **`E19`** is also new: a reset now hands back items deposited since the split
 
 Nothing else on this list has moved since it was run.
 
@@ -41,7 +42,7 @@ Nothing else on this list has moved since it was run.
 *The stipend, the escalating listing fee, the welcome grant control, and a Market column
 that now scrolls. The UI half mattered most, because nobody had looked at it.*
 
-Run the suites first. Expect `520 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`:
+Run the suites first. Expect `531 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -591,3 +592,36 @@ Bob reconnects.
 It does not change what a reset does yet. That is the next backlog item — refunding the
 deposits a reset would otherwise destroy, which needs exactly this number to know which
 deposits were only ever on the losing branch.
+
+## E19. Items handed back when a fork is discarded
+
+New, never run. Discarding a forked branch used to destroy items outright: anything
+deposited after the split physically left your inventory, and the branch holding the only
+record of it was deleted. Balances from before the split come back when the shared
+history is adopted; orders come back as a checklist; those items were simply gone.
+
+They are returned now. The split point — `E18` — is what made it possible to tell which
+deposits were only ever on the losing branch.
+
+Fork as in `B2`, then **while forked**:
+
+- Deposit something distinctive, say 40 iron. Note your inventory count
+- **Reset log** → the 40 iron are back in your inventory. The console says
+  `returned 40 minecraft:iron_ingot — deposited after the split, and the reset discarded
+  the only record of them`
+- Your pre-split balance comes back on reconnecting, as before, and is **not** duplicated
+
+The failure worth hunting is the opposite one — **items appearing twice**. Each of these
+must return nothing:
+
+- Deposit 10 after the split, then **withdraw** all 10, then reset → nothing returned.
+  They are already in your inventory
+- Deposit 20 after the split, then **sell** them to the other client, then reset →
+  nothing returned for the sold 20. You hold credits for them; the buyer holds the goods
+- Deposit 20 and rest a **sell order** for all 20 → all 20 come back. Reserved goods are
+  still yours
+- Items you held from **before** the split → never returned by the reset, because the
+  host's copy still says they are yours
+
+Then the boring one that matters: reset a market you never forked from, with no
+divergence at all → nothing is returned, and nothing is lost.
