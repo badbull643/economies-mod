@@ -20,20 +20,31 @@ below assumes they pass.
 - Dedicated launcher: `--help`, `--write-config`, bootstrap, `--creator-key`, bad port,
   unknown argument, busy port
 - **A1** `/trade` queries, **A2** multiple markets, **A3** the trading fee control,
-  **A5** the listing fee, **A6** removing a market, **A4** the fork-reset re-place
-  checklist, **B2** fork then reset
+  **A6** removing a market, **A4** the fork-reset re-place checklist, **B2** fork then
+  reset
 - Deposit caps and all three cheat routes, confirmed live while debugging them: created
   with cheats, enabled later via Open to LAN, and enabled-then-reloaded
 
 **Group A is complete.** A4 was the last one, run against the fork from B2.
 
+**Except A5, which has been un-marked — see `docs/testing/group-e.md` E8.** Its last
+step, "spend down to under 5 credits and try to sell → refused, naming the amount", was
+the recipe for a bug that duplicated the items: the refusal it looked for could only have
+come from a path that had already deposited them. It passed because the refusal is all
+anybody checked. Re-run it as E8, which says what else to look at.
+
 ---
 
 ## Group A — one client, no server
 
-Nothing outstanding here.
+One outstanding: A5 has been un-marked.
 
-### A5. Listing fee — DONE
+### A5. Listing fee — RE-RUN as E8
+
+Passed once, on a build where its last step was the recipe for an item-duplication bug.
+The refusal it checks for was correct; what it did not check was whether the goods had
+already been deposited on the way to producing it. They had. See `docs/testing/group-e.md`
+E8 for the full step list — do that rather than this.
 
 ### A6. Removing a market — DONE
 

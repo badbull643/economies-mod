@@ -951,6 +951,74 @@ public class MarketTests {
                     why.contains("signature") ? 1 : 0, 1);
         }
 
+        section("K5b: an archive whose events break its own market's rules is refused");
+        {
+            // K5 catches a forged event — one somebody else's key signed. This catches
+            // an event the author really did sign, in a market they really do own, that
+            // no honest host would ever have sequenced.
+            //
+            // verifyLines called EventApplier.apply and nothing else, and apply enforces
+            // none of the money rules: they live in validate, because validate is where
+            // the host asks them before it appends. So a history built by hand could
+            // hold a welcome grant for any sum, repeated as often as you like, and every
+            // one of them applied. That balance is what a migration carries in, and
+            // migrationObjection weighs the items a migrant brings against their own
+            // statistics but never their credits — so nothing downstream caught it
+            // either. This is the only gate on that path.
+            Path src = scratch("test-archive-k5b.jsonl");
+            Files.deleteIfExists(src);
+            EventLog log = new EventLog(src);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+
+            check("the market publishes its own figure", live.welcomeGrant(),
+                    ServerConfig.DEFAULT_WELCOME_GRANT);
+
+            // Signed by the market's own creator, chained correctly, and for a sum the
+            // market's published policy does not offer.
+            Event.WelcomeGrant wg = new Event.WelcomeGrant();
+            wg.userId = ALICE;
+            wg.targetUserId = ALICE;
+            wg.amount = 999_999_999L;
+            check("apply on its own takes it", apply(log, live, wg).accepted ? 1 : 0, 1);
+            check("which is the balance a migration would have carried",
+                    live.wallets().getBalance(ALICE), 999_999_999L);
+
+            int refused = 0;
+            String why = "";
+            try {
+                MarketArchive.verify(src);
+            } catch (MarketArchive.InvalidArchive e) {
+                refused = 1;
+                why = e.getMessage();
+            }
+            check("the archive is refused", refused, 1);
+            check("and says which rule it broke",
+                    why.contains("grant must be exactly") ? 1 : 0, 1);
+        }
+
+        section("K5c: and an honest archive still verifies");
+        {
+            // The risk in K5b's fix is refusing too much: every event in an honest log
+            // was validated by whoever sequenced it, so re-asking must be silent. A log
+            // with a grant, a deposit, an order and a fill in it, taken end to end.
+            Path src = scratch("test-archive-k5c.jsonl");
+            Files.deleteIfExists(src);
+            EventLog log = new EventLog(src);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            grant(log, live, BOB, live.welcomeGrant());
+            apply(log, live, deposit(ALICE, IRON, 100));
+            apply(log, live, placeOrder(ALICE, IRON, 5, 10, false));
+            apply(log, live, placeOrder(BOB, IRON, 5, 10, true));
+
+            check("the trade really happened", live.fillsEver(), 1);
+
+            MarketArchive.Summary s = MarketArchive.verify(src);
+            check("and the archive verifies", s.events, log.lastSeq());
+        }
+
         section("K6: import refuses to overwrite existing history");
         {
             Path src = scratch("test-archive-k6.jsonl");
@@ -1477,23 +1545,42 @@ public class MarketTests {
             m.setListingFee(2);
             m.setListingFreeOrders(3);
 
+            // listingFeeFor prices the order about to be placed, counting it towards
+            // the allowance — so read with n resting, it says what the (n+1)th costs.
+            // This block used to read as though it said what the nth had cost, and the
+            // two readings differ by exactly one order: an allowance of three was
+            // letting four orders through at the base fee. The prose here said "the
+            // fourth starts climbing" while the assertion below it pinned the fourth at
+            // the base fee, which is how it survived being written down.
             check("the first order pays the base fee", m.listingFeeFor(ALICE), 2);
 
-            // Three resting orders fit inside the allowance; the fourth starts climbing.
-            for (int i = 0; i < 3; i++) {
+            // Two resting: the third is still inside an allowance of three.
+            for (int i = 0; i < 2; i++) {
                 m.submitOrder(new Order(100 + i, 50 + i, IRON, 1, false, ALICE));
             }
-            check("still the base fee at the allowance", m.listingFeeFor(ALICE), 2);
+            check("the last order inside the allowance pays the base fee",
+                    m.listingFeeFor(ALICE), 2);
+
+            // Three resting. The fourth is the one that takes them past three.
+            m.submitOrder(new Order(102, 52, IRON, 1, false, ALICE));
+            check("the fourth costs double", m.listingFeeFor(ALICE), 4);
 
             m.submitOrder(new Order(200, 90, IRON, 1, false, ALICE));
-            check("one past it costs double", m.listingFeeFor(ALICE), 4);
+            check("and the fifth triple", m.listingFeeFor(ALICE), 6);
+
+            // What was actually charged, not only what was quoted — the quote is no use
+            // if submitOrder takes something else.
+            long before = m.wallets().getBalance(ALICE);
             m.submitOrder(new Order(201, 91, IRON, 1, false, ALICE));
-            check("and keeps climbing", m.listingFeeFor(ALICE), 6);
+            check("and the fifth is what the fifth is charged",
+                    before - m.wallets().getBalance(ALICE), 6);
+            check("with five resting, a sixth would cost four times the base",
+                    m.listingFeeFor(ALICE), 8);
 
             // Cancelling gives the allowance back — the fee prices what you are holding
             // open, so releasing the book releases the cost.
             m.cancelOrder(201, IRON, false, ALICE);
-            check("cancelling walks it back down", m.listingFeeFor(ALICE), 4);
+            check("cancelling walks it back down", m.listingFeeFor(ALICE), 6);
 
             // Never free, which is what the stipend's safety rests on.
             check("somebody with nothing resting still pays", m.listingFeeFor(BOB), 2);
@@ -1597,6 +1684,60 @@ public class MarketTests {
             // holding the old amount is exactly who asks this.
             check("and says so plainly",
                     stipendRejection(m, ALICE, 50).contains("pays no stipend") ? 1 : 0, 1);
+        }
+
+        section("T1f: a listing nobody can pay for is refused before anything is deposited");
+        {
+            // The two halves of DepositAndList used to be checked in two places that did
+            // not agree. validate looked at quantity, price and itemId; apply deposited
+            // the goods and then asked submitOrder, which refuses a seller who cannot
+            // pay the listing fee. So the event passed validate, went into the log, and
+            // was refused after the deposit had landed — leaving the goods in the ledger
+            // on an event whose author had just been told it failed, while the client
+            // answered that refusal by handing the physical items back.
+            //
+            // Both now ask MarketState.canDepositAndList, which is the only copy.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "fee market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.setListingFee(5);
+            m.wallets().setBalance(ALICE, 3L);          // less than the fee
+
+            Event.DepositAndList d = new Event.DepositAndList();
+            d.userId = ALICE;
+            d.marketId = m.marketId();
+            d.itemId = IRON;
+            d.quantity = 10;
+            d.price = 7;
+            SequencedEvent se = new SequencedEvent();
+            se.seq = 2;
+            se.event = d;
+
+            EventApplier.Result v = EventApplier.validate(m, se);
+            check("validate refuses it", v.accepted ? 1 : 0, 0);
+            // valueOf, not v.reason directly: when this regresses, reason is null and a
+            // suite that dies here reports one failure instead of the five below it.
+            check("and names the fee it cannot pay",
+                    String.valueOf(v.reason).contains("listing costs 5") ? 1 : 0, 1);
+
+            // The half that actually cost items: apply must leave nothing behind.
+            EventApplier.Result a = EventApplier.apply(m, se);
+            check("apply refuses it too", a.accepted ? 1 : 0, 0);
+            check("and no goods were deposited on the way to refusing",
+                    m.itemBalances().getBalance(ALICE, IRON), 0);
+            check("and no credits moved", m.wallets().getBalance(ALICE), 3);
+
+            // The same event once they can afford it, so the refusal is about the fee
+            // and not about deposit-and-list being broken.
+            m.wallets().adjust(ALICE, 2);               // now exactly 5
+            check("affordable, it is accepted",
+                    EventApplier.validate(m, se).accepted ? 1 : 0, 1);
+            check("and applies", EventApplier.apply(m, se).accepted ? 1 : 0, 1);
+            check("the goods are listed, not sitting in the ledger",
+                    m.itemBalances().getBalance(ALICE, IRON), 0);
+            check("and the fee was taken", m.wallets().getBalance(ALICE), 0);
+            check("with the order actually resting",
+                    m.peekBook(IRON).restingAsks().size(), 1);
         }
 
         section("U8: one order fills a whole book, which is what the interlock costs");

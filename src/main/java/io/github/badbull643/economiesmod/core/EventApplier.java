@@ -115,9 +115,14 @@ public class EventApplier {
      *
      * Both corrected: the fees an interval can collect are listingFee per fill, and they
      * have to cover a payment to everyone entitled to one.
+     *
+     * Public because MarketScreen has to ask it too, and could not: it lives in core and
+     * the screen lives in client, so the screen kept its own copy — the doubled one this
+     * used to have. It advertised a ceiling four times the real one and then let the
+     * engine do the refusing. Anything that wants to know this must call this.
      */
-    static String stipendOutpacesItsFees(long amount, long everyFills, long listingFee,
-                                         int claimants) {
+    public static String stipendOutpacesItsFees(long amount, long everyFills,
+                                                long listingFee, int claimants) {
         if (amount <= 0) return null;
         if (listingFee <= 0) {
             return "a stipend needs a listing fee — without one, fills cost nothing to"
@@ -253,6 +258,14 @@ public class EventApplier {
             Event.DepositAndList d = (Event.DepositAndList) e;
             if (d.quantity <= 0 || d.price <= 0) return Result.reject("invalid quantity or price");
             if (d.itemId == null || d.itemId.isEmpty()) return Result.reject("missing itemId");
+
+            // Asked before the deposit, and asked of the same function validate asks.
+            // Refusing after depositing left the goods in the ledger on an event whose
+            // author had just been told it failed — and the client answers a refusal by
+            // handing the physical items back, so they existed twice.
+            MarketState.SubmitResult listable =
+                    state.canDepositAndList(d.userId, d.itemId, d.quantity, d.price);
+            if (!listable.accepted) return Result.reject(listable.reason);
 
             state.deposit(d.userId, d.itemId, d.quantity);
             Order order = new Order(se.seq, d.price, d.itemId, d.quantity, false, d.userId);
@@ -515,7 +528,13 @@ public class EventApplier {
             if (d.quantity <= 0) return Result.reject("quantity must be positive");
             if (d.price <= 0) return Result.reject("price must be positive");
             if (d.itemId == null || d.itemId.isEmpty()) return Result.reject("missing itemId");
-            return Result.ok(Collections.emptyList());
+            // The listing fee, which this used not to ask about at all — so a seller
+            // who could not afford to list passed validate, was written into the log,
+            // and was refused by apply after the deposit had already landed.
+            MarketState.SubmitResult listable =
+                    state.canDepositAndList(d.userId, d.itemId, d.quantity, d.price);
+            return listable.accepted ? Result.ok(Collections.emptyList())
+                    : Result.reject(listable.reason);
         }
 
         return Result.reject("unknown event type: " + e.getClass().getSimpleName());

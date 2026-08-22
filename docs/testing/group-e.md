@@ -25,6 +25,11 @@ second market in the world (Add another market) and a foreign host visible on Ne
   on one row, field left, button right, and neither half is cut off
 - Scroll the **controls** column with the wheel. Rows should come into view from the
   bottom, and the panel beside it should not scroll instead
+- **Scroll all the way down and confirm the last row is reachable.** This is the one to
+  spend time on. The scroll extent was measured against the frame while `place()` clipped
+  rows to the panel's interior — five pixels in at each end — so the extent came up nine
+  pixels short and the bottom row could never be scrolled into view at all. In this
+  setup that row is **Remove this market**. Fixed, and untested by eye
 - Scrolled-off rows must not be clickable. Scroll a button half out of view and click
   where it was
 - Shrink the window to its smallest and confirm the column still scrolls rather than
@@ -39,19 +44,30 @@ listing fee 1, and set the free allowance above 0 by hand if you want to see esc
 Zero allowance means no escalation at all, which is the default and what existing markets
 keep. With an allowance of 3:
 
-- The first three resting orders each cost the base fee
+- The first three orders each cost the base fee
 - The fourth costs double, the fifth triple
 - **Cancel one** and the next order costs less again — the fee prices what you are
   holding open, not what you have ever placed
 - Somebody with nothing resting still pays the base fee. Never free is what the stipend's
   safety rests on
 
+This is what it does now; it is not what it did when this was written. The code counted
+only the orders already resting, so an allowance of three let *four* through at the base
+fee, and the automated test pinned that while its own comment described the behaviour
+above. Both corrected — `T1e` now reads the schedule the way this list does.
+
 ## E3. The stipend, end to end
 
 A stipend needs a listing fee first. Setting one without gives:
 
-> Set a listing fee first — a stipend with nothing to pay for it could be earned by
-> trading with yourself
+> a stipend needs a listing fee — without one, fills cost nothing to produce and anyone
+> could trade with themselves for it
+
+That wording comes from `EventApplier.stipendOutpacesItsFees` rather than from the screen.
+The screen used to phrase this itself, alongside its own copy of the interlock's
+arithmetic — and that copy was the version from before the rule was corrected twice, so
+it advertised a ceiling four times the real one. It now asks the one function, so
+whatever the engine would refuse is what you are told, in the engine's words.
 
 Then, as creator: listing fee `2`, stipend `20`.
 
@@ -67,7 +83,10 @@ crossing a stacked book produces a fill per resting order it consumes, so rest a
 small asks and sweep them to get there quickly.
 
 **The number to sanity-check:** at a listing fee of 2 with two registered identities, the
-most a stipend can be is under 50. Try 60 and it should refuse, naming the head count.
+most a stipend can be is under 50. Try 60 and it should refuse *inline, before the
+confirmation overlay*, naming the head count. Until this was fixed, 60 sailed past the
+screen's own check — which would have let anything under 200 through — and was refused by
+the engine after you had confirmed it, as a raw `Rejected:` line.
 
 ## E4. Turning it off
 
@@ -117,3 +136,46 @@ not restated goes to zero.
 - The stipend must still be there afterwards, at the same figure
 
 Same for the listing fee and the grant, in any order.
+
+## E8. Selling with no credits, which used to duplicate items
+
+The one on this list that was losing nothing and gaining items. A sell is a single
+`DepositAndList` event, and its two halves were checked in two places that disagreed:
+`validate` looked at quantity, price and item id, while `apply` deposited the goods and
+*then* asked whether the seller could pay the listing fee. So the event passed validation,
+went into the log, and was refused afterwards — with the deposit already applied. The
+client answers a refusal by handing the physical items back, so they existed on both
+sides.
+
+Note that **A5 already exercised this and was marked passing.** Its "spend down to under
+5 credits and try to sell → refused, naming the amount" is exactly the recipe; the message
+it checked for could only ever have come from the path that had already deposited.
+
+Set a listing fee of `5` and spend down to fewer than 5 credits, holding items.
+
+- Try to sell → refused **before the items leave your inventory**, naming the fee and what
+  you have. The stack should not flicker out and back
+- Your item count is unchanged, and so is your credit balance
+- Nothing appears in your market ledger for that item — check the Markets list, not just
+  the book
+- On the host's console there should be **no** `[host] BUG: validate passed but apply
+  rejected` line. That message is the fingerprint of this bug; if it appears, something
+  else has come apart the same way
+- Other clients should see no sequence gap. The refused event never enters the log now, so
+  nothing after it shifts
+- Earn or receive 5 credits and sell again → it goes through, and the fee is taken
+
+## E9. Migrating a doctored history
+
+Engine-tested (`K5b`), and worth an eye if a migration sitting happens anyway.
+`MarketArchive.verifyLines` checked signatures and the hash chain and then called `apply`,
+which enforces none of the money rules — those live in `validate`, because that is where a
+host asks them before appending. A hand-built history could therefore carry a welcome
+grant for any sum, repeated, and the balance it replayed to is what a migration brings in.
+Nothing downstream caught it: the plausibility check weighs the *items* a migrant brings
+against their own statistics, and never their credits.
+
+- An ordinary migration between two real markets still works end to end. That is the whole
+  risk in the fix — refusing too much — and it is what to actually check
+- The refusal for a bad archive names the rule, not the signature: *"event N breaks this
+  market's own rules"*

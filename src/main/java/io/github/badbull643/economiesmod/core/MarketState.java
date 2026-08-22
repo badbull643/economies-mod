@@ -8,7 +8,12 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class MarketState {
     // The CommodityMarketRegistry from sketch a map for timebeing
-    private final Map<String, OrderBook> markets = new HashMap<>();
+    //
+    // Concurrent because activeItems() hands its key set out and the render thread walks
+    // it — listing every tradable item, pricing a listing fee — while EventApplier is
+    // creating the book for an item nobody has traded before. Item ids are validated
+    // non-null before any book exists, so a map that rejects null keys costs nothing.
+    private final Map<String, OrderBook> markets = new ConcurrentHashMap<>();
     private final WalletRegistry wallets = new WalletRegistry();
 
     // What has actually traded. Derived from replay like everything else, never stored
@@ -28,9 +33,14 @@ public class MarketState {
     // the directory that lets a log be verified by someone who wasn't there when it
     // was written; it must come from the log, never from a side file.
     //
-    // Concurrent, unlike the rest of this class: the sequencer thread writes it while
-    // per-connection handshake threads read it to decide admission. A plain HashMap
-    // read during another thread's resize can spin forever on Java 8.
+    // Concurrent: the sequencer thread writes it while per-connection handshake threads
+    // read it to decide admission. A plain HashMap read during another thread's resize
+    // can spin forever on Java 8.
+    //
+    // That reasoning was written here and then not carried anywhere else, which left
+    // the wallets, the item ledger, the trade history and every order book being read
+    // by the render thread while the applier wrote them. They each guard themselves
+    // now — see WalletRegistry, ItemBalanceRegistry, TradeHistory and OrderBook.
     private final Map<UUID, String> keyDirectory = new ConcurrentHashMap<>();
 
     // Who has already had a welcome grant in this market. Per-market by construction:
@@ -237,11 +247,27 @@ public class MarketState {
         // and escalation is something somebody turns on.
         if (listingFreeOrders <= 0) return listingFee;
 
-        long over = Math.max(0, openOrderCount(userId) - listingFreeOrders);
+        // The order being placed counts towards the allowance it is charged against.
+        // "How many you may hold open before the fee climbs" means the one that takes
+        // you past the allowance is the one that pays more — counting only what was
+        // already resting gave an allowance of three four orders at the base fee, one
+        // more than the field's own description and the checklist both say.
+        long over = Math.max(0, openOrderCount(userId) + 1 - listingFreeOrders);
         return Math.multiplyExact(listingFee, over + 1);
     }
 
-    /** Orders this identity has resting across every book. */
+    /**
+     * Orders this identity has resting across every book.
+     *
+     * Each book is read under its own monitor, so no single read can catch one mid-
+     * match, but the walk across books is not one atomic moment. That is exactly right
+     * for the two callers and worth being explicit about, because a fee every replica
+     * has to agree on cannot be allowed to depend on timing: EventApplier calls this on
+     * the applier thread, where it is the only thread touching any of these books, so
+     * the figure it charges is exact and reproducible. The render thread calls it only
+     * to show what an order would cost, where a count that is one stale for a frame
+     * shows a stale quote and changes nothing.
+     */
     public long openOrderCount(UUID userId) {
         if (userId == null) return 0;
         long n = 0;
@@ -415,8 +441,9 @@ public class MarketState {
         // Charged on placement, kept on cancellation, and burned like the trading fee.
         // Refunding it would deter nothing, which is the only thing it is for.
         //
-        // Read before the order joins the book, so the order being placed is not itself
-        // counted in the allowance it is being charged against.
+        // Read before the order joins the book. listingFeeFor adds this order to the
+        // count itself, so reading afterwards would count it twice — and canSubmit,
+        // which has to agree to the credit, reads it from the same side of the join.
         long fee = listingFeeFor(order.userID());
         if (fee > 0) {
             wallets.adjust(order.userID(), -fee);
@@ -481,12 +508,8 @@ public class MarketState {
             // A sell offers goods but still pays to be listed, so it needs credits it
             // is not otherwise spending. Checked here rather than discovered during
             // settlement, where the order would already have been accepted.
-            long fee = listingFeeFor(order.userID());
-            if (fee > 0 && wallets.getBalance(order.userID()) < fee) {
-                return SubmitResult.reject("listing costs " + fee
-                        + " credits and you have "
-                        + wallets.getBalance(order.userID()));
-            }
+            String unaffordable = listingUnaffordable(order.userID());
+            if (unaffordable != null) return SubmitResult.reject(unaffordable);
         } else {
             long maxCost;
             try {
@@ -504,6 +527,52 @@ public class MarketState {
                         : "insufficient credits");
             }
         }
+
+        return SubmitResult.ok(Collections.emptyList());
+    }
+
+    /**
+     * Why this identity cannot pay to list right now, or null.
+     *
+     * One place, because two callers need the same answer about the same moment. An
+     * ordinary sell asks it through canSubmit; a deposit-and-list has to ask it before
+     * the deposit rather than after, and a second copy of the arithmetic is how those
+     * two would come to disagree.
+     */
+    private String listingUnaffordable(UUID userId) {
+        long fee = listingFeeFor(userId);
+        if (fee > 0 && wallets.getBalance(userId) < fee) {
+            return "listing costs " + fee + " credits and you have "
+                    + wallets.getBalance(userId);
+        }
+        return null;
+    }
+
+    /**
+     * Whether a deposit-and-list would be accepted, asked before anything is deposited.
+     *
+     * The two halves of that event cannot be checked the way an ordinary order is. The
+     * deposit is what makes the listing affordable in goods, so canSubmit cannot answer
+     * until it has happened — and asking afterwards meant a refusal left the goods in
+     * the ledger on an event the author had just been told had failed, while the client
+     * handed the physical items back. Items on both sides of that is the whole reason
+     * this exists.
+     *
+     * So: everything the listing needs that the deposit does not provide, asked here,
+     * and asked by validate and apply alike.
+     */
+    public SubmitResult canDepositAndList(UUID userId, String itemId, long qty, long price) {
+        if (qty <= 0 || price <= 0) {
+            return SubmitResult.reject("volume and price must be positive");
+        }
+        // deposit() declines silently on overflow rather than throwing, which would
+        // leave the order short of goods it was told it had. Refuse it here instead.
+        long held = itemBalances.getBalance(userId, itemId);
+        if (held > Long.MAX_VALUE - qty) {
+            return SubmitResult.reject("that would overflow your balance of " + itemId);
+        }
+        String unaffordable = listingUnaffordable(userId);
+        if (unaffordable != null) return SubmitResult.reject(unaffordable);
 
         return SubmitResult.ok(Collections.emptyList());
     }
