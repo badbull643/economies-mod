@@ -454,7 +454,21 @@ public class ServerConfig {
     /** Writes this config out, so an operator has a file to edit rather than a guess. */
     public void save(Path file) throws IOException {
         if (file.getParent() != null) Files.createDirectories(file.getParent());
-        Files.write(file, gson.toJson(this).getBytes(StandardCharsets.UTF_8));
+
+        // Gson omits nulls, so a Boolean left unset is a setting the operator cannot
+        // discover exists — which is precisely how acceptsMigration shipped invisible:
+        // present in the code, documented in the checklist, and absent from every config
+        // file anyone had. Write the resolved answer instead of the unset marker.
+        //
+        // --help calls this "the effective config", and a default nobody can see is not
+        // effective config. Written as the value it currently resolves to, so an
+        // operator who wants the other one edits a line that is already in front of them
+        // rather than having to know the key's name.
+        //
+        // On a tree rather than by mutating this, so saving a config does not change it.
+        com.google.gson.JsonObject out = gson.toJsonTree(this).getAsJsonObject();
+        out.addProperty("acceptsMigration", acceptsMigration());
+        Files.write(file, gson.toJson(out).getBytes(StandardCharsets.UTF_8));
     }
 
     /**

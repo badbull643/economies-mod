@@ -1486,6 +1486,33 @@ public class MarketTests {
                     "127.0.0.1".equals(back.bindAddress) ? 1 : 0, 1);
             check("creator survives",
                     ALICE.toString().equals(back.creatorUserId) ? 1 : 0, 1);
+
+            // A setting that is null in the object is omitted by Gson, so it never
+            // reaches the file and an operator has no way to learn it exists. That is
+            // how acceptsMigration shipped: in the code, in the checklist, and in
+            // nobody's config. save() writes the resolved answer for exactly this.
+            String written = new String(Files.readAllBytes(f), "UTF-8");
+            check("an unset default still reaches the file",
+                    written.contains("acceptsMigration") ? 1 : 0, 1);
+            check("as the answer it resolves to, not as null",
+                    written.contains("\"acceptsMigration\": true") ? 1 : 0, 1);
+            check("and reads back as an explicit value",
+                    Boolean.TRUE.equals(back.acceptsMigration) ? 1 : 0, 1);
+            check("which still resolves the same way",
+                    back.acceptsMigration() ? 1 : 0, 1);
+
+            // The other side of it: a dedicated server's file has to say false, or the
+            // operator reads the friend-group answer and believes it.
+            Path g = scratch("test-serverconfig-r1-dedicated.json");
+            Files.deleteIfExists(g);
+            ServerConfig box = ServerConfig.friendGroup(25611);
+            box.dedicated = true;
+            box.save(g);
+            check("a dedicated server writes the dedicated answer",
+                    new String(Files.readAllBytes(g), "UTF-8")
+                            .contains("\"acceptsMigration\": false") ? 1 : 0, 1);
+            check("and it survives the round trip",
+                    ServerConfig.load(g).acceptsMigration() ? 1 : 0, 0);
         }
 
         section("R2: a server nobody could use is refused, not clamped");
