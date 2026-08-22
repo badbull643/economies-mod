@@ -17,10 +17,10 @@ individual item on it.
 `E11` also had to be rewritten: it pointed at the migrant's own credit counter, which is
 the one number migration guarantees will not change. It looked like a failure and was not.
 
-### Two items want a five-minute re-check
+### Three items want a short re-check
 
-Everything was tested against the code as it stood, **except** two runtime changes that
-landed at 13:58, after the session ended (`59eb94f`). Both are in `MarketScreen`:
+Everything was tested against the code as it stood. Two runtime changes landed at 13:58
+after the session ended (`59eb94f`), both in `MarketScreen`, and `E17` is new work since:
 
 - **`E13`** — `Disconnect` is now keyed to the mode rather than the live socket. The new
   case is the only one worth re-running: **let the host drop you, then confirm Disconnect
@@ -30,6 +30,8 @@ landed at 13:58, after the session ended (`59eb94f`). Both are in `MarketScreen`
   differs when **two or more** foreign markets are visible at once, one of them a
   dedicated server: Migrate should be offered, targeting the non-dedicated one. With only
   the server visible, nothing changed
+- **`E17`** is new since the sitting and has not been run at all: the welcome-grant
+  ceiling now differs by who is hosting. Worth five minutes on its own.
 
 Nothing else on this list has moved since it was run.
 
@@ -38,7 +40,7 @@ Nothing else on this list has moved since it was run.
 *The stipend, the escalating listing fee, the welcome grant control, and a Market column
 that now scrolls. The UI half mattered most, because nobody had looked at it.*
 
-Run the suites first. Expect `508 / 6 / 5 / 16 / 21 / 6 / 12 / 16`:
+Run the suites first. Expect `520 / 6 / 5 / 16 / 25 / 6 / 12 / 16`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -523,3 +525,39 @@ With **two** players in one market, both migrating into a third:
   a migration"* for each of them, which is the correct refusal
 - Then try a **second** migration for one of them, from a market they make fresh → refused.
   That is the mint, and it stays shut
+
+## E17. The welcome-grant ceiling, which differs by who is hosting
+
+Somebody hosting from their game may now grant at most **10,000**. A dedicated server
+keeps the compiled 1,000,000, because it is the deployment that might legitimately want a
+large one — set once by an operator — rather than one keystroke from a player wondering
+what happens. `maxWelcomeGrant` in `host-config.json` moves either.
+
+It is a **host rule**, not a market rule, and that is not a detail. The ceiling in
+`EventApplier` is replicated: every replica must reach the same verdict on the same event.
+"Rotating" and "dedicated" describe whoever is hosting *at this moment*, so a ceiling that
+told them apart there would make one policy event legal on one host and illegal on the
+next — and hosting rotates by design. It also means **nothing existing breaks**: a market
+that already set a larger grant still replays its own policy, because only the next change
+is judged.
+
+As the creator of a market hosted from your own game:
+
+- Type a grant of `20000` → refused inline, naming 10,000, before any confirmation
+- `5000` → the DANGER overlay as before, and it goes through
+- **Check an existing market with a big grant still opens.** If one is lying around from
+  earlier testing with a grant above 10,000, load it: it must replay and trade normally.
+  Only *setting* a new one is capped
+- Now host that same market from a dedicated server with `welcomeGrant` under its own
+  ceiling → the larger figure is still sequenced there
+
+And the console refusal, which needs a second client proposing it rather than the screen:
+
+```
+[host] refused a welcome grant of 20000 — this host allows 10000
+```
+
+- Put `maxWelcomeGrant: 500` in a world's `host-config.json` with `welcomeGrant` **above**
+  it → the host refuses to start, naming both figures. A server that would decline to
+  sequence the grant it had just bootstrapped with is arguing with itself, and it says so
+  rather than starting

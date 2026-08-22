@@ -60,20 +60,29 @@ means wrong balances.
 
 ---
 
-## 3. `MAX_WELCOME_GRANT` is 1,000,000
+## 3. ~~`MAX_WELCOME_GRANT` is 1,000,000~~ — DONE 2026-08-22
 
-Against items that trade for 1 or 2. Four orders of magnitude nobody needs, and it is the
-number every migration problem is denominated in — the ceiling is what a market can hand
-somebody to carry somewhere else. Lowering it to something like 10,000 would bound that
-whole family at once without adding a rule anywhere.
+Somebody hosting from their game now caps the welcome grant at
+`ROTATING_MAX_WELCOME_GRANT`, **10,000**, against items that trade for 1 or 2. A
+dedicated server keeps the compiled 1,000,000: it is the deployment that might
+legitimately want a large one, set once by an operator who thought about it, rather than
+one keystroke from a player wondering what would happen. `maxWelcomeGrant` in
+`host-config.json` moves it either way.
 
-**Cost of not doing it:** every cap and interlock downstream has to be sized against a
-number far larger than any real market uses.
+**Not the change this entry originally described, and the difference is the point.**
+Lowering `MAX_WELCOME_GRANT` itself was the obvious move and was blocked by exactly the
+objection recorded here: it lives in `EventApplier.validate`, which is replicated, so any
+market that had already set a larger grant would stop being able to replay its own
+recorded policy.
 
-**Why it is not done:** it is a balance change rather than a repair, and it has a nasty
-edge — any existing market that already set a grant above a new ceiling would have
-`validate` refuse its own recorded policy on replay, making that market unopenable. Needs
-a grandfathering decision before anyone touches it.
+It is a **host rule** instead, beside admission and the deposit caps. History stays valid;
+only the next change is judged; nothing existing breaks. And it had to be a host rule for
+a second reason that only appeared while building it — "rotating" and "dedicated" describe
+whoever is hosting *right now*, so a ceiling that told them apart inside `validate` would
+make one policy event legal on one host and illegal on the next, and hosting rotates by
+design.
+
+`R1b` covers the figures, `A9` the refusal reaching the wire.
 
 ---
 
@@ -103,17 +112,20 @@ and a layer split makes it structural.
 
 ---
 
-## 6. Sub-unit prices
-
-Denominate in hundredths as integers, never floats — Java 8 without `strictfp` is not
-reproducible across platforms, which would fork replicas. Gives roughly 100× headroom
-before the integer price floor of 1 starts destroying the price signal.
-
-**Cost of not doing it:** low, and lower than it was. This treats the symptom; the
-stipend now addresses the cause by putting a floor under the money supply. Reach for it
-only if a real market is seen pressing against the floor.
-
 ---
+
+## Dropped
+
+**Sub-unit prices** — denominating in hundredths so prices have room below 1. Dropped
+2026-08-22 rather than deferred, so it stops being reconsidered every time somebody reads
+this file. It treated a symptom the stipend already treats at the cause by putting a floor
+under the money supply, and the price floor has never actually been hit by a real market.
+If one is ever seen pressing against it, that is a new observation and this can be argued
+again from it.
+
+The constraint it carried is worth keeping wherever prices are touched: **integers, never
+floats.** Java 8 without `strictfp` is not reproducible across platforms, and two replicas
+that disagree in the last bit have forked.
 
 ## Not on this list
 

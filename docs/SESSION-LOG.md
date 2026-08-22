@@ -33,7 +33,7 @@ Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`508 / 6 / 5 / 16 / 21 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
+`520 / 6 / 5 / 16 / 25 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -307,8 +307,8 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 508   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
-admissionTest 21   depositCapTest 6   attestationTest 12   hostTrustTest 16
+coreTests 520   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+admissionTest 25   depositCapTest 6   attestationTest 12   hostTrustTest 16
 ```
 
 *(437 across seven suites when this section was written; the extra 23 checks and the
@@ -481,11 +481,16 @@ of the same items is §4 again, in prose.*
 - Whether the stipend's interval of 50 is right. It is a guess, and nothing has watched a
   real session. Fills only accrue while somebody is hosting and connected — there is no
   offline trading — so a small group produces them slowly.
-- Whether the welcome-grant ceiling should come down. Backlog item 3 has the argument;
-  the decision is the blocker, not the code, because lowering it can make an existing
-  market's own recorded policy invalid on replay.
-- Whether `MarketScreen` gets split — backlog item 5 — and whether sub-unit prices are
-  ever worth it — backlog item 6.
+- ~~Whether the welcome-grant ceiling should come down.~~ **Decided and done,
+  2026-08-22** — 10,000 for somebody hosting from their game, the compiled 1,000,000 kept
+  for a dedicated server, `maxWelcomeGrant` to move either. The blocker recorded here was
+  real and was routed around rather than solved: it is a host rule, so `validate` is
+  untouched and no existing market's recorded policy becomes invalid. Backlog item 3.
+- ~~Whether sub-unit prices are ever worth it.~~ **Dropped, 2026-08-22.** Not deferred —
+  removed from the backlog so it stops being reconsidered. The stipend treats the cause;
+  this treated the symptom; and no real market has been seen pressing against the price
+  floor. See the Dropped section there for the one constraint worth keeping.
+- Whether `MarketScreen` gets split — backlog item 5.
 
 ## 9. Loose ends in the tree
 

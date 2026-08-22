@@ -1826,8 +1826,16 @@ public class MarketScreen extends Screen {
             status = "A welcome grant cannot be negative";
             return;
         }
-        if (amount > MarketState.MAX_WELCOME_GRANT) {
-            status = "The most a market may grant is " + MarketState.MAX_WELCOME_GRANT;
+        // The figure a host will actually sequence, not the compiled backstop. Which
+        // host decides is not knowable from here — it is a host rule, like admission —
+        // so this quotes the one that applies to somebody hosting in their own game,
+        // which is who is reading it. A dedicated server allows more and says so if you
+        // ask it for more.
+        if (amount > ServerConfig.ROTATING_MAX_WELCOME_GRANT) {
+            status = "The most a market hosted from a game may grant is "
+                    + ServerConfig.ROTATING_MAX_WELCOME_GRANT
+                    + " — a grant far above what things trade for is the largest single"
+                    + " lever on what credits are worth";
             return;
         }
 

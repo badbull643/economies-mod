@@ -97,6 +97,7 @@ public class AdmissionTest {
         aFailedStartWritesNothing();
         migrationIsWeighedAgainstStatistics();
         aDedicatedServerDeclinesMigration();
+        aHostCapsTheWelcomeGrant();
 
         System.out.println();
         if (failures == 0) {
@@ -187,6 +188,96 @@ public class AdmissionTest {
         } finally {
             host.stop();
         }
+    }
+
+    /**
+     * A9: a host refuses to sequence a welcome grant above its own ceiling.
+     *
+     * Over the wire, because the whole design of this rests on it being a *host* rule
+     * rather than a replicated one, and a config field nobody consults is not a rule at
+     * all. R1b covers the figures; this covers the refusal actually reaching the path
+     * that writes policy into the log.
+     */
+    private static void aHostCapsTheWelcomeGrant() throws Exception {
+        System.out.println("  [A9: a host caps the welcome grant it will sequence]");
+
+        Path hostLog = dir.resolve("adm-grant-cap.jsonl");
+        Files.deleteIfExists(hostLog);
+        Files.deleteIfExists(dir.resolve("adm-grant-client.jsonl"));
+
+        PlayerKeys keys = PlayerKeys.generate();
+        EventLog log = new EventLog(hostLog);
+        // INVITED creates it, so INVITED is the creator and may set policy at all.
+        MarketBootstrap.createMarket(log, INVITED, "capped market", keys);
+
+        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        cfg.hostName = "somebody's game";
+        cfg.hostUserId = HOST.toString();
+        cfg.maxWelcomeGrant = 500L;
+        // Under the cap, or the host refuses to start — which is problem() catching a
+        // server that would decline to sequence the grant it had just bootstrapped with,
+        // and it caught this fixture the first time it ran.
+        cfg.welcomeGrant = 100L;
+
+        HostServer host = new HostServer(cfg, hostLog, keys,
+                new PeerCache(dir.resolve("adm-host-peers.json")));
+        Thread t = new Thread(() -> {
+            try { host.start(); } catch (IOException e) { /* stopped */ }
+        }, "grant-cap-test-host");
+        t.setDaemon(true);
+        t.start();
+        IOException bindError = host.awaitBound(5000);
+        if (bindError != null) throw bindError;
+
+        try {
+            MarketClient client = new MarketClient(INVITED, "Creator", keys,
+                    new EventLog(dir.resolve("adm-grant-client.jsonl")), true,
+                    new PeerCache(dir.resolve("adm-client-peers.json")), 0);
+            final String[] refusal = new String[1];
+            client.setOnRejected(why -> refusal[0] = why);
+            client.connect("127.0.0.1", cfg.port);
+
+            // From the file, never from this EventLog instance. lastSeq is cached when
+            // the object is built and the host appends through its own — so asking the
+            // test's copy measures nothing at all, and passes by never changing. Same
+            // staleness MarketClient had, found here by the check that would not move.
+            long before = eventsIn(hostLog);
+            client.propose(policyGranting(600));
+            Thread.sleep(1200);
+
+            check("a grant over the ceiling is refused", eventsIn(hostLog), before);
+            check("and says what this host allows",
+                    String.valueOf(refusal[0]).contains("500") ? 1 : 0, 1);
+
+            // Under it goes through, or the cap would be a wall rather than a ceiling.
+            refusal[0] = null;
+            client.propose(policyGranting(400));
+            Thread.sleep(1200);
+            check("one under it is sequenced", eventsIn(hostLog), before + 1);
+            check("with nothing refused", refusal[0] == null ? 1 : 0, 1);
+
+            client.disconnect();
+        } finally {
+            host.stop();
+        }
+    }
+
+    /** Events actually on disk, read fresh every call. */
+    private static long eventsIn(Path log) throws IOException {
+        long n = 0;
+        for (String line : Files.readAllLines(log)) {
+            if (line != null && !line.trim().isEmpty()) n++;
+        }
+        return n;
+    }
+
+    /** A whole policy, since a MarketPolicy that omits a field sets it to zero. */
+    private static Event.MarketPolicy policyGranting(long grant) {
+        Event.MarketPolicy mp = new Event.MarketPolicy();
+        mp.userId = INVITED;
+        mp.grantAmount = grant;
+        mp.timestamp = System.currentTimeMillis();
+        return mp;
     }
 
     /** The policy has to let the right people through, or it is just a closed door. */
