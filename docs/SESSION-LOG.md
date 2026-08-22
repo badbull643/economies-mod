@@ -16,8 +16,9 @@ in-progress edit to pick up.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `572 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. If any of it fails on a clean
-checkout, that is news — it has only ever been run on one machine (backlog item 4).
+Expect `572 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
+since 2026-08-23, so a failure here that passes there — or the reverse — is about the
+machine rather than the code, and is worth chasing as such.
 
 **Where the code is.** Branch `trust-model-and-migration`, ahead of its remote and 0
 behind. Don't trust that sentence for a number — the count has been wrong in this header
@@ -44,10 +45,12 @@ nothing depends on that.
 4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was §0.26 — a
-high-water mark that can be withdrawn by whoever set it. **`E17`, `E17b`, `E19b`, `E21`,
-`E22` and `E23`, plus the `E13`/`E14` re-checks, are all unrun**, and every one of them
-touches code written on 2026-08-22.
+**What is being worked on right now:** nothing. The last thing finished was backlog item
+4 — CI, and the port race that had to be fixed before it. **The suites now run on every
+push**, which changes what the sentence above this one is worth.
+
+Still a person at a keyboard: `E9` and `E23` in `docs/testing/group-e.md`, which the
+author has said they will run later. Nothing in CI launches Minecraft.
 
 ---
 
@@ -55,7 +58,7 @@ touches code written on 2026-08-22.
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found twenty-six defects in code that had 437 passing checks behind it — one a whole
+and it found twenty-seven defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
@@ -692,6 +695,51 @@ immediate re-run. Nothing in the checks; most likely a port race in the suites t
 sockets — `freePort()` picks one, closes it, and hands it to a server to rebind. Worth
 knowing before somebody writes the CI workflow and concludes the tests are broken.
 
+And a twenty-seventh, which is the flake from §0.26's closing note, found on purpose:
+
+27. **Every suite picked its port from the range the operating system hands to outgoing
+    connections.** Eight copies of the same five lines:
+
+    ```java
+    try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
+    ```
+
+    which opens a port, **closes it**, and hands the number to a HostServer to bind.
+    Between those two steps the port belongs to nobody — and port 0 asks for one from the
+    *ephemeral* range, which is where the OS also draws source ports for outbound sockets.
+    These suites open a great many outbound sockets. So the number reserved could be taken
+    by this very process before the server bound it.
+
+    It went red twice on 2026-08-22 with **every check passing**, which is the failure
+    shape that teaches people to ignore a CI tick — so it was fixed before the workflow
+    that would have hit it. `TestPorts` draws from 20000–30000, below the ephemeral range
+    on both Linux and Windows; remembers what it has handed out, so two suites in one JVM
+    cannot collide; and probes a candidate exactly as the server will bind it —
+    `new ServerSocket(port)` on the wildcard address, not loopback, because a probe that
+    binds more narrowly than the server proves nothing. Three consecutive full runs green.
+
+    The window between probe and bind is still there. Closing it means handing the bound
+    socket itself to `HostServer`, which is changing production code to suit its tests;
+    what changed instead is that nothing else is competing for the number.
+
+    §4 again, eight times over, in the one place nobody thinks to look for it — a helper
+    duplicated across eight files, all wrong in the same way because they were copied from
+    each other. Worth noting it took a CI plan to find: the suites had run hundreds of
+    times on one machine, in ones and twos, and only running all nine together made it
+    likely enough to see.
+
+**And backlog item 4 is done.** `.github/workflows/tests.yml` runs the nine suites on
+every push and then builds. Two JDKs, since Gradle 9 needs 17 to run itself and the mod
+compiles against 8. The checkout's tracked `build/` and `.gradle/` directories are deleted
+before anything is built — this repository carries one machine's compiled classes and
+Gradle file hashes by design, and leaving them in place would prove only that this
+machine's build state still works, which was never in doubt.
+
+What it does **not** cover is worth being clear about, because a green tick is persuasive.
+Nothing in CI launches Minecraft, so every item in `docs/testing/group-e.md` is still a
+person at a keyboard — and four of the defects in §0 were geometry, a list drawn past the
+bottom of its box, which no suite here would have seen.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -840,8 +888,10 @@ grant finally has a control — see §7.
 - **`.gitignore` is gone**, removed deliberately, so `build/`, `run/` and
   `server-identity.key` are tracked. That last is an unencrypted private key. Raised, and
   the decision reaffirmed — recorded here because it is not obvious from the tree.
-- **Never built from a clean checkout, and no CI.** Every claim that this works rests on
-  one machine.
+- ~~**Never built from a clean checkout, and no CI.**~~ Both since 2026-08-23 — see §0.27
+  and backlog item 4. What CI does not do is launch Minecraft, so every live item in
+  `docs/testing/group-e.md` still rests on somebody running it, and four of §0's defects
+  were geometry no suite would have caught.
 - **Host rules do not travel.** Deposit caps, admission, attestation and now
   `maxMigratedCredits` are per-host, read from that host's own `host-config.json`, so they
   change when hosting rotates and a group cannot agree them once. Market rules — fees,

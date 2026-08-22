@@ -9,7 +9,6 @@ import io.github.badbull643.economiesmod.core.ServerConfig;
 import io.github.badbull643.economiesmod.core.WorldAttestation;
 
 import java.io.IOException;
-import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -96,7 +95,7 @@ public class AttestationTest {
     private static void creativeWorldRefusedAtHandshake(Path hostLog) throws Exception {
         System.out.println("  [A1: a creative world is refused, when the host asks]");
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostUserId = HOST.toString();
         cfg.refuseCreativeWorlds = true;
 
@@ -139,7 +138,7 @@ public class AttestationTest {
     private static void contradictionRefusedAtDeposit(Path hostLog) throws Exception {
         System.out.println("  [A2: claimed play time is checked against what arrives]");
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostUserId = HOST.toString();
         cfg.maxDepositUnitsPerPlayHour = 100;
 
@@ -186,7 +185,7 @@ public class AttestationTest {
             throws Exception {
         System.out.println("  [A3: cheats switched on after connecting are caught]");
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostUserId = HOST.toString();
         cfg.refuseCheatWorlds = true;
         cfg.banOnWorldChange = true;
@@ -301,12 +300,6 @@ public class AttestationTest {
         long deadline = System.currentTimeMillis() + 5000;
         while (System.currentTimeMillis() < deadline && slot[0] == null) {
             Thread.sleep(25);
-        }
-    }
-
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
         }
     }
 }

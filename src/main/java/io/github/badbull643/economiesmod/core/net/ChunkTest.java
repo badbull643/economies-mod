@@ -95,7 +95,7 @@ public class ChunkTest {
         int expectedChunks = MessageChannel.chunkByByteBudget(raw).size();
         check("splits into more than one chunk", expectedChunks > 1 ? 1 : 0, 1);
 
-        int port = freePort();
+        int port = TestPorts.free();
         HostServer host = new HostServer(port, hostLog, "chunkhost", HOST_ID.toString(),
                 hostKeys, new PeerCache(dir.resolve("chunk-host-peers.json")), 0L);
 
@@ -140,11 +140,5 @@ public class ChunkTest {
 
     private static long totalBytes(Path file) throws IOException {
         return Files.size(file);
-    }
-
-    private static int freePort() throws IOException {
-        try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
-            return s.getLocalPort();
-        }
     }
 }

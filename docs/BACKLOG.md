@@ -111,22 +111,32 @@ design.
 
 ---
 
-## 4. No CI, and never built from a clean checkout
+## 4. ~~No CI, and never built from a clean checkout~~ — DONE 2026-08-23
 
-Every claim that this works rests on one machine, and the suites are only ever run by
-somebody remembering to run them.
+`.github/workflows/tests.yml` runs the nine suites on every push, then builds. Two JDKs,
+because Gradle 9 needs 17 or later to run itself and the mod compiles against 8 —
+`setup-java` exports `JAVA_HOME_8_X64` and `org.gradle.java.installations.fromEnv` points
+the toolchain straight at it rather than leaving Gradle to guess or to download one.
 
-**Cost of not doing it:** unknown, which is the point. A missing file or a machine-local
-dependency would not be noticed until somebody else tried to build.
+**The clean-checkout half needed a step of its own.** This repository tracks `build/` and
+`.gradle/` — deliberately, since `.gitignore` was removed on purpose — so a fresh checkout
+arrives carrying one machine's compiled classes, Loom caches and Gradle file hashes. They
+are removed before anything is built, because otherwise the run proves that this machine's
+build state still works, which is the thing already known.
 
-Cheap to fix badly (a workflow that runs the nine suites), and the cheap version is most
-of the value.
+**The port race was fixed first, and had to be.** Two nine-suite runs went red on
+2026-08-22 with every check passing — the shape of failure that teaches people to ignore
+CI. Eight suites each had their own copy of `new ServerSocket(0)`, which opens a port,
+closes it, and hands the number to a HostServer to bind; port 0 draws from the *ephemeral*
+range, which is the same range the operating system hands out for outgoing connections,
+and these suites make a great many of those. `TestPorts` draws from 20000–30000 instead,
+remembers what it gave out, and probes a candidate the way the server will bind it. Three
+consecutive full runs, all green.
 
-**Read §0.26's closing note first.** Running all nine in one gradle invocation failed the
-build twice on 2026-08-22 with every suite reporting all checks passed, and succeeded on
-an immediate re-run — most likely a port race in the suites that bind sockets. A CI
-workflow that hits that on its first day will look like the tests are broken when they are
-not.
+**What is not covered**, and is worth knowing before trusting a green tick: nothing here
+launches Minecraft, so every live item in `docs/testing/group-e.md` is still a person at a
+keyboard. Four of the defects in the session log's §0 were geometry — a list drawn past
+the bottom of its box — and no suite here would have seen any of them.
 
 ---
 
