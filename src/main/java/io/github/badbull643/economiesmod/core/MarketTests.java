@@ -899,6 +899,76 @@ public class MarketTests {
                     EventApplier.validate(live, se).accepted ? 1 : 0, 1);
         }
 
+        section("M6e: two people leaving one market together both get in");
+        {
+            // The ordinary case, and the one M6b could not see. M6b migrates the same
+            // identity repeatedly from markets it keeps creating, which is the abuse —
+            // so a guard that refused *everyone from a market somebody had migrated out
+            // of* passed M6b perfectly while breaking the case anybody would actually
+            // hit: a pair of friends moving their market into a bigger one.
+            //
+            // The first migration files every participant of the market it came from, to
+            // stop them collecting a welcome grant on top of a balance they already have.
+            // Reading that set as "has migrated" turned the second friend away.
+            Path file = scratch("test-log-m6e.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+
+            UUID theirMarket = UUID.randomUUID();          // one market, two people
+            List<UUID> both = java.util.Arrays.asList(CAROL, DAVE);
+            long seqAt = log.lastSeq();
+            int landed = 0;
+
+            for (UUID who : both) {
+                Event.MigrateBalance mb = new Event.MigrateBalance();
+                mb.userId = ALICE;
+                mb.marketId = live.marketId();
+                mb.fromMarketId = theirMarket;             // the SAME source for both
+                mb.fromMarketName = "their shared market";
+                mb.beneficiary = who;
+                mb.credits = 1000;
+                mb.items = new java.util.TreeMap<>();
+                mb.foreignParticipants = both;             // everyone registered there
+
+                SequencedEvent se = new SequencedEvent();
+                se.seq = ++seqAt;
+                se.event = mb;
+                if (EventApplier.validate(live, se).accepted) {
+                    landed++;
+                    EventApplier.apply(live, se);
+                }
+            }
+
+            check("both of them land", landed, 2);
+            check("carol brought hers", live.wallets().getBalance(CAROL), 1000);
+            check("and dave brought his", live.wallets().getBalance(DAVE), 1000);
+
+            // Still no welcome grant on top — that is what filing the participants is
+            // actually for, and it has to keep working now something else does the
+            // refusing.
+            register(log, live, CAROL);
+            check("but neither collects a grant as well",
+                    grantRejection(live, ALICE, CAROL, live.welcomeGrant()) != null ? 1 : 0, 1);
+
+            // And the mint is still shut: a second arrival by the same identity, from a
+            // market they have just made, is refused however new that market's id is.
+            Event.MigrateBalance again = new Event.MigrateBalance();
+            again.userId = ALICE;
+            again.marketId = live.marketId();
+            again.fromMarketId = UUID.randomUUID();
+            again.beneficiary = DAVE;
+            again.credits = 1000;
+            again.items = new java.util.TreeMap<>();
+            again.foreignParticipants = java.util.Arrays.asList(DAVE);
+            SequencedEvent se = new SequencedEvent();
+            se.seq = ++seqAt;
+            se.event = again;
+            check("and a second helping is still refused",
+                    EventApplier.validate(live, se).accepted ? 1 : 0, 0);
+        }
+
         section("M6c: a host may cap how much money one migration carries in");
         {
             // The honest half of the same problem, which no rule above touches. Two
