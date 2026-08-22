@@ -33,7 +33,7 @@ Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`505 / 6 / 5 / 16 / 21 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
+`508 / 6 / 5 / 16 / 21 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -307,7 +307,7 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 505   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 508   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 21   depositCapTest 6   attestationTest 12   hostTrustTest 16
 ```
 

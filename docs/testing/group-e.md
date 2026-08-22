@@ -4,7 +4,7 @@
 that now scrolls. All of it has automated coverage and none of it has been run in game.
 The UI half matters most, because nobody has looked at it.*
 
-Run the suites first. Expect `505 / 6 / 5 / 16 / 21 / 6 / 12 / 16`:
+Run the suites first. Expect `508 / 6 / 5 / 16 / 21 / 6 / 12 / 16`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -356,8 +356,12 @@ only the one that applies is live.
 - It **cannot reconnect** — the port is closed, not merely unadvertised
 - Your own Network tab no longer lists you as hosting, and neither does theirs after a
   **Refresh hosts**
-- **Stop hosting** is greyed while you are not hosting; **Disconnect** is greyed while
-  you are. Only one of the pair is ever live
+- **Stop hosting** is live only while hosting; **Disconnect** only while on somebody
+  else's host. Offline, **both are greyed** — there is nothing to leave
+- **Disconnect stays live if the host drops you.** That state exists (the Trading tab
+  says *"Connection to the host was lost — reconnect to trade"*), and it is exactly when
+  somebody wants to press it. It is keyed to the mode, not to the live socket, because
+  keying it to the socket left you in a market you could neither trade in nor leave
 - Now trade or change a policy → your log is still healthy. No *"your log is damaged"*
   banner, no duplicate sequence numbers. This is the half that was silent
 - Repeat with **Stop hosting** instead of Disconnect; both should do the same thing now

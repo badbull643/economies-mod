@@ -716,8 +716,13 @@ public class MarketScreen extends Screen {
         // meant somebody hosting reached for Disconnect — the left one, and the word
         // people use — and stopped only their own self-connection.
         if (disconnectButton != null) {
-            disconnectButton.active = disconnectButton.visible
-                    && MarketStateHolder.isConnected() && !hosting;
+            // On the mode, not on the live socket. Being in CONNECTED with a dead client
+            // is a state this code already knows about — requireConnected has a message
+            // for exactly it — and it is precisely when somebody wants to press
+            // Disconnect. Greying it on isConnected() left them in a market they could
+            // not trade in and could not leave.
+            disconnectButton.active = disconnectButton.visible && !hosting
+                    && MarketStateHolder.mode() != MarketStateHolder.Mode.LOCAL;
         }
         if (stopHostButton != null) {
             stopHostButton.active = stopHostButton.visible && hosting;
@@ -1374,10 +1379,21 @@ public class MarketScreen extends Screen {
         MarketState mine = MarketStateHolder.get();
         if (mine == null || mine.marketId() == null) return null;
         String myMarket = mine.marketId().toString();
+
+        // Prefers one you could actually migrate to. There can be several foreign
+        // markets on the network and this picks one of them for the whole Market
+        // column — which used to be arbitrary and harmless, because every answer led to
+        // the same offer. It stopped being harmless when a dedicated server started
+        // meaning "no Migrate at all": whichever host the poll happened to list first
+        // then decided whether the button existed, so a box could hide a migration to
+        // somebody else's game entirely.
+        PeerPoll.HostInfo fallback = null;
         for (PeerPoll.HostInfo h : discovered) {
-            if (h.reply.marketId != null && !myMarket.equals(h.reply.marketId)) return h;
+            if (h.reply.marketId == null || myMarket.equals(h.reply.marketId)) continue;
+            if (!h.reply.dedicated) return h;
+            if (fallback == null) fallback = h;
         }
-        return null;
+        return fallback;
     }
 
     /**
