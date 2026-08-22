@@ -365,3 +365,39 @@ what to do instead rather than only "no".
 Then confirm nothing regressed for the ordinary case: two in-game hosts, different
 markets, Migrate between them still offered and still works. That path is unchanged and
 is the one this could plausibly have broken.
+
+## E15. The guidance column, which now scrolls too
+
+Reported from play, with a screenshot: the **Markets in this world** switcher was simply
+absent. Not cut off — gone.
+
+The left column on the Market tab stacks a heading, a paragraph, sometimes a second one
+about a host on the network, this market's facts, and the switcher. It had no bottom, and
+each piece independently gave up when it ran out of room:
+
+```java
+if (y > panelBottom() - 24) { slotListTop = -1; return; }   // the switcher
+if (y > panelBottom() - 40) return y;                        // About this market
+```
+
+The switcher is last, so it went first — and it is the only *control* in that column, so
+the one thing that had to survive was the one thing guaranteed not to. A longer paragraph
+was enough to trigger it, which is exactly what `E14`'s dedicated-server advice added.
+
+It scrolls now, on the same terms as the controls column beside it — `E1`'s fix, applied
+to the other half of the screen.
+
+Set up the fullest case: **be the creator**, with a second market in the world, a foreign
+host visible on Network, a listing fee with an allowance set, and a stipend running. That
+fills the column past its bottom.
+
+- **The switcher is present.** Scroll to it if it is below the fold, but it must exist
+- Scroll the **left** column with the wheel. The controls column beside it must not move
+- Everything reachable: heading, both paragraphs, every About line, every market row
+- **Scroll a market row half out of view and click where it was** → nothing happens. A row
+  you cannot see must not switch your market
+- Scroll to the very bottom → the last market row is fully readable, not clipped
+- Shrink the window to its smallest and confirm the column still scrolls rather than
+  losing its lower half
+- With only one market in the world the switcher is correctly absent — that case is
+  "nothing to choose between", not "no room"

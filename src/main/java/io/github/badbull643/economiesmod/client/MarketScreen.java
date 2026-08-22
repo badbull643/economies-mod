@@ -1993,11 +1993,22 @@ public class MarketScreen extends Screen {
                 break;
         }
 
-        label(m, heading, x, panelTop(), 0xFFAA00);
+        // Scrolls, for the reason the controls column does: this panel stacks a heading,
+        // a paragraph, sometimes a second paragraph about a host on the network, the
+        // market's own facts, and the switcher for the other markets in this world —
+        // and it had no bottom. What did not fit was silently dropped, and the first
+        // thing to go was the switcher, which is the only *control* in the column. A
+        // longer paragraph about dedicated servers was enough to make it disappear.
+        //
+        // Everything below measures from `top` and clips through guideLine(), so the
+        // offset is applied in one place and no drawing can escape the panel.
+        int top = panelTop() - scrollOf("marketguide");
 
-        int y = panelTop() + 14;
+        guideLabel(m, heading, x, top, 0xFFAA00);
+
+        int y = top + 14;
         for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW - 12)) {
-            this.textRenderer.drawWithShadow(m, line, x, y, 0xC0C0C0);
+            guideLine(m, line, x, y, 0xC0C0C0);
             y += 10;
         }
 
@@ -2021,13 +2032,40 @@ public class MarketScreen extends Screen {
                             + " market instead to join without giving this one up.";
             for (OrderedText line : this.textRenderer.wrapLines(
                     new LiteralText(advice), listW)) {
-                this.textRenderer.drawWithShadow(m, line, x, y, 0x88CCFF);
+                guideLine(m, line, x, y, 0x88CCFF);
                 y += 10;
             }
         }
 
         y = renderMarketFacts(m, x, y + 10);
-        renderMarketSlots(m, x, y + 10);
+        y = renderMarketSlots(m, x, y + 10);
+
+        // What the column would need if nothing were clipped, measured from where it
+        // started — read by render next frame to size the scroll. Same arrangement as
+        // marketColumnHeight, including the one-frame lag, which nobody can see.
+        marketGuideHeight = (y + scrollOf("marketguide")) - panelTop();
+    }
+
+    /** Set by renderMarketGuidance, read by render to size its scrollable region. */
+    private int marketGuideHeight;
+
+    /**
+     * Draws one line of the guidance column, or skips it if it falls outside the panel.
+     *
+     * The single clip for everything in this column. Vanilla's text renderer has no
+     * scissor here, so "scrolled out of view" has to mean "not drawn" — and having one
+     * function decide that is what stops the panel growing another way to lose things
+     * quietly, which is what it did before it scrolled at all.
+     */
+    private void guideLine(MatrixStack m, OrderedText line, int x, int y, int colour) {
+        if (y < panelTop() || y + 9 > panelBottom()) return;
+        this.textRenderer.drawWithShadow(m, line, x, y, colour);
+    }
+
+    /** The same for a plain string. */
+    private void guideLabel(MatrixStack m, String text, int x, int y, int colour) {
+        if (y < panelTop() || y + 9 > panelBottom()) return;
+        label(m, text, x, y, colour);
     }
 
     /**
@@ -2041,9 +2079,11 @@ public class MarketScreen extends Screen {
     private int renderMarketFacts(MatrixStack m, int x, int y) {
         MarketState market = MarketStateHolder.get();
         if (market == null || market.marketId() == null) return y;
-        if (y > panelBottom() - 40) return y;    // no room; guidance took the panel
+        // No "no room" bail any more. The column scrolls, so running out of panel is a
+        // reason to be scrolled to rather than a reason to vanish — and this block
+        // vanishing took the switcher below it with it, since y never advanced past here.
 
-        label(m, "About this market", x, y, 0xFFDD66);
+        guideLabel(m, "About this market", x, y, 0xFFDD66);
         y += 12;
 
         y = wrapped(m, "Name: " + market.marketName(), x, y, 0xAAAAAA);
@@ -2199,18 +2239,20 @@ public class MarketScreen extends Screen {
      * its own high-water mark and its own everything — which is the point of the
      * feature: leaving a market no longer has to mean destroying it.
      */
-    private void renderMarketSlots(MatrixStack m, int x, int y) {
+    private int renderMarketSlots(MatrixStack m, int x, int y) {
         List<String> slots = MarketStateHolder.availableSlots();
-        if (slots.size() < 2) { slotListTop = -1; return; }
-        if (y > panelBottom() - 24) { slotListTop = -1; return; }
+        if (slots.size() < 2) { slotListTop = -1; return y; }
+        // The "no room, give up" guard that used to be here is gone. It was the reason
+        // the switcher disappeared whenever the prose above it grew — and this is the
+        // only control in the column, so it was the one thing that had to survive. The
+        // column scrolls now; being below the fold means being scrolled to.
 
         slotListTop = y;
-        label(m, "Markets in this world — click to switch", x, y, 0xFFDD66);
+        guideLabel(m, "Markets in this world — click to switch", x, y, 0xFFDD66);
 
         String active = MarketStateHolder.activeSlot();
         for (int i = 0; i < slots.size(); i++) {
             int rowY = slotRowY(i, y);
-            if (rowY + SLOT_ROW_H > panelBottom()) break;
 
             String slot = slots.get(i);
             boolean here = slot.equalsIgnoreCase(active);
@@ -2220,9 +2262,29 @@ public class MarketScreen extends Screen {
             String name = MarketStateHolder.slotMarketName(slot);
             String shown = name != null ? name : slot + " (empty)";
 
+            if (!slotRowVisible(rowY)) continue;
             label(m, trim((here ? "> " : "  ") + shown, listW - 12), x, rowY,
                     here ? 0xFFFFFF : 0x88CCFF);
         }
+
+        // The bottom of the last row, so the column's height includes this list. Left
+        // out, the scroll would stop at the heading above it and the rows below could
+        // never be reached — which is the fault this whole change is about, moved down
+        // by one element.
+        return slotRowY(slots.size() - 1, y) + SLOT_ROW_H;
+    }
+
+    /**
+     * Whether a market row is actually on screen.
+     *
+     * Asked by the drawing and by the hit test, which is the whole point of it existing.
+     * Now that the column scrolls, a row can sit above or below the panel while its
+     * position is still perfectly computable — and a row you cannot see that still
+     * switches your market when clicked is the exact defect this project keeps finding.
+     * One question, one answer, two callers.
+     */
+    private boolean slotRowVisible(int rowY) {
+        return rowY >= panelTop() && rowY + SLOT_ROW_H <= panelBottom();
     }
 
     /** True when the click landed on a market row and was acted on. */
@@ -2234,6 +2296,7 @@ public class MarketScreen extends Screen {
 
         for (int i = 0; i < slots.size(); i++) {
             int rowY = slotRowY(i, slotListTop);
+            if (!slotRowVisible(rowY)) continue;      // scrolled away is not clickable
             if (mouseX >= listX && mouseX < listX + listW
                     && mouseY >= rowY && mouseY < rowY + SLOT_ROW_H) {
                 String slot = slots.get(i);
@@ -2259,8 +2322,11 @@ public class MarketScreen extends Screen {
     private int wrapped(MatrixStack m, String text, int x, int y, int colour) {
         for (OrderedText line : this.textRenderer.wrapLines(
                 new LiteralText(text), listW - 12)) {
-            if (y > panelBottom() - 10) return y;    // ran out of panel
-            this.textRenderer.drawWithShadow(m, line, x, y, colour);
+            // Advances whether or not it draws. Returning early here stopped y where the
+            // panel ended, so the column's measured height was the height of the visible
+            // part — which is a scroll extent that can never reach what it is hiding.
+            // guideLine decides what is on screen; this only decides where things go.
+            guideLine(m, line, x, y, colour);
             y += 10;
         }
         return y;
@@ -2957,6 +3023,15 @@ public class MarketScreen extends Screen {
             renderDiscovery(matrices, listX + 4, mouseX, mouseY);
         } else if (activeScreen == SCREEN_MARKET) {
             renderMarketGuidance(matrices, listX + 4);
+            // The guidance column, which stacks a heading, a paragraph, sometimes a
+            // second one about a host on the network, this market's facts, and the
+            // switcher for the other markets in this world. It used to drop whatever
+            // did not fit — the switcher first, being last — so it scrolls now, on the
+            // same terms as the controls column beside it: wheel caught over the frame,
+            // extent measured against the panel's interior, because that is what the
+            // drawing is clipped to.
+            noteScrollable("marketguide", listX, frameTop(), listW, frameH(),
+                    panelBottom() - panelTop(), marketGuideHeight, mouseX, mouseY);
             // The controls column, not the panel beside it. It holds more rows than the
             // frame can show once a creator has policy controls and there are markets to
             // switch between, and place() now hides what falls outside rather than
