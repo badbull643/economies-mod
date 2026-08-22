@@ -11,7 +11,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
@@ -74,7 +79,35 @@ public class EventLog {
         }
     }
 
+    /**
+     * Where *this instance* believes the log ends.
+     *
+     * Cached, and it has to be: append needs the next sequence number without reading
+     * the file, or writing an event would cost a pass over every event before it. That
+     * is exactly right for whoever is doing the appending and quietly wrong for anybody
+     * watching a log that somebody else is writing — the value was true when this object
+     * was built and says nothing about what has landed since.
+     *
+     * That distinction has now cost three separate bugs: a client that believed it was
+     * an event behind state it already held and applied a welcome grant to itself twice;
+     * and two tests that asked their own handle about a file the host was appending to,
+     * and passed by never changing. If you are watching somebody else's writes, you want
+     * {@link #headSeqOnDisk()} and the name is the whole point of it existing.
+     */
     public long lastSeq() { return lastSeq; }
+
+    /**
+     * Where the file ends right now, read fresh.
+     *
+     * For anyone observing a log another writer owns. Costs a pass over the file, which
+     * is why it is not what {@link #lastSeq()} does — but a cheap wrong answer is not a
+     * saving.
+     */
+    public long headSeqOnDisk() throws IOException {
+        long head = 0;
+        for (SequencedEvent se : readFrom(0)) head = se.seq;
+        return head;
+    }
     public String lastHash() { return lastHash; }
 
     /**
@@ -235,6 +268,7 @@ public class EventLog {
             case "CancelOrder":   return Event.CancelOrder.class;
             case "DepositAndList": return Event.DepositAndList.class;
             case "MarketPolicy":  return Event.MarketPolicy.class;
+            case "Stipend":       return Event.Stipend.class;
             default:
                 throw new IllegalStateException("Unknown event type in log: " + typeName);
         }
@@ -301,6 +335,37 @@ public class EventLog {
             if (se.seq > seq) break;
         }
         return null;
+    }
+
+    /**
+     * The hashes at several sequence numbers, from one pass over the file.
+     *
+     * hashAt re-reads and re-parses the whole log every call, which is fine for the one
+     * lookup it was written for and quadratic for a search. Locating where two chains
+     * diverge asks for a batch of points at a time precisely so it can be one read
+     * rather than one read per probe — see the split-point search, which would otherwise
+     * be O(n log n) disk on the path that already annoys people with long logs.
+     *
+     * Missing sequence numbers are absent from the result rather than mapped to null, so
+     * "we have no such event" and "we have one and it hashes to nothing" stay different
+     * answers. Seq 0 is the empty prefix and always hashes to "0", which is what makes
+     * it the floor a search can start from without asking anybody.
+     */
+    public Map<Long, String> hashesAt(Collection<Long> seqs) throws IOException {
+        Map<Long, String> out = new HashMap<>();
+        if (seqs == null || seqs.isEmpty()) return out;
+
+        Set<Long> wanted = new HashSet<>(seqs);
+        if (wanted.remove(0L)) out.put(0L, "0");
+        if (wanted.isEmpty()) return out;
+
+        for (SequencedEvent se : readFrom(0)) {
+            if (wanted.remove(se.seq)) {
+                out.put(se.seq, se.hash);
+                if (wanted.isEmpty()) break;
+            }
+        }
+        return out;
     }
 
     /** Raw JSONL lines from seq onward — used to send the wire format unchanged. */

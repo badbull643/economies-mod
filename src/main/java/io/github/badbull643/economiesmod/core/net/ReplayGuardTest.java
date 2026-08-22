@@ -69,6 +69,9 @@ public class ReplayGuardTest {
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST, "replay test market", hostKeys);
         UUID marketId = log.marketId();
+        // Counted from here, not from zero: what this builds is three events on top of
+        // whatever genesis writes, and genesis is free to grow.
+        long afterGenesis = log.lastSeq();
 
         Event.KeyRegistered kr = new Event.KeyRegistered();
         kr.userId = JOINER;
@@ -93,7 +96,7 @@ public class ReplayGuardTest {
         wd.timestamp = System.currentTimeMillis();
         log.append(wd, joinerKeys.sign(EventCanonical.canonicalPayload(wd)));
 
-        check("history built", log.lastSeq(), 4);
+        check("history built", log.lastSeq() - afterGenesis, 3);
 
         int port = freePort();
         HostServer host = new HostServer(port, hostLog, "replayhost", HOST.toString(),
