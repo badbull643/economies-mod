@@ -44,9 +44,11 @@ nothing depends on that.
 4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was §0.21 — a fork
-warning that no longer outlives the fork. **`E17`, `E17b`, `E19b`, `E20` and the
-`E13`/`E14` re-checks are all unrun**, and backlog item 7 is open from the same sitting.
+**What is being worked on right now:** nothing. The last thing finished was §0.23, the
+fourth unscrollable list in `MarketScreen`. **`E17`, `E17b`, `E19b` and `E21`, plus the
+`E13`/`E14` re-checks, are all unrun.** Backlog item 7 is down to its last third — the
+discovery poll — and item 5 has an argument behind it now that the line count never gave
+it.
 
 ---
 
@@ -54,7 +56,7 @@ warning that no longer outlives the fork. **`E17`, `E17b`, `E19b`, `E20` and the
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found twenty-one defects in code that had 437 passing checks behind it — one a whole
+and it found twenty-three defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
@@ -525,6 +527,60 @@ And a twenty-first, reported from the same evening:
       refund drain; a 71-event replay is not a stall. If this ever *is* us, it will be
       backlog item 2's territory — a long log walked on world load — and it will scale
       with the log rather than appearing at 71 events.
+
+And a twenty-second and twenty-third, from re-running `E19` and `E20` the same night:
+
+22. **§0.21's fix works, and the run it was verified on under-refunded by five items.**
+    `E20` passed — Alice's banner went the moment Bob joined her. The reset that followed
+    handed back **9 cobblestone** against **14** deposited on the losing branch.
+
+    That run took the **AHEAD** path rather than FORK: Bob at 98, Alice at 90, and Bob's
+    hash at 90 not matching hers. `offerCatchUp` handles that case and set a `Divergence`
+    with no split point, so `depositsLostToReset` fell back to `hostSeq - 1` = 89 and
+    offered back only what came after event 89 — nine deposits, and nine of fourteen
+    orders on the re-place checklist.
+
+    **The comment sitting over it said the fallback was safe, and its reasoning was false
+    in the one branch it was written in:** *"AHEAD means their head is below ours, so
+    anything after it on our chain is genuinely ours alone."* That is true when our chain
+    extends theirs, and this branch is reached only when it demonstrably does not — their
+    hash at their own head disagrees with ours. A shorter chain is not a prefix, and its
+    head number says nothing about where two chains parted. Alice's events 85 to 90 were
+    her own deposits; Bob's 85 to 98 were his. They had parted at or below 84.
+
+    `findSplitPoint` was already there, and `offerCatchUp` already had the host and port
+    in hand — it just never asked. It asks now, exactly as `noteForkFromRefusal` does.
+    Backlog item 7 is down to the discovery poll alone.
+
+    Two things worth keeping from how this was found. It was **invisible from inside**:
+    every number the program printed was consistent, nothing failed, and the only way to
+    see it was to compare what the console said was deposited against what it said was
+    returned. And it was **quiet by construction** — under-refunding cannot create items,
+    which is the bound the whole feature was designed around, and that bound is exactly
+    what let a wrong answer go unnoticed for two sittings. A guard that makes failure
+    safe also makes it silent.
+
+23. **The re-place list could not be scrolled, and it is the only record of what to put
+    back.** Nine orders after the reset; the box fits fewer; the rest were drawn nowhere
+    and reachable by nothing. `renderReplaceList` broke out of its loop at
+    `panelBottom()` and no `noteScrollable` had ever been written for it.
+
+    **Fourth time in this file.** §0.4 was the Market column, §0.16 the market switcher,
+    §0.20 the reset overlay, and now this — all four stacked content downwards with no
+    bound and lost the far end. §0.16 closed by saying *"anything else in this file that
+    stacks without a scroll is the next one"*, and this was the next one, four days later,
+    found by a player rather than by anybody going to look.
+
+    Fixed the way §0.16 was: the scroll subtracts inside `replaceRowY`, which the render
+    and the hit test both already came through, and `replaceRowVisible` is asked by both
+    — a row you cannot see that still re-places an order when clicked is §4 exactly, and
+    scrolling creates that at the top as well as the bottom. `E21`.
+
+    The pattern across all four is worth stating plainly, because a fifth is likely:
+    **every one was found by a person looking at a screen, and none by a test.** The
+    geometry is arithmetic and could be tested; what cannot be tested is noticing that a
+    list has more in it than the box was built for. That is the argument for backlog item
+    5 that the line count never made.
 
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 

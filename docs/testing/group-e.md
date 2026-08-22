@@ -43,9 +43,11 @@ down is newer than the sitting:
 - ~~**`E19`**~~ **run 2026-08-22 and correct** — the two post-split deposits came back and
   the four pre-split ones did not. `E19b` is new: the confirmation was rewritten around
   what it found, and has not been run
-- **`E20`** is new from the same sitting: a fork warning that has been answered. Alice's
-  banner survived Bob discarding his branch and joining her, because nothing but the
-  discovery poll could ever retire one
+- ~~**`E20`**~~ **run 2026-08-22 and correct** — the banner went the moment Bob joined.
+  The same run under-refunded by five items, which is §0.22 and is now fixed: the AHEAD
+  path never asked where the two chains parted
+- **`E21`** is new from that run: the re-place list could not be scrolled, and it is the
+  only record of what to put back
 
 Nothing else on this list has moved since it was run.
 
@@ -777,3 +779,28 @@ The name matching is the known weakness, and it is deliberate: a FORK refusal ca
 `hostName` and no identity, so a name is what the two sides have in common. The cost of a
 collision is a warning retired early on a market the player is already connected to; the
 cost of not asking was a warning that never went away.
+
+## E21. The re-place list, when there is more of it than fits
+
+New, never run. Nine orders came back from an `E19` run; the box fits fewer; the rest
+were drawn nowhere and reachable by nothing. The list is the only record of what to put
+back, so the far end of it being unreachable loses exactly what the feature exists to
+save.
+
+Get a checklist longer than the box — ten or more orders on the losing branch is easy,
+since every `DepositAndList` makes one — then:
+
+- **Scroll it.** The wheel works anywhere over the box, and every row can be brought into
+  view. Before this it stopped at the panel bottom and the rest did not exist
+- **Click a row after scrolling.** It must re-place *that* row. The drawing and the hit
+  test both go through `replaceRowY` and `replaceRowVisible`, so a mismatch here would be
+  the oldest defect in this file — and scrolling is what makes it possible at the top of
+  the list as well as the bottom
+- **Click above the first row and below the last.** Nothing happens. A row scrolled out of
+  sight must not still be clickable where it used to be
+- Re-place rows until fewer remain than fit → the offset clamps and the list does not sit
+  scrolled past its own contents
+- The header still dismisses the whole list, at any offset
+
+Worth doing on the **Market** tab and in the side column both, since `replaceInSideColumn`
+puts the box in two different places.

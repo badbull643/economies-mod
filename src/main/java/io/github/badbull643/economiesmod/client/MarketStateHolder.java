@@ -639,12 +639,34 @@ public class MarketStateHolder {
                 // offer back. The only thing that ever set it was the discovery poll,
                 // which is why the list appeared after Refresh and not before.
                 //
-                // The three values are already in hand and are exactly what the poll
-                // records: their head, their hash there, ours at the same seq. Safe as a
-                // split point because AHEAD means their head is below ours, so anything
-                // after it on our chain is genuinely ours alone.
+                // The split is asked for here for the same reason noteForkFromRefusal
+                // asks: without it the reset falls back to hostSeq - 1, and the comment
+                // that used to sit here claimed that was "safe as a split point because
+                // AHEAD means their head is below ours, so anything after it on our
+                // chain is genuinely ours alone".
+                //
+                // That justification is false in precisely the branch it was written in.
+                // This is the case where our hash at their head does NOT match theirs —
+                // their chain is not a prefix of ours, it is a different chain that
+                // happens to be shorter, so their head number says nothing about where
+                // the two parted. Measured on a real run: a host at 90 and a client at
+                // 98 that had actually parted at or below 84, where the fallback offered
+                // back 9 deposits and 9 orders out of 14. Under-refunding cannot create
+                // items, which is why it was quiet, and quiet is how it survived.
+                long splitAt = -1;
+                try {
+                    splitAt = MarketClient.findSplitPoint(host, port, log);
+                } catch (IOException probe) {
+                    System.err.println("[economiesmod] could not locate the split point: "
+                            + probe.getMessage());
+                }
+
                 divergence = new Divergence(refusal.hostName, refusal.hostSeq,
-                        refusal.hostHash, ourHashAtTheirHead);
+                        refusal.hostHash, ourHashAtTheirHead, splitAt);
+                if (splitAt >= 0) {
+                    System.out.println("[economiesmod] parted after event " + splitAt
+                            + ", " + (log.lastSeq() - splitAt) + " of ours since");
+                }
                 return false;
             }
 
