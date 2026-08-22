@@ -375,6 +375,10 @@ placing an order costs a listing fee that is never zero.
   multiplies by the head count while the fees do not.
 
 Both corrected, and the rule is asked in three places rather than reimplemented in two.
+
+*Four places now, and it was two when this was written: §0.3 found `MarketScreen` still
+holding a copy — the pre-correction one. The sentence above was true of core and not of
+the screen, which is how a claim about "everywhere" survives being wrong.*
 It is re-checked **at every claim**, because a market can outgrow a stipend that was
 affordable when it was set.
 

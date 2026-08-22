@@ -2629,8 +2629,16 @@ public class MarketScreen extends Screen {
         // who wants to host goes looking for a way around it rather than understanding
         // that there is nothing to work around.
         if (dedicatedServesThisMarket()) {
-            label(matrices, "  a dedicated server has this market — connect, don't host",
-                    x, y, 0xFFAA55);
+            // Trimmed with the rest on hover, the same as the host rows below it, and
+            // for the same reason: this panel's width follows the window, so any fixed
+            // string is one small window away from running off the edge — which is what
+            // this line did on its first outing, stopping mid-word at "conn". Short
+            // enough to survive the trim at a usable width, and complete on hover.
+            String note = "a dedicated server has this market — connect, don't host";
+            String shown = trim("  " + note, listW - 12);
+            label(matrices, shown, x, y, 0xFFAA55);
+            tipIfHovered(note, shown, x, y, listW - 8, DISCOVERY_ROW_HEIGHT,
+                    (int) mouseX, (int) mouseY);
             y += DISCOVERY_ROW_HEIGHT + 2;
         }
 
