@@ -30,21 +30,21 @@ public class TradeHistory {
     private final Map<String, Deque<Trade>> byItem = new HashMap<>();
 
     /** Called only by MarketState, which is called only by EventApplier. */
-    void record(Trade trade) {
+    synchronized void record(Trade trade) {
         Deque<Trade> q = byItem.computeIfAbsent(trade.itemId, k -> new ArrayDeque<>());
         q.addLast(trade);
         while (q.size() > MAX_PER_ITEM) q.removeFirst();
     }
 
     /** Every trade held for an item, oldest first. Empty if the item never traded. */
-    public List<Trade> recentFor(String itemId) {
+    public synchronized List<Trade> recentFor(String itemId) {
         Deque<Trade> q = byItem.get(itemId);
         if (q == null || q.isEmpty()) return Collections.emptyList();
         return new ArrayList<>(q);
     }
 
     /** The most recent {@code limit} trades for an item, oldest first. */
-    public List<Trade> recentFor(String itemId, int limit) {
+    public synchronized List<Trade> recentFor(String itemId, int limit) {
         if (limit <= 0) return Collections.emptyList();
         List<Trade> all = recentFor(itemId);
         if (all.size() <= limit) return all;
@@ -57,13 +57,13 @@ public class TradeHistory {
      * The honest answer to "what is this worth" — unlike the best bid or ask, which is
      * only what someone is currently asking for, and may be nowhere near a real price.
      */
-    public long lastPrice(String itemId) {
+    public synchronized long lastPrice(String itemId) {
         Deque<Trade> q = byItem.get(itemId);
         return (q == null || q.isEmpty()) ? -1 : q.peekLast().price;
     }
 
     /** How many trades are held for an item. */
-    public int countFor(String itemId) {
+    public synchronized int countFor(String itemId) {
         Deque<Trade> q = byItem.get(itemId);
         return q == null ? 0 : q.size();
     }
@@ -78,7 +78,7 @@ public class TradeHistory {
      * Sums in place rather than through {@link #recentFor}, which copies: this is read
      * once per item per frame by a UI that lists every traded item at once.
      */
-    public long volumeFor(String itemId) {
+    public synchronized long volumeFor(String itemId) {
         Deque<Trade> q = byItem.get(itemId);
         if (q == null) return 0;
         long total = 0;
@@ -87,7 +87,9 @@ public class TradeHistory {
     }
 
     /** Items that have traded at least once. */
-    public Set<String> tradedItems() {
-        return Collections.unmodifiableSet(byItem.keySet());
+    public synchronized Set<String> tradedItems() {
+        // A copy, not unmodifiableSet, which is a live view onto byItem — the render
+        // thread iterates this while the applier is filing a fill into a new item.
+        return new java.util.LinkedHashSet<>(byItem.keySet());
     }
 }

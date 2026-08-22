@@ -1396,10 +1396,23 @@ public class MarketScreen extends Screen {
         // What the column would need if nothing were hidden, measured from where it
         // started rather than assumed — the rows shown depend on the situation, so a
         // fixed figure would be wrong for most of them.
-        marketColumnHeight = (y + scrollOf("marketcol")) - top;
+        //
+        // Measured from panelTop, and to the bottom edge of the last row rather than to
+        // the cursor sitting a whole ROW_STEP past it. Both corrections are the same
+        // point: this figure is only ever compared against what place() will accept, and
+        // place() asks whether y + FIELD_HEIGHT fits between panelTop and panelBottom.
+        // Measured any other way the two disagree, and they disagreed by nine pixels —
+        // exactly enough that the last row could never be scrolled into view.
+        marketColumnHeight = (y + scrollOf("marketcol")) - ROW_STEP + FIELD_HEIGHT
+                - panelTop();
     }
 
-    /** Set by refreshMarketActions, read by render to size the scrollable region. */
+    /**
+     * Set by refreshMarketActions, read by render to size the scrollable region.
+     *
+     * From panelTop to the bottom of the last row, which is the span place() clips
+     * against. Not from the frame, and not to the cursor past the last row.
+     */
     private int marketColumnHeight;
 
     /** Whether the player at this keyboard is the identity named in the genesis event. */
@@ -1708,18 +1721,20 @@ public class MarketScreen extends Screen {
 
         long every = MarketState.DEFAULT_STIPEND_EVERY_FILLS;
 
-        // The interlock, checked here so it is explained rather than merely refused.
-        // Every replica checks it again in EventApplier — this is the courtesy, not the
+        // The interlock, asked here so it is explained rather than merely refused.
+        // Every replica asks it again in EventApplier — this is the courtesy, not the
         // enforcement.
-        if (amount > 0 && market.listingFee() <= 0) {
-            status = "Set a listing fee first — a stipend with nothing to pay for it"
-                    + " could be earned by trading with yourself";
-            return;
-        }
-        if (amount > 0 && amount >= market.listingFee() * 2 * every) {
-            status = "Too much to pay every " + every + " trades at a listing fee of "
-                    + market.listingFee() + " — the most is "
-                    + (market.listingFee() * 2 * every - 1);
+        //
+        // Asked, not reimplemented. This had its own copy of the arithmetic, and the
+        // copy was the version from before the rule was corrected twice: it costed a
+        // fill at two listing fees and counted one claimant, so it advertised a ceiling
+        // four times the real one and passed figures the engine then refused. The head
+        // count is what a second copy can never keep up with — it moves every time
+        // somebody joins.
+        String unsafe = EventApplier.stipendOutpacesItsFees(
+                amount, every, market.listingFee(), market.registeredCount());
+        if (unsafe != null) {
+            status = unsafe;
             return;
         }
 
@@ -1956,16 +1971,24 @@ public class MarketScreen extends Screen {
         long stipend = market.stipendAmount();
         if (stipend > 0) {
             MinecraftClient mc = MinecraftClient.getInstance();
-            long owedIn = 0;
+            // Only speak of "yours" to somebody who has one. An unregistered viewer has
+            // no last claim on record, which reads as fill zero — so in any market that
+            // had traded at all the countdown came out negative and the line announced a
+            // payment waiting, next to a Claim button stipendClaimable() will never show
+            // them. Registration is the same test the button uses.
+            String when = "";
             if (mc.player != null) {
                 UUID me = MinecraftIds.userIdOf(mc.player);
-                owedIn = market.stipendEveryFills()
-                        - (market.fillsEver() - market.stipendedAtFill(me));
+                if (market.isRegistered(me)) {
+                    long owedIn = market.stipendEveryFills()
+                            - (market.fillsEver() - market.stipendedAtFill(me));
+                    when = owedIn <= 0 ? " — yours is waiting"
+                            : ", yours in " + owedIn + " more";
+                }
             }
             y = wrapped(m, "Stipend: " + stipend + " credits every "
-                    + market.stipendEveryFills() + " trades this market settles"
-                    + (owedIn <= 0 ? " — yours is waiting"
-                            : ", yours in " + owedIn + " more"), x, y, 0x88FF88);
+                    + market.stipendEveryFills() + " trades this market settles" + when,
+                    x, y, 0x88FF88);
         }
 
         // Says who can change it, to whoever cannot. Without this the fee reads as a
@@ -2539,6 +2562,21 @@ public class MarketScreen extends Screen {
 
         MinecraftClient mc = MinecraftClient.getInstance();
 
+        // Asked before the items leave the inventory, and asked of the same function the
+        // host will ask. A seller who cannot afford the listing fee used to find out
+        // only after their goods had been taken and proposed — the refusal came back,
+        // the items came back with it, and the round trip existed for no reason. The
+        // host still decides; this only saves taking something it is going to refuse.
+        MarketState here = MarketStateHolder.get();
+        if (here != null) {
+            MarketState.SubmitResult listable =
+                    here.canDepositAndList(req.userId, req.itemId, req.qty, req.price);
+            if (!listable.accepted) {
+                status = "Cannot list: " + listable.reason;
+                return;
+            }
+        }
+
         // Journal the operation BEFORE the items leave, keyed by the id the event will
         // carry. Removing first and proposing second is deliberate — never credit before
         // removing — but it leaves a window where a crash loses the items with nothing
@@ -2791,8 +2829,13 @@ public class MarketScreen extends Screen {
             // switch between, and place() now hides what falls outside rather than
             // drawing past the bottom — so without this the hidden rows would be
             // unreachable rather than merely off screen.
+            //
+            // The wheel is caught over the whole frame; the extent is measured against
+            // the panel's interior, because that is what place() clips a row to. The
+            // two are not the same rectangle and saying so is the fix.
             noteScrollable("marketcol", rowX - PAD, frameTop(), controlsW + PAD * 2,
-                    frameH(), marketColumnHeight, mouseX, mouseY);
+                    frameH(), panelBottom() - panelTop(), marketColumnHeight,
+                    mouseX, mouseY);
         } else if (activeScreen == SCREEN_HOME) {
             renderHome(matrices);
         } else {
@@ -3601,7 +3644,25 @@ public class MarketScreen extends Screen {
 
     private void noteScrollable(String key, int x, int y, int w, int h,
                                 int contentHeight, double mouseX, double mouseY) {
-        int max = Math.max(0, contentHeight - h);
+        noteScrollable(key, x, y, w, h, h, contentHeight, mouseX, mouseY);
+    }
+
+    /**
+     * The same, where the rectangle that catches the wheel is not the rectangle the
+     * content is clipped to.
+     *
+     * They were assumed to be one thing, and for most panels they are. The Market
+     * column is the exception: place() clips a row against panelTop/panelBottom, which
+     * is the frame inset by five pixels at each end, while the wheel is worth catching
+     * anywhere over the frame. Measuring the scroll extent against the frame made it
+     * nine pixels short of what the clip needs — enough to leave the bottom row
+     * permanently unreachable, which is the whole failure the scroll was added to fix.
+     *
+     * So the caller says both, and this stops guessing that one implies the other.
+     */
+    private void noteScrollable(String key, int x, int y, int w, int h, int viewH,
+                                int contentHeight, double mouseX, double mouseY) {
+        int max = Math.max(0, contentHeight - viewH);
         // Clamp every frame: the content can shrink under a scrolled view — an order
         // fills, a host stops — and a stale offset would leave the panel looking empty.
         if (scrollOf(key) > max) scrollOffsets.put(key, max);
