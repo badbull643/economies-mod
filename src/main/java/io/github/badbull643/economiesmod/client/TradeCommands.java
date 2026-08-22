@@ -128,6 +128,18 @@ public final class TradeCommands {
             info(src, "  " + e.getKey() + ": " + e.getValue());
         }
 
+        // welcomeGrant is the one key here whose name lies about what it does. On a
+        // world it is a switch: issueWelcomeGrant tests it against zero and then takes
+        // the amount from the market, because the amount was recorded at genesis and is
+        // not this host's to overrule. The figure beside it — 1000, the compiled default
+        // — is inert, and reading it as "newcomers get 1000" is the natural mistake.
+        //
+        // Said as a line under the list rather than beside the key, because a per-key
+        // annotation is a second description of a setting living next to the setting,
+        // and those drift.
+        info(src, "welcomeGrant here only chooses whether grants go out at all — 0 stops"
+                + " them. The amount is the market's, fixed when it was created.");
+
         // Said here rather than left for hosting to discover, because this is the moment
         // somebody is looking at the file. problem() is what HostServer's constructor
         // asks, so a complaint here is the same complaint hosting would make — except
