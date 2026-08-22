@@ -98,7 +98,7 @@ public class ReplayGuardTest {
 
         check("history built", log.lastSeq() - afterGenesis, 3);
 
-        int port = freePort();
+        int port = TestPorts.free();
         HostServer host = new HostServer(port, hostLog, "replayhost", HOST.toString(),
                 hostKeys, new PeerCache(dir.resolve("replay-host-peers.json")), 0L);
 
@@ -176,11 +176,5 @@ public class ReplayGuardTest {
             System.out.println(failures + " of " + checksRun + " checks FAILED");
         }
         System.exit(failures == 0 ? 0 : 1);
-    }
-
-    private static int freePort() throws IOException {
-        try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
-            return s.getLocalPort();
-        }
     }
 }

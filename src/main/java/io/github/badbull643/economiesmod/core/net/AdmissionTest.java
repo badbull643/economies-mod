@@ -67,7 +67,7 @@ public class AdmissionTest {
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST, "admission test market", hostKeys);
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostName = "gatekeeper";
         cfg.hostUserId = HOST.toString();
         cfg.admission = ServerConfig.ALLOWLIST;
@@ -133,7 +133,7 @@ public class AdmissionTest {
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST, "public market", boxKeys);
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostName = "the box";
         cfg.hostUserId = HOST.toString();
         cfg.dedicated = true;          // the only thing that differs
@@ -210,7 +210,7 @@ public class AdmissionTest {
         // INVITED creates it, so INVITED is the creator and may set policy at all.
         MarketBootstrap.createMarket(log, INVITED, "capped market", keys);
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostName = "somebody's game";
         cfg.hostUserId = HOST.toString();
         cfg.maxWelcomeGrant = 500L;
@@ -399,7 +399,7 @@ public class AdmissionTest {
             EventLog log = new EventLog(hostLog);
             MarketBootstrap.createMarket(log, HOST, "migration test market", keys);
 
-            ServerConfig cfg = ServerConfig.friendGroup(freePort());
+            ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
             cfg.hostName = "weigher";
             cfg.hostUserId = HOST.toString();
             cfg.maxDepositMultipleOfHandled = 3;
@@ -545,7 +545,7 @@ public class AdmissionTest {
             PeerCache hostCache = new PeerCache(hostPeers);
             hostCache.record(stranger.toString(), "Stranger", "203.0.113.7", 25565, null);
 
-            ServerConfig cfg = ServerConfig.friendGroup(freePort());
+            ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
             cfg.hostName = "roster";
             cfg.hostUserId = HOST.toString();
             cfg.dedicated = dedicated;
@@ -590,11 +590,5 @@ public class AdmissionTest {
         return new MarketClient(who, who.toString().substring(0, 8), PlayerKeys.generate(),
                 new EventLog(p), true,
                 new PeerCache(dir.resolve("adm-client-peers.json")), 0);
-    }
-
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
-        }
     }
 }
