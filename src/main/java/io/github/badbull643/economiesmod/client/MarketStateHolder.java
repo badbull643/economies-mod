@@ -419,6 +419,15 @@ public class MarketStateHolder {
 
     public static Mode mode() { return mode; }
 
+    /**
+     * Whether a HostServer of ours is actually running.
+     *
+     * The server itself, not the mode. Those can disagree — disconnect() used to leave
+     * one bound while dropping us to LOCAL, which is the state that made "Disconnect"
+     * stop nothing — and when they disagree the socket is the fact.
+     */
+    public static boolean isHosting() { return hostServer != null; }
+
     public static MarketState get() {
         if (mode != Mode.LOCAL) {
             return client != null ? client.state() : new MarketState();
@@ -815,7 +824,29 @@ public class MarketStateHolder {
     }
 
 
+    /**
+     * Leaves the network, whichever way we were on it.
+     *
+     * Hosting is a network role like any other, and this is what somebody presses to
+     * stop. It used to drop only the client — which, while hosting, meant dropping the
+     * self-connection and leaving the server bound, still serving whoever was already
+     * on it, still answering the discovery poll, and still advertising on everyone
+     * else's host list. The button said Disconnect and nothing disconnected.
+     *
+     * The quiet half was worse. stopHosting is the only thing that releases the
+     * HostServer's EventLog, so falling through to loadLocal below opened a *second*
+     * EventLog on the file the running host still owned — two writers, duplicate
+     * sequence numbers, broken chain. connect() has guarded against exactly that since
+     * it was written, with a comment saying so; the guard was never carried here.
+     *
+     * HOSTING and CONNECTED are mutually exclusive — connect() stops hosting first — so
+     * there is no case where somebody wants to leave one and keep the other.
+     */
     public static void disconnect() {
+        if (hostServer != null) {
+            stopHosting();   // drops the self-connect and reopens the local log itself
+            return;
+        }
         disconnectIfConnected();
         if (currentWorldDir != null) {
             loadLocal(currentWorldDir);

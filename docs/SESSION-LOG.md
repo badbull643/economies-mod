@@ -25,9 +25,10 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 ## 0. The read-through, and what it found
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
-built here: the whole of it was an inspection, and it found thirteen defects in code that
-had 437 passing checks behind it — one of them a whole feature that could not be switched
-on, and one an unbounded mint that the guard written to stop it never fired against.
+built here: the whole of it was an inspection plus what the first play session turned up,
+and it found fourteen defects in code that had 437 passing checks behind it — one a whole
+feature that could not be switched on, one an unbounded mint that the guard written to
+stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
@@ -189,6 +190,28 @@ firing** on an ordinary self-connect, three minutes into the first real play ses
     itself within minutes on a defect that was corrupting an ordinary single-player
     session. Two things that must agree, kept in two places — §4 again, in the constructor
     of the class the previous fix was written into.
+
+And a fourteenth, reported from play:
+
+14. **Disconnect did not stop hosting.** Both Network buttons were always live, side by
+    side, in every mode. While hosting, the one people reach for is Disconnect — left of
+    the pair, and the word for what they want — and it dropped only the self-connection.
+    The server stayed bound, kept serving whoever was on it, and kept answering the
+    discovery poll, which is how it was noticed: *"it still showed I was hosting and I
+    could still connect from the other client."*
+
+    The visible half was the smaller half. `stopHosting` is the only thing that releases
+    the HostServer's `EventLog`, so `disconnect()` fell through to `loadLocal` and opened
+    a **second** `EventLog` on the file the running host still owned. Two writers, one
+    log: duplicate sequence numbers and a broken chain. `connect()` has guarded against
+    precisely this since it was written and says so in a comment — the guard was never
+    carried to `disconnect()`. §4 again: one invariant, enforced in one of the two places
+    that needed it.
+
+    `disconnect()` now stops the host if there is one, and the buttons grey by mode.
+    `E13` is the live test; there is no unit test, because the fix is in
+    Minecraft-dependent client code and `HostServer.stop()` itself was never broken —
+    adding a test for the part that worked would buy coverage of the wrong thing.
 
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
