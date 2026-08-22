@@ -4,7 +4,12 @@
 their wiring; this covers the parts that need a keyboard and a screen.*
 
 *Groups A to D are the roadmap work and are finished bar two items that cannot be forced.
-Group E is everything built after it, and none of that has been run yet.*
+Group E is everything built after it, and as of 2026-08-22 it is **done** — see
+`docs/testing/group-e.md`, which records what the sitting turned up and names the two
+items whose code moved afterwards and want a short re-check.*
+
+*A5 is the exception on this page and is un-marked below: it passed once against a build
+where its last step was the recipe for an item-duplication bug.*
 
 Run `./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest
 depositCapTest attestationTest hostTrustTest` first — if any of those fail, stop, because everything
