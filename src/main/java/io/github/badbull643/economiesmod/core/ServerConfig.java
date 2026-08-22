@@ -146,6 +146,31 @@ public class ServerConfig {
      */
     public int maxDepositMultipleOfHandled = 0;
 
+    /**
+     * The most credits one migration may carry in. Zero disables.
+     *
+     * The deposit rules above weigh the *items* somebody brings against evidence they
+     * did not write. Nothing weighed their credits, and a migration carries a player's
+     * whole balance from the market they came from — so two people arriving from a
+     * market that grants 1000 into one that grants 50 multiply its money supply by
+     * twenty-one, and the people who were already there go from holding all of the money
+     * to holding five per cent of it. Nobody is robbed; everybody is outbid.
+     *
+     * Not a fraud check, and it does not need to be. A group with different grants
+     * merging honestly produces exactly the same arithmetic as somebody doing it on
+     * purpose, and the receiving market is the only party that can say what it is
+     * willing to absorb. This lets it say so.
+     *
+     * Host-local like every other limit here, so it changes when hosting rotates — see
+     * the log's note on host rules not travelling. Zero by default, so no existing
+     * server starts refusing migrations it used to accept.
+     *
+     * Set it against what a newcomer here would be given: a cap a little above this
+     * market's own welcome grant says "arrive with what a local would have", which is
+     * usually the intent.
+     */
+    public long maxMigratedCredits = 0;
+
     // ─────────── admission ───────────
 
     /**
@@ -441,6 +466,10 @@ public class ServerConfig {
         }
         if (welcomeGrant < 0) {
             return "welcomeGrant cannot be negative, not " + welcomeGrant;
+        }
+        if (maxMigratedCredits < 0) {
+            return "maxMigratedCredits cannot be negative, not " + maxMigratedCredits
+                    + " — use 0 to accept any balance";
         }
         if (outboundQueueDepth < 1) {
             return "outboundQueueDepth must be at least 1, not " + outboundQueueDepth;

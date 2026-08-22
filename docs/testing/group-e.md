@@ -4,7 +4,7 @@
 that now scrolls. All of it has automated coverage and none of it has been run in game.
 The UI half matters most, because nobody has looked at it.*
 
-Run the suites first. Expect `477 / 6 / 5 / 16 / 16 / 6 / 12 / 11`:
+Run the suites first. Expect `487 / 6 / 5 / 16 / 16 / 6 / 12 / 11`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -231,3 +231,55 @@ change to the live sync path, so the thing to watch for is the opposite failure:
 - A dedicated server, since its market's creator is the box and its policy path differs
 
 If it does fire, the console line names the rule and the sequence number. Keep it.
+
+## E11. Two markets with different grants, meeting
+
+The question that produced this section: A and B run a market granting 50; C and D run
+one granting 1000; C and D migrate in. Measured before anything was changed —
+
+```
+market X (A,B) grant 50    supply 100    A=50   B=50
+market Y (C,D) grant 1000  supply 2000   C=1000 D=1000
+
+after both migrations:     supply 2100
+A and B now hold 4.8% of the money in their own market
+```
+
+Nobody is robbed — A and B keep every credit. But share is what buys things, and theirs
+went from all of it to a twentieth. Prices reprice to what C and D can pay.
+
+`maxMigratedCredits` in `host-config.json` is the answer to that, and it is **off by
+default** so nothing changes until a host sets it:
+
+```json
+{ "maxMigratedCredits": 500 }
+```
+
+- Build the two markets above, or any pair with different grants
+- With the cap unset, the migration goes through and the supply jumps. Watch the credit
+  totals on both sides — this is the behaviour, not a bug, and it is worth seeing once
+- Set `maxMigratedCredits` to something under what the incoming player holds → the
+  migration is refused before anything is written, naming both figures
+- Set it above → it goes through as before
+- `maxMigratedCredits: -1` → the server refuses to start, saying to use 0
+
+It bounds one migration, not a career of them. Somebody arriving repeatedly under the cap
+still adds up — but they cannot, because of E12.
+
+## E12. Migrating twice, which used to be unbounded
+
+Engine-tested (`M6b`). The guard meant to stop this is in `EventApplier` and its comment
+names the attack exactly — *"join, take the grant, reset, create your own market, take
+that grant too, migrate it back, repeat"* — but it tested only whether the beneficiary was
+**registered** or **already granted** here. A migration sets neither. And the per-branch
+guard is keyed to the *source* market id, which is a fresh random id every time somebody
+creates a market.
+
+So the same identity could create a market at the 1,000,000 grant ceiling, take it,
+migrate in, reset, and repeat. Measured at **4,000,000 credits in four passes**, against a
+market whose founder held 50, without ever registering.
+
+- Migrate into a market, then create a second market of your own and try to migrate that
+  in too → refused: *"you already hold a position in this market"*
+- A player who has genuinely never been there still migrates in fine. That is the half
+  that matters — the fix must bound migration, not close it

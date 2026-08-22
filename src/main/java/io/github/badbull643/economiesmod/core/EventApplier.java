@@ -503,7 +503,22 @@ public class EventApplier {
             // position here has had their allowance from this market, and carrying a
             // second one in is how you mint: join, take the grant, reset, create your
             // own market, take that grant too, migrate it back, repeat.
-            if (state.isRegistered(mb.beneficiary) || state.hasBeenGranted(mb.beneficiary)) {
+            //
+            // isAccountedElsewhere is the third of these and was missing, which meant
+            // the rule described above did not hold against the attack it names. A
+            // migration registers nobody and grants nobody, so neither of the other two
+            // tests is ever true of somebody who has only migrated — and hasMigrated
+            // above is keyed to the *source* market, which is a fresh random id every
+            // time somebody creates one. So the same identity could create a market at
+            // the grant ceiling, take it, migrate in, reset, and do it again, without
+            // limit and without ever registering here. Measured at four million credits
+            // in four passes against a market whose founder had fifty.
+            //
+            // This one is true of them: recordMigration files every participant of the
+            // market they came from, and they are one. It is already what refuses them
+            // a second welcome grant.
+            if (state.isRegistered(mb.beneficiary) || state.hasBeenGranted(mb.beneficiary)
+                    || state.isAccountedElsewhere(mb.beneficiary)) {
                 return Result.reject("you already hold a position in this market"
                         + " — migration is for joining from outside it");
             }
