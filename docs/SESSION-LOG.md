@@ -16,7 +16,7 @@ in-progress edit to pick up.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. If any of it fails on a clean
+Expect `572 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. If any of it fails on a clean
 checkout, that is news — it has only ever been run on one machine (backlog item 4).
 
 **Where the code is.** Branch `trust-model-and-migration`, ahead of its remote and 0
@@ -44,10 +44,10 @@ nothing depends on that.
 4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was §0.24–25,
-which closes backlog item 7: the discovery poll now asks whether a longer peer is on our
-chain instead of assuming it. **`E17`, `E17b`, `E19b`, `E21` and `E22`, plus the
-`E13`/`E14` re-checks, are all unrun** — five of them touch code written the same day.
+**What is being worked on right now:** nothing. The last thing finished was §0.26 — a
+high-water mark that can be withdrawn by whoever set it. **`E17`, `E17b`, `E19b`, `E21`,
+`E22` and `E23`, plus the `E13`/`E14` re-checks, are all unrun**, and every one of them
+touches code written on 2026-08-22.
 
 ---
 
@@ -55,14 +55,14 @@ chain instead of assuming it. **`E17`, `E17b`, `E19b`, `E21` and `E22`, plus the
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found twenty-five defects in code that had 437 passing checks behind it — one a whole
+and it found twenty-six defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`, the eighth being a new `hostTrustTest`, and each
+`572 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`, the eighth being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -640,6 +640,58 @@ And a twenty-fourth and twenty-fifth, closing backlog item 7:
     the one that matters, because both defects were about what happens between two
     machines rather than inside one.
 
+And a twenty-sixth, from re-running the fork test with §0.24 in place:
+
+26. **A watermark taken honestly is invalidated by your own later fork, and a bare number
+    cannot notice.** Reported as the "connect to catch up" alert still standing after the
+    fork was over. §0.24 was working; this is a different defect underneath it.
+
+    The timing is the whole thing:
+
+    ```
+    00:00:57  Bob hosting, replayed 123 events
+    00:01:13  high-water.json written: 129
+    00:01:17  [host] seq 124        ← Bob's first event on his own branch
+    ```
+
+    At 00:01:13 Bob was at **123**, and Alice's 129-event chain genuinely contained his —
+    they agreed through 123. His poll asked, got a match, and recorded 129. **That was the
+    correct answer at that moment.** Four seconds later he appended his own event 124 and
+    left the chain he had just verified. The 129 then described a branch nobody was on,
+    `eventsBehind` read 1, and since it gates Host he was told that serving his own market
+    would split it.
+
+    Nothing could notice, because the record was `{marketId, seq}` — no hash, no source.
+    §0.24 stopped bad marks being written; it cannot retract one that was good when
+    written.
+
+    **A claim now belongs to whoever made it.** The record carries `fromUserId`, and a
+    peer's current head replaces their previous one **in either direction**: they are not
+    asserting a record, they are saying where they are, and when they come back lower —
+    because they reset, or because the branch they were on is gone — the evidence for the
+    old number went with it. A *different* peer can only raise it, because their being at
+    50 says nothing about whether somebody else's 300 was real. Bob's case resolves
+    exactly: Alice reported 129, Alice now reports 128 on his chain, so 129 is withdrawn.
+
+    **Files written before provenance are discarded on load**, with a line saying so.
+    There is nobody to withdraw them, so they cannot be reasoned about at all — and every
+    file that exists today is one of them, including the 129 that caused this. The cost is
+    the offline warning being unavailable until the next poll rebuilds it, which is one
+    poll cycle when anybody is around and exactly the situation the mark is for when
+    nobody is.
+
+    `L6` covers all of it and both halves were verified failing with the rule disabled.
+    Worth noting what the three sittings did to this one area: §0.24 fixed what the poll
+    records, §0.25 fixed a foreign market silently zeroing it, and this fixes a mark
+    outliving the chain it described. **Three defects in a nine-line class**, all of the
+    same kind — a fact stored without enough of itself to be checked later.
+
+*A note for backlog item 4.* Running the nine suites in one gradle invocation failed the
+build twice tonight with every suite reporting all checks passed, and succeeded on an
+immediate re-run. Nothing in the checks; most likely a port race in the suites that bind
+sockets — `freePort()` picks one, closes it, and hands it to a server to rebind. Worth
+knowing before somebody writes the CI workflow and concludes the tests are broken.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -655,7 +707,7 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 565   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 572   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 25   depositCapTest 6   attestationTest 12   hostTrustTest 16
 splitPointTest 27
 ```

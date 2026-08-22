@@ -48,8 +48,10 @@ down is newer than the sitting:
   path never asked where the two chains parted
 - **`E21`** is new from that run: the re-place list could not be scrolled, and it is the
   only record of what to put back
-- **`E22`** is newest: the poll now asks whether a longer peer is on your chain, instead
-  of assuming so and filing their head as your market's height
+- **`E22`** — the poll now asks whether a longer peer is on your chain, instead of
+  assuming so and filing their head as your market's height
+- **`E23`** is newest: the high-water mark can be withdrawn by whoever set it, and a mark
+  with no source is discarded on load. Every existing world has one of those
 
 Nothing else on this list has moved since it was run.
 
@@ -856,3 +858,39 @@ telling the two answers apart.
   different id, so any foreign host silently zeroed the mark
 - The check that matters: set the mark by seeing a peer ahead, then poll a foreign host,
   then go offline and try to Host. The "you are behind" warning must still fire
+
+## E23. A watermark that can be taken back
+
+New, never run. The "connect to catch up" alert stood after a fork was over, on a copy
+that was level with everybody. The mark had been recorded honestly — the peer really did
+extend this chain at the moment it was asked — and was invalidated four seconds later by
+*this* copy appending its own event and leaving that chain. A bare number could not
+notice, so the record now carries who reported it, and their later word replaces their
+earlier one in either direction.
+
+The setup that produced it, worth reproducing exactly:
+
+- Two copies level and agreeing, say at 123
+- The other side goes ahead — 129 — while you stay put. **Open your Market screen so a
+  poll runs.** Your alert says you are 6 behind, which is true
+- **Now trade on your own copy**, forking away from the chain you just measured against
+- Your alert must go. Their 129 is a branch you are not on, and your own head is the only
+  thing on your chain
+- Fork resolved (they discard and join you, or you them, per `E20`) → Host is offered
+  without a "you are behind" warning, and `high-water.json` does not name a number above
+  the chain you share
+
+Then confirm the thing it must not break, which is the whole reason the mark exists:
+
+- Peer ahead of you on your chain, **then close their game**. Your alert survives, and
+  Host still warns you. Nobody is around to tell you, which is exactly the case
+- Two peers, one at 300 and one at 50, both on your chain → the mark reads 300, and the
+  one at 50 does not pull it down. Only the peer who set it can lower it
+- The peer who set it resets and comes back lower → the mark comes down with them
+
+**And the one-off, which happens on first launch after this change:**
+
+- Any world with an existing `high-water.json` prints *"discarding a high-water mark with
+  no source"* once, and the file is deleted. Marks written before provenance cannot be
+  withdrawn by anybody, so they are dropped rather than trusted
+- Confirm the next poll rebuilds it, and that it is discarded **once** and not every load

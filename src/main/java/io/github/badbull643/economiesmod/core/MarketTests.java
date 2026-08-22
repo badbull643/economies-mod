@@ -623,15 +623,17 @@ public class MarketTests {
             Files.deleteIfExists(file);
             UUID marketA = UUID.randomUUID();
             UUID marketB = UUID.randomUUID();
+            String alice = ALICE.toString();
+            String bob = BOB.toString();
 
             MarketHighWater hw = new MarketHighWater(file);
             check("nothing seen yet", hw.seenFor(marketA), 0);
 
-            hw.observe(marketA, 40);
+            hw.observe(marketA, 40, alice);
             check("records what it saw", hw.seenFor(marketA), 40);
 
-            hw.observe(marketA, 12);
-            check("never moves backwards", hw.seenFor(marketA), 40);
+            hw.observe(marketA, 12, bob);
+            check("somebody else being lower moves nothing", hw.seenFor(marketA), 40);
 
             // Survives a restart — the whole point, since the peer that knew the market
             // was further along is usually offline by the time someone hosts stale.
@@ -639,15 +641,45 @@ public class MarketTests {
 
             check("says nothing about a market it hasn't seen", hw.seenFor(marketB), 0);
 
+            // The claim belongs to whoever made it, and comes down when they do. Alice
+            // said 40; Alice now says 20, on our chain, which withdraws the 40 — she is
+            // reporting where she is, not setting a record. This is the case that made
+            // provenance necessary: a mark taken honestly from a peer, invalidated by
+            // the reader's own later fork away from the chain it described, with nothing
+            // able to notice because the number had no source.
+            hw.observe(marketA, 20, alice);
+            check("its own reporter can bring it down", hw.seenFor(marketA), 20);
+            check("and that survives a reload too",
+                    new MarketHighWater(file).seenFor(marketA), 20);
+
+            // Raising is still anybody's to do.
+            hw.observe(marketA, 55, bob);
+            check("anyone may raise it", hw.seenFor(marketA), 55);
+            hw.observe(marketA, 10, alice);
+            check("but only its holder may lower it", hw.seenFor(marketA), 55);
+            hw.observe(marketA, 30, bob);
+            check("and the holder is whoever last raised it", hw.seenFor(marketA), 30);
+
             // A different market resets it, so a fresh market isn't judged against an
             // old one's height.
-            hw.observe(marketB, 3);
+            hw.observe(marketB, 3, alice);
             check("switching market resets", hw.seenFor(marketB), 3);
             check("old market forgotten", hw.seenFor(marketA), 0);
 
             hw.clear();
             check("cleared with the market it described",
                     new MarketHighWater(file).seenFor(marketB), 0);
+
+            // A file from before provenance cannot be reasoned about — there is nobody
+            // to withdraw it — so it is dropped rather than trusted. Every file that
+            // exists today is one of these, and one of them is why this exists.
+            Path legacy = scratch("test-highwater-l6-legacy.json");
+            Files.write(legacy, ("{\"marketId\":\"" + marketA + "\",\"seq\":129}")
+                    .getBytes("UTF-8"));
+            check("a mark with no source is discarded",
+                    new MarketHighWater(legacy).seenFor(marketA), 0);
+            check("and the file goes with it, so it is discarded once",
+                    Files.exists(legacy) ? 1 : 0, 0);
         }
 
         section("M1: net position counts what's locked in resting orders");

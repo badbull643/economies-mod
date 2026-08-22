@@ -78,9 +78,19 @@ public class MarketStateHolder {
         return Math.max(0, seen - mine);
     }
 
-    /** Records that this market was seen at a given height, from a poll or a sync. */
-    public static void observeMarketHeight(UUID marketId, long seq) {
-        if (highWater != null) highWater.observe(marketId, seq);
+    /**
+     * Records that a peer confirmed to be on our chain is at this height.
+     *
+     * The confirmation is the caller's job and is not optional: a forked peer's head is
+     * a different branch of this market, not this market advancing, and the mark is
+     * monotonic and persisted so a number written here wrongly outlives the session that
+     * wrote it. observeHostHead is the only caller and asks before it calls.
+     *
+     * The reporter travels with it so the claim can be withdrawn by whoever made it —
+     * see MarketHighWater.observe for the run that made that necessary.
+     */
+    public static void observeMarketHeight(UUID marketId, long seq, String fromUserId) {
+        if (highWater != null) highWater.observe(marketId, seq, fromUserId);
     }
 
     /**
@@ -263,7 +273,7 @@ public class MarketStateHolder {
                 // On our chain: either level with us, or genuinely ahead. Only now is
                 // their height this market's height, and only now can "you are behind"
                 // be said honestly.
-                observeMarketHeight(marketId, seq);
+                observeMarketHeight(marketId, seq, hostUserId);
 
                 Divergence d = divergence;
                 if (d != null && hostName != null && hostName.equals(d.hostName)) {
