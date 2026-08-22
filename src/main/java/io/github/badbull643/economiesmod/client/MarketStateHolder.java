@@ -96,16 +96,46 @@ public class MarketStateHolder {
         public final String theirHash;
         public final String ourHash;
 
+        /**
+         * The last event both chains hold, or -1 when it could not be found out.
+         *
+         * The thing this class could never say. It knew a point where the two disagree
+         * and could not name where they parted, because the split is somewhere at or
+         * below that point and no message carried a hash from below it — so "differs at
+         * event 400" might mean four events of divergence or four hundred, and nothing
+         * could tell the difference. See MarketClient.findSplitPoint.
+         */
+        public final long splitAt;
+
         Divergence(String hostName, long seq, String theirHash, String ourHash) {
+            this(hostName, seq, theirHash, ourHash, -1);
+        }
+
+        Divergence(String hostName, long seq, String theirHash, String ourHash,
+                   long splitAt) {
             this.hostName = hostName;
             this.seq = seq;
             this.theirHash = theirHash;
             this.ourHash = ourHash;
+            this.splitAt = splitAt;
+        }
+
+        /** Events on our chain that are ours alone, or -1 if the split is unknown. */
+        public long oursSinceSplit(long ourHead) {
+            return splitAt < 0 ? -1 : Math.max(0, ourHead - splitAt);
         }
 
         public String describe() {
-            return (hostName == null ? "a host" : hostName)
-                    + " is on a different branch of this market (differs at event " + seq + ")";
+            String who = hostName == null ? "a host" : hostName;
+            if (splitAt < 0) {
+                return who + " is on a different branch of this market (differs at event "
+                        + seq + ")";
+            }
+            // The number somebody can act on. "Differs at event 400" says nothing about
+            // what a reset would cost; "you parted 12 events ago" says most of it.
+            return who + " is on a different branch of this market — you parted after"
+                    + " event " + splitAt + ", and everything either of you did since is"
+                    + " on one branch only";
         }
     }
 
@@ -678,7 +708,7 @@ public class MarketStateHolder {
                     + " at seq " + c.lastSeq());
         } catch (MarketClient.Refused e) {
             lastRefusal = e;
-            noteForkFromRefusal(log, e);
+            noteForkFromRefusal(log, e, host, port);
             onRejected.accept(e.getMessage() + explainRemedy(e.code, lossIfReset));
             System.err.println("[economiesmod] refused: " + e.getMessage());
             adoptAfterFailedConnect(log);
@@ -710,7 +740,8 @@ public class MarketStateHolder {
      * The host's name rides along because observeHostHead clears a divergence by
      * matching the name it stored; a mismatched label would strand the banner.
      */
-    private static void noteForkFromRefusal(EventLog log, MarketClient.Refused e) {
+    private static void noteForkFromRefusal(EventLog log, MarketClient.Refused e,
+                                            String forkHost, int forkPort) {
         if (log == null || e == null) return;
         if (!HostServer.Refusal.FORK.equals(e.code)) return;
         if (e.hostSeq <= 0 || e.hostHash == null) return;
@@ -720,11 +751,29 @@ public class MarketStateHolder {
             String ours = log.hashAt(e.hostSeq);
             if (ours == null || ours.equals(e.hostHash)) return;
 
-            divergence = new Divergence(e.hostName, e.hostSeq, e.hostHash, ours);
+            // Ask where we actually parted, which until now nothing could. It is a
+            // separate round trip to a host that has just refused us — deliberately, so
+            // a failure here costs the detail and not the refusal itself, which the
+            // player needs either way.
+            long splitAt = -1;
+            if (forkHost != null && forkPort > 0) {
+                try {
+                    splitAt = MarketClient.findSplitPoint(forkHost, forkPort, log);
+                } catch (IOException probe) {
+                    System.err.println("[economiesmod] could not locate the split point: "
+                            + probe.getMessage());
+                }
+            }
+
+            divergence = new Divergence(e.hostName, e.hostSeq, e.hostHash, ours, splitAt);
             System.err.println("[economiesmod] divergence: "
                     + (e.hostName == null ? "that host" : e.hostName)
                     + " reports " + e.hostHash + " at event " + e.hostSeq
-                    + ", we have " + ours);
+                    + ", we have " + ours
+                    + (splitAt >= 0
+                            ? " — parted after event " + splitAt + ", "
+                                    + (log.lastSeq() - splitAt) + " of ours since"
+                            : " — split point unknown"));
         } catch (IOException io) {
             // The refusal still reaches the player either way; only the checklist that
             // a later reset could have offered is lost.

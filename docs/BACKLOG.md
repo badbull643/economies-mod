@@ -24,14 +24,27 @@ history. A group that had never met can migrate; a group that split cannot.
 the split. Those items already left the player's Minecraft inventory, so it is real
 destruction rather than a ledger entry. Nothing hands them back.
 
-**Do first:** split-point discovery. Small — `EventLog.hashAt` exists, so it is a message
-type and a binary search — and useful alone, because it turns the FORK banner from "you
-disagree somewhere at or before here" into "you diverged N events ago". Both recovery
-options need it and neither can start without it.
+**~~Do first: split-point discovery.~~ DONE 2026-08-22.** `MarketClient.findSplitPoint`
+answers the question nothing could: the last sequence number two chains still agree on.
+A `HashQuery`/`HashReply` pair, a bracketing search that narrows by 24× a round, and
+`EventLog.hashesAt` so a whole round costs one pass over the log rather than one per
+probe — which is the trap the design note flagged and would have made the search
+O(n log n) disk on the path that already annoys people with long logs. `splitPointTest`.
 
-**Then:** refund-only (return the deposited items, forget the rest), then a full rebase
-if that is not enough. Never a merge — matching is order-dependent, so interleaving two
-branches produces fills nobody experienced. The design note explains why at length.
+The FORK banner now reads *"you parted after event N, and everything either of you did
+since is on one branch only"* rather than naming a point of disagreement that could have
+meant four events or four hundred. `Divergence.splitAt` carries it, `-1` when it could not
+be found out, and asking is a separate round trip so a failure costs the detail rather
+than the refusal.
+
+**Next: refund-only** — before a reset deletes the losing branch, walk its tail for this
+player's own deposits and hand those items back. It is the only part of a reset that
+destroys something outside the ledger, and it is now unblocked: the split point is what
+tells it which deposits were only ever on the losing side.
+
+**Then** a full rebase, if refund-only turns out not to be enough. Never a merge —
+matching is order-dependent, so interleaving two branches produces fills nobody
+experienced. The design note explains why at length.
 
 ---
 
