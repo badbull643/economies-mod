@@ -79,6 +79,40 @@ public class MarketState {
         if (participants != null) accountedElsewhere.addAll(participants);
     }
 
+    /**
+     * One lock over the whole state, above the per-class monitors.
+     *
+     * Those monitors stop any single collection being read while it is being written.
+     * They cannot make a *set* of reads agree with each other, because settling one
+     * event touches several: a fill credits the buyer's items and the seller's money in
+     * two separate steps, so a reader between them sees credits gone and goods not yet
+     * arrived. Counting orders across every book has the same problem — the fee that
+     * count decides has to be one number every replica reaches, not a walk that another
+     * thread can rearrange halfway through.
+     *
+     * So EventApplier.apply holds the write lock for a whole event, and anything reading
+     * more than one thing at once takes the read lock. Single reads need neither; their
+     * own monitor is enough, and making every getter contend would put a lock in the
+     * render loop for no gain.
+     *
+     * Reentrant, and a write-lock holder may take the read lock — which it does, since
+     * apply calls straight back into openOrderCount through the listing fee.
+     */
+    private final java.util.concurrent.locks.ReentrantReadWriteLock guard =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
+
+    /**
+     * Held while reading several things that have to agree with each other.
+     *
+     * Public so a caller building a composite view — a migration valuation, a frame that
+     * must not show a half-settled fill — can hold one moment still. Always in a
+     * try/finally; never held while doing anything slow.
+     */
+    public java.util.concurrent.locks.Lock readLock() { return guard.readLock(); }
+
+    /** Held by EventApplier.apply for the whole of one event, and by nothing else. */
+    java.util.concurrent.locks.Lock writeLock() { return guard.writeLock(); }
+
     /** Called only by EventApplier. First registration for a userId wins. */
     void registerKey(UUID userId, String publicKey) {
         keyDirectory.put(userId, publicKey);
@@ -259,25 +293,28 @@ public class MarketState {
     /**
      * Orders this identity has resting across every book.
      *
-     * Each book is read under its own monitor, so no single read can catch one mid-
-     * match, but the walk across books is not one atomic moment. That is exactly right
-     * for the two callers and worth being explicit about, because a fee every replica
-     * has to agree on cannot be allowed to depend on timing: EventApplier calls this on
-     * the applier thread, where it is the only thread touching any of these books, so
-     * the figure it charges is exact and reproducible. The render thread calls it only
-     * to show what an order would cost, where a count that is one stale for a frame
-     * shows a stale quote and changes nothing.
+     * Under the read lock, because this is the input to a fee and a fee is a number
+     * every replica has to reach independently and agree on. Each book's own monitor
+     * makes any one of them safe to read; it does not stop the walk across them being
+     * rearranged halfway through, and "the answer depends on when you asked" is the one
+     * property a replicated rule may never have. Cheap: uncontended except for the
+     * instant an event is settling.
      */
     public long openOrderCount(UUID userId) {
         if (userId == null) return 0;
-        long n = 0;
-        for (String itemId : activeItems()) {
-            OrderBook book = peekBook(itemId);
-            if (book == null) continue;
-            for (Order o : book.restingAsks()) if (userId.equals(o.userID())) n++;
-            for (Order o : book.restingBids()) if (userId.equals(o.userID())) n++;
+        readLock().lock();
+        try {
+            long n = 0;
+            for (String itemId : activeItems()) {
+                OrderBook book = peekBook(itemId);
+                if (book == null) continue;
+                for (Order o : book.restingAsks()) if (userId.equals(o.userID())) n++;
+                for (Order o : book.restingBids()) if (userId.equals(o.userID())) n++;
+            }
+            return n;
+        } finally {
+            readLock().unlock();
         }
-        return n;
     }
 
     /**

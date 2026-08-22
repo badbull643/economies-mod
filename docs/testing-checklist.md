@@ -7,7 +7,7 @@ their wiring; this covers the parts that need a keyboard and a screen.*
 Group E is everything built after it, and none of that has been run yet.*
 
 Run `./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest
-depositCapTest attestationTest` first — if any of those fail, stop, because everything
+depositCapTest attestationTest hostTrustTest` first — if any of those fail, stop, because everything
 below assumes they pass.
 
 ## Already confirmed — do not spend time here

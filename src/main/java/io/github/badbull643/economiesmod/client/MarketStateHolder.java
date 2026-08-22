@@ -1650,12 +1650,17 @@ public class MarketStateHolder {
             // and re-placing them is the whole reason this is less painful than a reset.
             List<OldOrder> orders = new ArrayList<>();
             for (String itemId : mine.activeItems()) {
-                for (Order o : mine.bookFor(itemId).restingAsks()) {
+                // peekBook: activeItems only names items that already have one, so this
+                // is never null in practice — but bookFor creates on read, and nothing
+                // that is only reading should be able to write.
+                OrderBook book = mine.peekBook(itemId);
+                if (book == null) continue;
+                for (Order o : book.restingAsks()) {
                     if (o.userID().equals(userId)) {
                         orders.add(new OldOrder(itemId, o.value(), o.volume(), false));
                     }
                 }
-                for (Order o : mine.bookFor(itemId).restingBids()) {
+                for (Order o : book.restingBids()) {
                     if (o.userID().equals(userId)) {
                         orders.add(new OldOrder(itemId, o.value(), o.volume(), true));
                     }

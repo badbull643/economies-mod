@@ -135,6 +135,13 @@ tasks.register('replayGuardTest', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
 }
 
+tasks.register('hostTrustTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks a host is trusted to order events and for nothing else.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.HostTrustTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
 tasks.register('gapRecoveryTest', JavaExec) {
     group = 'verification'
     description = 'Checks a missed broadcast is noticed and can be recovered from.'

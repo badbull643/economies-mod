@@ -1686,6 +1686,127 @@ public class MarketTests {
                     stipendRejection(m, ALICE, 50).contains("pays no stipend") ? 1 : 0, 1);
         }
 
+        section("X1: a reader never sees an event half-settled");
+        {
+            // The only check in this suite that runs two threads, because the thing it
+            // is about cannot happen on one.
+            //
+            // EventApplier is the only writer, but the render thread reads the same
+            // state every frame. Giving each collection its own monitor stops any single
+            // read catching a map mid-write; it cannot make a set of reads agree with
+            // each other, and settling one event touches several. submitOrder takes the
+            // buyer's credits and *then* puts the order in the book, so between those
+            // two steps the money has left the wallet and is in no reservation — a
+            // reader landing there sees a market with credits simply missing.
+            //
+            // So apply holds one write lock across the whole event, and this holds the
+            // matching read lock and checks the books balance. With no tax and no
+            // listing fee, credits are conserved exactly: what is in wallets plus what
+            // is reserved in resting bids never changes, whatever is happening.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "concurrent market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.registerKey(BOB, "bob-key");
+            m.wallets().setBalance(ALICE, 100_000L);
+            m.wallets().setBalance(BOB, 100_000L);
+
+            final long TOTAL = 200_000L;
+            final java.util.concurrent.atomic.AtomicReference<String> fault =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            final java.util.concurrent.atomic.AtomicBoolean stop =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+            final java.util.concurrent.atomic.AtomicLong reads =
+                    new java.util.concurrent.atomic.AtomicLong();
+
+            Thread reader = new Thread(() -> {
+                try {
+                    while (!stop.get()) {
+                        long seen;
+                        m.readLock().lock();
+                        try {
+                            seen = m.wallets().getBalance(ALICE)
+                                    + m.wallets().getBalance(BOB);
+                            // Walked the way the render thread walks it: every book,
+                            // including ones being created underneath us.
+                            for (String itemId : m.activeItems()) {
+                                OrderBook b = m.peekBook(itemId);
+                                if (b == null) continue;
+                                for (Order o : b.restingBids()) {
+                                    seen += o.volume() * o.value();
+                                }
+                            }
+                        } finally {
+                            m.readLock().unlock();
+                        }
+                        reads.incrementAndGet();
+                        if (seen != TOTAL) {
+                            fault.compareAndSet(null, "credits came to " + seen
+                                    + ", not " + TOTAL);
+                            return;
+                        }
+                    }
+                } catch (Throwable t) {
+                    // A ConcurrentModificationException out of the walk lands here, and
+                    // is the other half of what this is for.
+                    fault.compareAndSet(null, t.getClass().getSimpleName() + ": "
+                            + t.getMessage());
+                }
+            }, "market-reader");
+            reader.setDaemon(true);
+            reader.start();
+
+            // A fresh item every round, so books are being created the whole time the
+            // reader is walking them.
+            long seq = 10;
+            int rounds = 0;
+            long deadline = System.currentTimeMillis() + 1500;
+            while (rounds < 600 && fault.get() == null
+                    && System.currentTimeMillis() < deadline) {
+                String item = "test:item_" + rounds;
+
+                Event.Deposit d = new Event.Deposit();
+                d.userId = ALICE; d.marketId = m.marketId();
+                d.itemId = item; d.quantity = 10;
+                applyAt(m, ++seq, d);
+
+                Event.PlaceOrder ask = placeOrder(ALICE, item, 5, 2, false);
+                ask.marketId = m.marketId();
+                applyAt(m, ++seq, ask);
+
+                // Crosses immediately: reserve, match, pay, refund — the whole window.
+                Event.PlaceOrder bid = placeOrder(BOB, item, 5, 2, true);
+                bid.marketId = m.marketId();
+                applyAt(m, ++seq, bid);
+
+                // And one that rests, so the reserved half of the sum is never zero and
+                // the reader is actually obliged to count it.
+                if (rounds % 8 == 0) {
+                    Event.PlaceOrder resting = placeOrder(BOB, item, 1, 3, true);
+                    resting.marketId = m.marketId();
+                    applyAt(m, ++seq, resting);
+                }
+                rounds++;
+            }
+
+            stop.set(true);
+            reader.join(5000);
+
+            check("the reader saw a consistent market throughout",
+                    fault.get() == null ? 1 : 0, 1);
+            if (fault.get() != null) System.out.println("      " + fault.get());
+            check("and it actually looked", reads.get() > 0 ? 1 : 0, 1);
+            check("the writer got through its rounds", rounds > 0 ? 1 : 0, 1);
+
+            // Conserved at rest too, which says the invariant itself was the right one.
+            long ended = m.wallets().getBalance(ALICE) + m.wallets().getBalance(BOB);
+            for (String itemId : m.activeItems()) {
+                OrderBook b = m.peekBook(itemId);
+                if (b == null) continue;
+                for (Order o : b.restingBids()) ended += o.volume() * o.value();
+            }
+            check("credits are conserved at the end", ended, TOTAL);
+        }
+
         section("T1f: a listing nobody can pay for is refused before anything is deposited");
         {
             // The two halves of DepositAndList used to be checked in two places that did
@@ -2936,6 +3057,14 @@ public class MarketTests {
         kr.publicKey = testKeys().publicKeyString();
         SequencedEvent se = log.append(kr, testKeys().sign(EventCanonical.canonicalPayload(kr)));
         EventApplier.apply(state, se);
+    }
+
+    /** Applies an event at a given sequence number, with no log behind it. */
+    private static EventApplier.Result applyAt(MarketState state, long seq, Event e) {
+        SequencedEvent se = new SequencedEvent();
+        se.seq = seq;
+        se.event = e;
+        return EventApplier.apply(state, se);
     }
 
     private static Event.Deposit deposit(UUID user, String item, long qty) {

@@ -2266,11 +2266,16 @@ public class MarketScreen extends Screen {
 
             // What the same order would meet here, so re-placing at the old price is a
             // decision rather than a guess.
+            // peekBook, not bookFor. bookFor creates the book it fails to find, so
+            // asking it from render quietly filled the map with empty books for items
+            // nobody has traded — and did it from the render thread, writing to a map
+            // the applier thread was also writing to. Its own javadoc says as much.
             String here = "";
-            if (s != null) {
+            OrderBook peeked = s == null ? null : s.peekBook(o.itemId);
+            if (peeked != null) {
                 List<Order> book = o.isBid
-                        ? s.bookFor(o.itemId).restingAsks()
-                        : s.bookFor(o.itemId).restingBids();
+                        ? peeked.restingAsks()
+                        : peeked.restingBids();
                 if (!book.isEmpty()) {
                     here = (o.isBid ? "best ask " : "best bid ") + book.get(0).value();
                 }
@@ -2690,8 +2695,11 @@ public class MarketScreen extends Screen {
         if (item == Items.AIR) { status = "Unknown item"; return; }
 
         // The event needs the side; find the order to work out which book it's in.
+        // peekBook: an item with no book has no order to cancel, and creating one to
+        // discover that writes to the market from a keypress.
         String itemId = MinecraftIds.itemToId(item);
-        OrderBook book = MarketStateHolder.get().bookFor(itemId);
+        OrderBook book = MarketStateHolder.get().peekBook(itemId);
+        if (book == null) { status = "No such order in this item's book"; return; }
         Order o = book.find(orderId, true);
         boolean isBid = o != null;
         if (o == null) o = book.find(orderId, false);

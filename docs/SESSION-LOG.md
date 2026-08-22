@@ -15,13 +15,13 @@ date, and was repeated for most of this session before anyone checked. Local `ma
 ## 0. The read-through, and what it found
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
-built here: the whole of it was an inspection, and it found seven defects in code that
-had 437 passing checks behind it. Read this before §4, which predicted all of them.*
+built here: the whole of it was an inspection, and it found nine defects in code that had
+437 passing checks behind it. Read this before §4, which predicted almost all of them.*
 
-Six of the seven are the §4 shape exactly — **two things that must agree, kept in two
+Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`456 / 6 / 5 / 16 / 16 / 6 / 12`, and each engine fix was verified to **fail** with the
-fix disabled before being trusted.
+`460 / 6 / 5 / 16 / 16 / 6 / 12 / 11`, the last being a new `hostTrustTest`, and each
+engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
    in one place and applied in another, and only the applier knew about the listing fee:
@@ -73,6 +73,33 @@ fix disabled before being trusted.
    viewer has no last claim on record, which reads as fill zero, so the countdown went
    negative and said "yours is waiting" beside a button that would never appear.
 
+Then two more, done straight after because leaving either half-closed was worse than not
+having started:
+
+8. **`MarketClient.applyLine` had #2's hole on the path everybody uses.** It verified the
+   signature and called `apply`, never `validate` — so a modified host could sequence
+   itself a grant for any sum, correctly signed with its own key, and every connected
+   replica applied it, **persisted it, and would re-serve it the next time that player
+   hosted**. Measured with the fix disabled: the client joins, banks 999,999,999 credits
+   and writes the event into its own log. It asks `validate` now. Safe because every path
+   by which a host appends validates first against its state at seq-1, and a client's
+   state at that point is the same state — `hostTrustTest` H2 exists to hold that claim
+   down, syncing an honest history of exactly the same shape.
+
+9. **The atomicity fix 6 left open, closed.** Per-collection monitors stop any single
+   read catching a map mid-write; they cannot make a *set* of reads agree, and settling
+   one event touches several. `submitOrder` takes the buyer's credits and *then* books
+   the order, so a reader between those two steps sees credits that are in no wallet and
+   no reservation. `EventApplier.apply` now holds one write lock across a whole event and
+   `openOrderCount` takes the matching read lock, so the fee it feeds is a fact rather
+   than a race. `X1` runs a reader thread against a live market and checks credits
+   balance on every pass; with the lock removed it catches a torn read within a second.
+
+   Found while doing it: **the render thread was calling `bookFor`**, which creates the
+   book it fails to find. Four call sites, one of them per frame — writing to the market
+   from a draw call, and filling the map with empty books for items nobody has traded.
+   All four are `peekBook` now. Its javadoc had said exactly this since it was written.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -88,11 +115,12 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 456   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
-admissionTest 16   depositCapTest 6   attestationTest 12
+coreTests 460   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+admissionTest 16   depositCapTest 6   attestationTest 12   hostTrustTest 11
 ```
 
-*(437 when this section was written; the 19 added are §0's.)*
+*(437 across seven suites when this section was written; the extra 23 checks and the
+eighth suite belong to §0.)*
 
 Every engine change below was verified to **fail** with its fix disabled before being
 trusted, per the project's existing discipline. Three failed the first time for a reason
