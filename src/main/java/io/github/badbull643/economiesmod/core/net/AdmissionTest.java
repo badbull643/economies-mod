@@ -166,9 +166,11 @@ public class AdmissionTest {
         dep.timestamp = System.currentTimeMillis();
         foreign.append(dep, outsiderKeys.sign(EventCanonical.canonicalPayload(dep)));
 
+        // No attestation: this host does not require one, so admission stays the only
+        // thing that can refuse this — which is what A3 is about.
         Message.MigrateResult result = MarketClient.requestMigration(
                 "127.0.0.1", port, OUTSIDER,
-                Files.readAllLines(foreignLog));
+                Files.readAllLines(foreignLog), null);
 
         check("migration refused", result != null && !result.accepted ? 1 : 0, 1);
         check("because of admission, not the archive",

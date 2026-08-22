@@ -39,6 +39,7 @@ The previous log's Phases 0–5 are complete or deliberately closed:
 ```
 coreTests 374   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 9   depositCapTest 6   attestationTest 12
+migrationCapTest 16
 ```
 
 Four suites are new this session. Each engine change was verified to **fail** with its
@@ -102,6 +103,40 @@ Two bypasses were found by the user testing and are closed:
 client-supplied. A modified client reports whatever it likes. What is closed is every
 route that needs no tools at all — which is the one people actually use.
 
+### Migration was the unpoliced door
+
+All four layers hang off a proposed `Deposit` or `DepositAndList`. `depositUnitsOf`
+returns 0 for anything else, and every one of the three checks is gated on it being
+positive — so a `MigrateBalance`, which carries items just as a deposit does, met none
+of them. `handleMigrate` is also a *pre-handshake* exchange, so it had no attestation to
+consult even in principle: the world rules were being applied to one of the two doors.
+
+The attack needs no tools. Make a market in a creative world, deposit an arbitrary
+quantity into it — your own market, nothing objects — and migrate it in on first
+contact. The `isRegistered || hasBeenGranted` guard in `EventApplier` does not fire,
+because a newcomer holds no position yet, which is exactly who migration is for.
+
+Closed by giving the migration path the same four checks, on the sequencer thread where
+the deposit checks already run — they share one running total, and it is only
+single-threaded by being asked from one place. Migrated items now spend the allowance
+and are recorded per item, so a migration followed by a deposit is weighed as one
+total. `MigrateRequest` gained an attestation, since it never sends a `Hello`.
+
+Two further holes surfaced while testing the fix:
+
+- **A client could simply propose its own `MigrateBalance`.** It is an ordinary event
+  type, so it never had to go near `handleMigrate` — no branch to verify, `fromMarketId`
+  whatever the sender typed, so the replay guard is beaten by picking a fresh one each
+  time. Confirmed before fixing: 1,000,000 credits and 5000 iron minted to an identity
+  holding nothing. `WelcomeGrant` shares the shape but was already defused by pinning
+  the amount (§3); `MigrateBalance` has no amount to pin, because the whole position is
+  the amount. Both are now refused from a client, as host policy — the objection is to
+  who offered the event, which is not a market fact and cannot live in `EventApplier`.
+- **The statistics multiple never accumulated.** Counting was switched on by the window
+  cap or the play-hour rule but not by `maxDepositMultipleOfHandled`, so a host with
+  only that configured weighed every arrival alone — and a rule that sees one arrival at
+  a time is answered by making two. Affected deposits as much as migrations.
+
 ## 5. Known gaps
 
 - **Slow-client fan-out has no automated test.** Provoking TCP backpressure depends on OS
@@ -124,7 +159,8 @@ launcher's whole CLI, deposit caps, and all three cheat routes.
 - **A4** — fork-reset re-place checklist. Needs a fork first, so pair it with B2.
 - **Group B** — two clients: fill notices with a fee large enough to exist, fork then
   reset, sequence-gap recovery, order outlook wording.
-- **Group C** — dedicated server: admission, deposit caps, attestation, grant policy.
+- **Group C** — dedicated server: admission, deposit caps, attestation, migration (C6),
+  grant policy.
   Note C1–C4 need `server-config.json`; a market hosted from the game reads
   `host-config.json` in that world instead, and the two are separate on purpose.
 - **Group D** — the slow-client case above.

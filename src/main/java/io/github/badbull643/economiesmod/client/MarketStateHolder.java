@@ -1536,8 +1536,11 @@ public class MarketStateHolder {
             }
 
             List<String> lines = new EventLog(logPathFor(currentWorldDir)).rawLinesFrom(1);
-            Message.MigrateResult result =
-                    MarketClient.requestMigration(host, port, userId, lines);
+            // The world these goods are coming out of, described as honestly as the one
+            // a handshake describes — and for the same reason, since this is the other
+            // way they get in.
+            Message.MigrateResult result = MarketClient.requestMigration(host, port,
+                    userId, lines, WorldFacts.of(MinecraftClient.getInstance().getServer()));
 
             if (!result.accepted) {
                 onRejected.accept("migration refused: " + result.reason);

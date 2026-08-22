@@ -278,8 +278,14 @@ public class MarketClient {
      * so there is no session to do this inside. On success the caller should reset and
      * connect normally; nothing about the local log is touched here.
      */
+    /**
+     * @param attestation the world being left, or null when there is nothing to say —
+     *                    a server that requires one will refuse the second case, which
+     *                    is what requiring it means
+     */
     public static Message.MigrateResult requestMigration(String host, int port,
-                                                         UUID userId, List<String> logLines)
+                                                         UUID userId, List<String> logLines,
+                                                         WorldAttestation attestation)
             throws IOException {
         Socket socket = new Socket(host, port);
         socket.setSoTimeout(30_000);   // verifying a whole branch is not instant
@@ -296,6 +302,10 @@ public class MarketClient {
                 req.userId = userId.toString();
                 req.logLines = chunks.get(i);
                 req.complete = (i == chunks.size() - 1);
+                // First chunk only, like the identity fields on Sync: the host reads it
+                // from the frame that opened the exchange, and repeating it on every
+                // chunk would invite a later one to disagree with the first.
+                if (i == 0) req.attestation = attestation;
                 ch.send(req);
             }
 

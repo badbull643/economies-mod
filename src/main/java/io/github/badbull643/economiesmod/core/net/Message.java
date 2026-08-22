@@ -118,6 +118,19 @@ public abstract class Message {
         /** False on every chunk but the last — a whole history in one frame can
          *  exceed MessageChannel's per-line cap, so the transfer is split. */
         public boolean complete = true;
+        /**
+         * The world being migrated from, described the same way Hello describes one.
+         *
+         * Here because migration never sends a Hello: it is answered before any
+         * handshake, and a host that checked worlds only at the handshake would be
+         * checking one of its two doors. Read from the first chunk, like everything
+         * else on this message that is not log lines.
+         *
+         * Absent from an older client, which reads as "did not say" rather than as
+         * "nothing to say" — the difference matters only to a server that requires an
+         * attestation, and refusing there is the point of requiring one.
+         */
+        public WorldAttestation attestation;
         public MigrateRequest() { type = "MigrateRequest"; }
     }
 

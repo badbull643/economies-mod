@@ -175,6 +175,39 @@ Each item needs a `server-config.json` change and a restart. Group them into one
 - From a world with only an hour or two of play, deposit far more than that affords →
   refused, naming the contradiction
 
+**C6. Migration answers to the same rules — new.** The other door. Everything in C2,
+C3 and C5 is a rule about goods entering a market, and until now each was checked only
+where goods arrive as a `Deposit`. Automated in `./gradlew migrationCapTest`; worth
+doing live at least once, because the client half of it — sending an attestation with a
+migration — has no coverage above the socket.
+
+```json
+{ "maxDepositUnitsPerWindow": 100, "depositWindowMinutes": 60 }
+```
+
+- In a **second world**, create your own market and deposit 5000 of something into it.
+  Nothing objects; it is your market
+- Migrate it into the capped server → refused, naming the limit
+- Redo it holding 60 → accepted. Then deposit 60 more as an ordinary deposit → refused.
+  **This is the important one**: migrated items have to spend the same allowance, or the
+  cap is only a rule about which door you used
+
+```json
+{ "refuseCreativeWorlds": true }
+```
+
+- Migrate out of a creative world → refused for being creative, before the branch is
+  even verified
+
+```json
+{ "maxDepositMultipleOfHandled": 3 }
+```
+
+- Migrate a market holding far more of an item than your statistics say you have ever
+  handled → refused, naming the contradiction
+- Do it twice with two smaller markets that only breach the allowance together → the
+  second is refused. A rule that weighs each arrival alone is answered by making two
+
 ### C4. Welcome grant policy
 
 ```json

@@ -23,6 +23,13 @@ public class HostServer {
     // 8: MarketPolicy event (transaction tax); Sync.dedicated. Batched deliberately —
     //    each wire change costs a version and a window where mixed clients cannot talk,
     //    so the two that were ready went together.
+    //
+    // MigrateRequest.attestation was added without a bump, which is the exception and
+    // not the rule. It is optional in the only direction that matters: an older client
+    // omits it, the host reads null, and null is refused only by a server that has
+    // asked for attestations — which is the behaviour that setting was for. A bump
+    // would have bought a window where mixed clients cannot talk in exchange for
+    // nothing, and migration does not check the version in any case.
     public static final String PROTOCOL_VERSION = "8";
     /** Only the fallback for the deprecated constructors now — see ServerConfig. */
     private static final int MAX_CONNECTIONS = 64;
@@ -73,6 +80,44 @@ public class HostServer {
             return ((Event.DepositAndList) event).quantity;
         }
         return 0;
+    }
+
+    /**
+     * Items carried by a migration, which enter the market exactly as a deposit does.
+     *
+     * Kept apart from depositUnitsOf because the two are counted at different moments —
+     * a deposit when it is proposed, a migration when its branch has been verified —
+     * and folding them into one method would suggest one place answers for both.
+     */
+    private static long migratedUnitsOf(Map<String, Long> items) {
+        long total = 0;
+        if (items == null) return total;
+        for (Long qty : items.values()) {
+            if (qty != null && qty > 0) total = Math.addExact(total, qty);
+        }
+        return total;
+    }
+
+    /**
+     * Event types this host writes for itself and will not take from anybody else.
+     *
+     * Both put value into the market without anything being given up for it, and both
+     * are written only after a check that lives outside the event: a welcome grant once
+     * the host has decided an identity is new to it, a migration once a foreign branch
+     * has been verified event by event and the position recomputed from it. Proposed
+     * directly, neither check has happened — the credits and items are simply whatever
+     * the sender typed, and a MigrateBalance naming a market that never existed is
+     * indistinguishable from one naming a market that did.
+     *
+     * EventApplier is the wrong place for this. Its rules bind every replica, and every
+     * replica must go on accepting the ones a host legitimately wrote. What is being
+     * refused here is not a property of the event but of who offered it, which is not a
+     * market fact and is gone by the time anyone replays the log. So it is host policy,
+     * like admission and the deposit cap.
+     */
+    private static boolean isHostAuthoredOnly(Event event) {
+        return event instanceof Event.MigrateBalance
+                || event instanceof Event.WelcomeGrant;
     }
 
     private final int port;
@@ -260,11 +305,17 @@ public class HostServer {
         }
 
         this.config = config;
-        // Counting is switched on by either feature. The cap needs a total to compare
-        // against a ceiling; the attestation check needs one to compare against claimed
-        // play time. With neither configured the window is zero and nothing is kept.
+        // Counting is switched on by any of the three rules that need a running total.
+        // The cap compares one against a ceiling; the attestation check compares one
+        // against claimed play time; the statistics multiple compares one against what
+        // the player has ever handled. That last one was missing here, and a rule that
+        // sees each arrival alone is answered by splitting it in two — the allowance
+        // could be taken again on every deposit, and again on every migration, because
+        // nothing was ever added up. With none of the three configured the window is
+        // zero and nothing is kept.
         boolean needsCounting = config.maxDepositUnitsPerWindow > 0
-                || config.maxDepositUnitsPerPlayHour > 0;
+                || config.maxDepositUnitsPerPlayHour > 0
+                || config.maxDepositMultipleOfHandled > 0;
         this.depositLimiter = new DepositLimiter(config.maxDepositUnitsPerWindow,
                 needsCounting ? config.depositWindowMinutes * 60_000L : 0L);
         this.welcomeGrantAmount = config.welcomeGrant;
@@ -811,6 +862,86 @@ public class HostServer {
     }
 
     /**
+     * The deposit rules, asked about a migration. Returns why it is refused, or null.
+     *
+     * Migration is the second way items enter a market, and until this existed it was
+     * the unpoliced one. The attack it closes needs no modified client and no tools: a
+     * local market in a creative world, an arbitrary quantity deposited into it — your
+     * own market, so nothing objects — and then the whole position carried across on
+     * first contact. Every check below is one a deposit of the same goods would have
+     * met, and none of them saw a migration.
+     *
+     * Sequencer thread only, like the deposit checks it mirrors: they share one running
+     * total, and it is only single-threaded by being asked from one place.
+     *
+     * @param items what this migration would bring in, credits excluded — they are
+     *              already bounded by the double-mint guards in EventApplier, and no
+     *              quantity of them fabricates an item
+     * @param claim what the sender says about the world it is leaving, or null
+     */
+    private String migrationRefusal(UUID who, Map<String, Long> items,
+                                    WorldAttestation claim, long now) {
+        long units = migratedUnitsOf(items);
+        if (units <= 0) return null;
+
+        if (!depositLimiter.allows(who, units, now)) {
+            long remaining = depositLimiter.remainingFor(who, now);
+            System.out.println("[host] deposit cap: migration for " + who + " carries "
+                    + units + ", has " + remaining + " left of "
+                    + depositLimiter.maxUnits());
+            return "deposit limit reached — this server accepts "
+                    + depositLimiter.maxUnits() + " items per identity per "
+                    + config.depositWindowMinutes + " minutes, and that market holds "
+                    + units + " against the " + remaining + " you have left";
+        }
+
+        if (claim == null) return null;
+
+        // Per item, against the depositor's own statistics — the one record here they
+        // did not write and cannot quietly restate. A market built in a creative world
+        // has goods behind it that were never mined, crafted or picked up, and this is
+        // where that shows. Asked item by item because the statistic is per item.
+        if (config.maxDepositMultipleOfHandled > 0) {
+            for (Map.Entry<String, Long> entry : items.entrySet()) {
+                String itemId = entry.getKey();
+                long qty = entry.getValue() == null ? 0 : entry.getValue();
+                if (qty <= 0) continue;
+
+                long handled = claim.handledOf(itemId);
+                // Plus what this market has already handed them, for the same reason
+                // the deposit path allows it: a withdrawal reaches an inventory through
+                // insertStack and increments no statistic, so goods this market gave
+                // out would otherwise look fabricated on the way back in.
+                long allowed = Math.addExact(
+                        Math.multiplyExact(handled,
+                                (long) config.maxDepositMultipleOfHandled),
+                        state.withdrawnBy(who, itemId));
+                long already = depositLimiter.usedBy(who, itemId, now);
+
+                if (already + qty > allowed) {
+                    System.out.println("[host] implausible migration from " + who + ": "
+                            + (already + qty) + " " + itemId
+                            + " against statistics showing " + handled + " ever handled");
+                    return "that market holds " + qty + " " + itemId + ", and you have"
+                            + " handled " + handled + " by your own statistics — this"
+                            + " server accepts up to "
+                            + config.maxDepositMultipleOfHandled + " times that";
+                }
+            }
+        }
+
+        List<String> objections = claim.objections(config,
+                depositLimiter.usedBy(who, now) + units);
+        if (!objections.isEmpty()) {
+            String why = String.join("; ", objections);
+            System.out.println("[host] implausible migration from " + who + ": " + why);
+            return why;
+        }
+
+        return null;
+    }
+
+    /**
      * Honours a migration from a market this player is abandoning.
      *
      * The branch is verified here, on the connection thread, because checking an RSA
@@ -829,6 +960,20 @@ public class HostServer {
                 System.out.println("[host] refused migration from " + first.userId
                         + " — " + notWelcome);
                 reply.reason = notWelcome;
+                channel.send(reply);
+                return;
+            }
+
+            // Attestation is gated here for the same reason admission is, and the
+            // argument is the same one: a rule applied only at the handshake is not a
+            // rule about how goods enter this market, it is a rule about one of the two
+            // doors. Checked before the branch is verified, because refusing outright
+            // costs nothing and verifying a whole history costs a great deal.
+            if (config.requireAttestation && first.attestation == null) {
+                System.out.println("[host] refused migration from " + first.userId
+                        + " — no attestation");
+                reply.reason = "this server needs to know about the world you are"
+                        + " trading from, and that migration did not say";
                 channel.send(reply);
                 return;
             }
@@ -880,10 +1025,35 @@ public class HostServer {
             // learns whether it actually landed before it resets its own log.
             final CountDownLatch done = new CountDownLatch(1);
             final String[] failure = new String[1];
+            final WorldAttestation claim = first.attestation;
 
             if (!queue.offer(new Proposal(() -> {
                 try {
+                    // On the sequencer thread, with the deposit checks, because the
+                    // allowance they share is one running total and two threads reading
+                    // it would each see room the other was about to take. This is also
+                    // the reason the cap is not simply read off depositUnitsOf: that is
+                    // asked of a proposal, and a migration is never proposed.
+                    long now = System.currentTimeMillis();
+                    String refusal = migrationRefusal(who, mb.items, claim, now);
+                    if (refusal != null) {
+                        failure[0] = refusal;
+                        return;
+                    }
+
                     failure[0] = appendHostEvent(mb);
+
+                    // Counted only once it is genuinely in the log, exactly as a
+                    // deposit is. Per item, so the statistics rule — which asks about
+                    // one item at a time — sees migrated goods too.
+                    if (failure[0] == null) {
+                        for (Map.Entry<String, Long> entry : mb.items.entrySet()) {
+                            if (entry.getValue() != null && entry.getValue() > 0) {
+                                depositLimiter.record(who, entry.getKey(),
+                                        entry.getValue(), now);
+                            }
+                        }
+                    }
                 } catch (Exception e) {
                     failure[0] = "host error: " + e.getMessage();
                 } finally {
@@ -1131,6 +1301,16 @@ public class HostServer {
             event = gson.fromJson(msg.eventJson, EventLog.classFor(msg.eventType));
         } catch (Exception e) {
             reject(p.from, msg.clientEventId, "malformed event: " + e.getMessage());
+            return;
+        }
+
+        // Before the signature check, which would pass: the event is honestly signed by
+        // whoever sent it, and that was never the question.
+        if (isHostAuthoredOnly(event)) {
+            System.err.println("[host] REFUSED client-proposed " + msg.eventType
+                    + " from " + event.userId);
+            reject(p.from, msg.clientEventId, msg.eventType
+                    + " is written by the host, not proposed to it");
             return;
         }
 
