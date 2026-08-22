@@ -523,6 +523,35 @@ public class MarketClient {
             return false;
         }
 
+        // And the market's own rules, which the signature says nothing about.
+        //
+        // A signature proves who wrote an event, not that the event was allowed. The
+        // money rules — a grant must be this market's published figure, once per
+        // identity; a stipend must be the market's and its interval must have elapsed;
+        // policy is the creator's alone — all live in validate, because that is where a
+        // host asks them before it appends. This ran apply and nothing else, so a
+        // modified host could sequence a grant to itself for any sum, correctly signed
+        // with its own key, and every connected replica would apply it, persist it, and
+        // re-serve it the next time that player hosted. The same hole MarketArchive had
+        // on the migration path.
+        //
+        // Safe to ask, because it is the identical question asked against the identical
+        // state: every path by which a host appends validates first, against its state
+        // at seq-1, and ours is that state if replay is deterministic — which is the
+        // premise the whole project rests on. So a refusal here means the host is lying
+        // or we have diverged, and both are reasons to stop rather than to carry on.
+        //
+        // Before persisting. An event we refuse must not reach the log, or we would
+        // re-serve the thing we just declined.
+        EventApplier.Result allowed = EventApplier.validate(state, se);
+        if (!allowed.accepted) {
+            System.err.println("[client] REFUSING event " + se.seq + " from host: breaks"
+                    + " this market's rules — " + allowed.reason);
+            onRejected.accept("host sent an event this market's own rules refuse ("
+                    + allowed.reason + ") — disconnected");
+            return false;
+        }
+
         if (persist) {
             try {
                 log.appendRaw(line);

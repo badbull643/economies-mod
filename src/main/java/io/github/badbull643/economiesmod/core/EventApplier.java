@@ -152,9 +152,29 @@ public class EventApplier {
         return null;
     }
 
+    /**
+     * Settles one event, all of it or none of it as far as any reader can tell.
+     *
+     * The whole body runs under the state's write lock. Settling a single fill credits
+     * the buyer's items and the seller's money in separate steps, and a reader landing
+     * between them sees money gone and goods not yet arrived — a frame of a market that
+     * never existed. Per-collection monitors cannot fix that; only holding one lock
+     * across the whole event can.
+     *
+     * Nothing slow happens in here: no I/O, no network, no callbacks out. The log write
+     * and the broadcast are the caller's, and both are outside this.
+     */
     public static Result apply(MarketState state, SequencedEvent se) {
         if (se == null || se.event == null) return Result.reject("null event");
+        state.writeLock().lock();
+        try {
+            return applyLocked(state, se);
+        } finally {
+            state.writeLock().unlock();
+        }
+    }
 
+    private static Result applyLocked(MarketState state, SequencedEvent se) {
         Event e = se.event;
         if (e.userId == null) return Result.reject("missing userId");
 
