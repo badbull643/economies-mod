@@ -1656,6 +1656,112 @@ public class MarketTests {
                     ServerConfig.load(g).acceptsMigration() ? 1 : 0, 0);
         }
 
+        section("R1c: the file a world hosts under");
+        {
+            // The rules exist and always have; the file naming them is one nothing
+            // creates, in a directory the game never mentions until you have already
+            // hosted once. /trade hostconfig write is the way in, and these are the two
+            // things it must not get wrong: writing a key the world would overrule, and
+            // resolving a default against the wrong kind of host.
+            Path f = scratch("test-hostconfig-r1c.json");
+            Files.deleteIfExists(f);
+
+            ServerConfig world = ServerConfig.friendGroup(25612)
+                    .asWorldHost(25612, "Alice", ALICE.toString());
+            // Set, so the two launcher-only keys below are dropped rather than merely
+            // absent — both are null by default, and Gson omits a null, so a check
+            // against a default config would pass with no stripping at all.
+            world.marketName = "somewhere";
+            world.creatorUserId = ALICE.toString();
+            world.saveHostRules(f);
+            String written = new String(Files.readAllBytes(f), "UTF-8");
+
+            // Session facts, imposed by hostPolicyFor whatever the file says. A key an
+            // operator can edit and watch do nothing is worse than one that is absent:
+            // absent sends them to look for it, edited-and-ignored sends them to look
+            // for the bug somewhere else entirely.
+            for (String imposed : new String[] {
+                    "\"port\"", "\"hostName\"", "\"hostUserId\"", "\"dedicated\"" }) {
+                check("a world's file does not carry " + imposed,
+                        written.contains(imposed) ? 1 : 0, 0);
+            }
+            // Read only by the standalone launcher's main, which bootstraps a market
+            // from them. A world's market comes from the Market screen.
+            for (String launcher : new String[] {
+                    "\"logFile\"", "\"marketName\"", "\"creatorUserId\"" }) {
+                check("nor " + launcher + ", which only the launcher reads",
+                        written.contains(launcher) ? 1 : 0, 0);
+            }
+
+            // The other half, and the one this is all for. Every host rule has to be in
+            // the file at the value already in force — a setting nobody can see is a
+            // setting that does not exist, which is how the free-order allowance shipped
+            // switched permanently off.
+            for (String rule : new String[] {
+                    "\"admission\"", "\"maxWelcomeGrant\"", "\"acceptsMigration\"",
+                    "\"maxMigratedCredits\"", "\"maxDepositUnitsPerWindow\"",
+                    "\"requireAttestation\"", "\"banOnWorldChange\"", "\"welcomeGrant\"" }) {
+                check(rule + " is in the file", written.contains(rule) ? 1 : 0, 1);
+            }
+
+            // Compared as a number after loading, never as a substring of the file:
+            // "1000000" contains "10000", so a text match here passes against the very
+            // ceiling it exists to rule out. It did, before this was written this way.
+            check("the ceiling written is the one a game hosts under",
+                    ServerConfig.load(f).maxWelcomeGrant(),
+                    ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+            check("and migrations are on, which is what a friend group wants",
+                    written.contains("\"acceptsMigration\": true") ? 1 : 0, 1);
+
+            ServerConfig back = ServerConfig.load(f);
+            check("it loads back as a usable config", back.problem() == null ? 1 : 0, 1);
+            check("with the ceiling now explicit rather than resolved",
+                    back.maxWelcomeGrant(), ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+            check("and nothing in it claims to be a dedicated server",
+                    back.dedicated ? 1 : 0, 0);
+
+            // The case that made asWorldHost one method rather than two assignments:
+            // somebody copies a dedicated server's config into a world. Left alone, it
+            // resolves a 1,000,000 ceiling and refuses migrations, and writing that into
+            // a world's file would publish two rules the world will never enforce.
+            Path g = scratch("test-hostconfig-r1c-copied.json");
+            Files.deleteIfExists(g);
+            ServerConfig copied = new ServerConfig();
+            copied.dedicated = true;
+            check("a server's config resolves the server ceiling",
+                    copied.maxWelcomeGrant(), MarketState.MAX_WELCOME_GRANT);
+            copied.asWorldHost(25613, "Bob", BOB.toString()).saveHostRules(g);
+            String asWorld = new String(Files.readAllBytes(g), "UTF-8");
+            check("stamped as a world host it writes the world's ceiling",
+                    ServerConfig.load(g).maxWelcomeGrant(),
+                    ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+            check("and takes migrations again",
+                    asWorld.contains("\"acceptsMigration\": true") ? 1 : 0, 1);
+
+            // An operator's own figure survives all of it. The stamp decides what an
+            // unset default means, never what a set value means.
+            Path h = scratch("test-hostconfig-r1c-set.json");
+            Files.deleteIfExists(h);
+            ServerConfig chosen = ServerConfig.friendGroup(25614);
+            chosen.maxWelcomeGrant = 500L;
+            chosen.acceptsMigration = Boolean.FALSE;
+            chosen.asWorldHost(25614, "Alice", ALICE.toString()).saveHostRules(h);
+            ServerConfig chosenBack = ServerConfig.load(h);
+            check("a chosen ceiling survives the stamp", chosenBack.maxWelcomeGrant(), 500L);
+            check("and a chosen refusal of migrations does too",
+                    chosenBack.acceptsMigration() ? 1 : 0, 0);
+
+            // What the command prints is what the command writes. Two lists would drift,
+            // and the drift would send somebody looking for a key that is not there.
+            java.util.Set<String> printed = world.hostRulesTree().keySet();
+            int missing = 0;
+            for (String key : printed) {
+                if (!written.contains("\"" + key + "\"")) missing++;
+            }
+            check("every key the command lists reaches the file", missing, 0);
+            check("and there is something to list", printed.isEmpty() ? 0 : 1, 1);
+        }
+
         section("R2: a server nobody could use is refused, not clamped");
         {
             // Named rather than corrected: a port silently changed out from under an
