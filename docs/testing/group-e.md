@@ -17,10 +17,11 @@ individual item on it.
 `E11` also had to be rewritten: it pointed at the migrant's own credit counter, which is
 the one number migration guarantees will not change. It looked like a failure and was not.
 
-### Five items want a short re-check
+### Six items want a short re-check
 
 Everything was tested against the code as it stood. Two runtime changes landed at 13:58
-after the session ended (`59eb94f`), both in `MarketScreen`, and `E17` is new work since:
+after the session ended (`59eb94f`), both in `MarketScreen`, and everything from `E17`
+down is newer than the sitting:
 
 - **`E13`** — `Disconnect` is now keyed to the mode rather than the live socket. The new
   case is the only one worth re-running: **let the host drop you, then confirm Disconnect
@@ -31,7 +32,11 @@ after the session ended (`59eb94f`), both in `MarketScreen`, and `E17` is new wo
   dedicated server: Migrate should be offered, targeting the non-dedicated one. With only
   the server visible, nothing changed
 - **`E17`** is new since the sitting and has not been run at all: the welcome-grant
-  ceiling now differs by who is hosting. Worth five minutes on its own
+  ceiling now differs by who is hosting. Worth five minutes on its own, and its last
+  bullet has been corrected — a world does not refuse to start over an unusable config,
+  it falls back and hosts anyway
+- **`E17b`** is newer still: `/trade hostconfig` and `/trade hostconfig write`, which are
+  the first way to reach a host rule without knowing the file exists
 - **`E18`** is also new: the FORK banner now says where two branches parted
 - **`E19`** is also new: a reset now hands back items deposited since the split
 
@@ -564,10 +569,50 @@ And the console refusal, which needs a second client proposing it rather than th
 [host] refused a welcome grant of 20000 — this host allows 10000
 ```
 
-- Put `maxWelcomeGrant: 500` in a world's `host-config.json` with `welcomeGrant` **above**
-  it → the host refuses to start, naming both figures. A server that would decline to
-  sequence the grant it had just bootstrapped with is arguing with itself, and it says so
-  rather than starting
+- Set `maxWelcomeGrant: 500` in a world's `host-config.json` with `welcomeGrant` **above**
+  it → **a world does not refuse to start.** `hostPolicyFor` catches `problem()` itself
+  and falls back before `HostServer` ever sees the config, so you get one console line
+  naming both figures and a host running on the friend-group defaults with none of your
+  rules. The dedicated launcher is the one that refuses and exits, and this bullet used
+  to describe that as though it were true of both. Run `/trade hostconfig` instead — it
+  asks the same `problem()` against the same stamped config and says so in chat, where
+  somebody editing the file will actually see it
+- Then the same on a dedicated server, which does refuse to start, naming both figures.
+  A box that would decline to sequence the grant it had just bootstrapped with is arguing
+  with itself, and it says so rather than starting
+
+### E17b. Finding the file at all
+
+New with the command. Before it, `host-config.json` was created by hand, in a directory
+nothing named until you had already hosted once, and no host rule had a control anywhere
+in the UI. The point of these steps is discovery, so run them in a world that has never
+had the file.
+
+- Host from a world with no `host-config.json` → the console names the file, says what
+  the defaults are **including the welcome-grant ceiling**, and names the command
+- `/trade hostconfig` with no file → every host rule, at the value in force, each spelled
+  the way the file spells it. The path above them. It must not list `port`, `hostName`,
+  `hostUserId`, `dedicated`, `logFile`, `marketName` or `creatorUserId` — hosting imposes
+  or ignores all seven, and a key you can edit and watch do nothing is worse than one
+  that is absent
+- `/trade hostconfig write` → the file appears at that path, holding exactly the lines
+  the command just listed. Nothing changes: every value is the one already in force
+- Run `write` again → **refused**, naming the file. It never overwrites: the file is
+  hand-edited by definition and the writer round-trips through Gson, so a second write
+  would silently drop any key Gson does not know — a misspelt one, which is exactly the
+  case somebody is trying to see. Delete it to regenerate
+- Edit `maxWelcomeGrant` to `500`, host again → the console says it is hosting under the
+  rules in that file, and a grant of `1000` is now refused at 500 rather than 10,000.
+  **This is the check that the file is read at all**, and the one worth doing twice
+- Set `admission: "allowlist"` with an empty `allow`, then `/trade hostconfig` → it
+  reports the file as unusable, naming the field, and warns that hosting will ignore all
+  of it. Confirm hosting then does exactly that
+- Try the command on somebody else's Minecraft server → refused with a reason. There is
+  no local world, and the rules belong to the world a market is hosted from
+- Copy a dedicated server's `server-config.json` in as `host-config.json`, then
+  `/trade hostconfig` → the ceiling reads **10,000**, not 1,000,000, and migrations read
+  on. `dedicated` is stamped false before anything is resolved, because it is what those
+  two defaults resolve against. `R1c` pins this without Minecraft
 
 ## E18. Where two branches parted
 

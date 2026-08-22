@@ -16,7 +16,7 @@ in-progress edit to pick up.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `531 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`. If any of it fails on a clean
+Expect `558 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`. If any of it fails on a clean
 checkout, that is news — it has only ever been run on one machine (backlog item 4).
 
 **Where the code is.** Branch `trust-model-and-migration`, ahead of its remote and 0
@@ -41,12 +41,13 @@ nothing depends on that.
    what a play session found on top. Long, but it is the current state of the code.
 3. **`docs/BACKLOG.md`** — everything deliberately not built, in the order worth doing,
    each saying what it costs to keep not doing it. This is where the next work is.
-4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with five items wanting a short
+4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was backlog item
-1's second piece (returning items a discarded fork would destroy). The next piece is
-named at the top of that entry.
+**What is being worked on right now:** nothing. The last thing finished was §0.18 — a
+command and a console line that make host rules reachable without knowing the file
+exists. Before that, backlog item 1's second piece (returning items a discarded fork
+would destroy); the next piece is named at the top of that entry.
 
 ---
 
@@ -54,14 +55,14 @@ named at the top of that entry.
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found seventeen defects in code that had 437 passing checks behind it — one a whole
+and it found eighteen defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`531 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`, the last being a new `hostTrustTest`, and each
+`558 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`, the eighth being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -320,6 +321,69 @@ And a seventeenth, from the same play session:
     measuring in fixed steps" — and the warning was not enough, because the duplication
     it was guarding was still there to be tripped over.
 
+And an eighteenth, found by somebody trying to run `E17` and asking where the file was:
+
+18. **No host rule could be reached without already knowing the file existed.**
+    `host-config.json` is created by nothing, sits in a directory the game never names
+    until you have hosted once, and has no control anywhere in the UI — `MarketScreen`
+    does not contain the string. Admission, deposit caps, attestation, `acceptsMigration`,
+    `maxMigratedCredits` and `maxWelcomeGrant` all live there and nowhere else. A
+    dedicated operator has `--write-config` to generate the file; somebody hosting from
+    their game had no equivalent.
+
+    Defensible for admission and the deposit caps, which are "I have a problem with a
+    specific person" settings that a person goes looking for. Not defensible for the two
+    whose defaults *do something*: a player refused inline at 10,000 has no way to learn
+    the figure is movable, and migrations being on or off by deployment type is a rule
+    with no visible switch. **§0.10's shape without §0.10's severity** — the feature
+    works and the default is the right one, but the control is unreachable from where the
+    decision is made, and that is the same failure one step milder.
+
+    Two halves. The console line printed when a world hosts with no file now names the
+    ceiling among the defaults and names the command, because that is the moment the
+    defaults start applying. And `/trade hostconfig` lists every host rule at the value
+    in force, with `write` creating the file holding exactly those lines.
+
+    **`TradeCommands` said "every command here reads", and this is the one exception**, so
+    the class javadoc now argues it rather than leaving it to be noticed. The refused
+    verbs are refused because they mutate the ledger, which has no undo; a config file
+    takes effect only at the next host start, can be edited back by hand, and `write`
+    refuses when the file is already there. That refusal is not politeness: the writer
+    round-trips through Gson, so an overwrite would silently drop any key Gson does not
+    know — a misspelt one being exactly the case somebody is trying to see.
+
+    Three §4 collapses fell out of building it, and each was a pair that already existed:
+
+    - `hostConfigPathFor` — the command and hosting must open the same file, or the
+      command creates one nothing ever reads.
+    - `hostRulesTree` — what the command lists and what `write` saves are one object, so
+      a printed key that never reaches the file is not expressible.
+    - `asWorldHost` — hosting stamped port, name, id and `dedicated` onto the config
+      before asking `problem()`, in four assignments. The command has to reach the same
+      verdict, and `dedicated` is the sharp one: it is what `acceptsMigration()` and
+      `maxWelcomeGrant()` resolve against, so a config copied from a dedicated server's
+      file would otherwise have the command print, and write, a 1,000,000 ceiling into a
+      world that will never honour it. One method now, called from both.
+
+    `R1c`, and `E17b` for the live half. Two things worth recording about writing the
+    test. The launcher-only keys were checked against a default config, where they are
+    null and Gson omits them anyway — the check passed with the stripping disabled, which
+    makes it not a check. And the ceiling was compared as a substring of the file, where
+    `"maxWelcomeGrant": 1000000` contains `"maxWelcomeGrant": 10000`: it passed against
+    the exact value it existed to rule out. Both were caught by running the suite with
+    the fix disabled, which is the only reason either is known.
+
+    **And `E17`'s last step was wrong.** It said a world refuses to start on an unusable
+    `host-config.json`, naming both figures. Only the dedicated launcher does that;
+    `hostPolicyFor` catches `problem()` itself and falls back before `HostServer` ever
+    sees the config, so a world hosts anyway with none of the operator's rules and one
+    console line about it. Deliberate for a file that cannot be read — refusing "would
+    strand somebody over a file they may not know exists" — and less obviously right for
+    one that parsed fine and states a contradiction. Left as it is, because that argument
+    is about hosting rather than about discovery; `/trade hostconfig` now asks the same
+    `problem()` in chat, which is where somebody editing the file is looking. Whether the
+    world path should refuse the way the launcher does is open, and in the backlog.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -335,12 +399,12 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 531   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 558   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 25   depositCapTest 6   attestationTest 12   hostTrustTest 16
 splitPointTest 22
 ```
 
-*(437 across seven suites when this section was written; the extra 23 checks and the
+*(437 across seven suites when this section was written; the extra 50 checks and the
 eighth suite belong to §0.)*
 
 Every engine change below was verified to **fail** with its fix disabled before being
