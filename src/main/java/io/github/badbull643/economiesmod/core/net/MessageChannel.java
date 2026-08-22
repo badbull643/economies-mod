@@ -90,6 +90,8 @@ public class MessageChannel implements AutoCloseable {
             case "Attest":         return Message.Attest.class;
             case "CatchUp":        return Message.CatchUp.class;
             case "CatchUpResult":  return Message.CatchUpResult.class;
+            case "HashQuery":      return Message.HashQuery.class;
+            case "HashReply":      return Message.HashReply.class;
             default: throw new IllegalStateException("Unknown message type: " + type);
         }
     }

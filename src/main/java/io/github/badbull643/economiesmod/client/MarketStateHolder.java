@@ -96,23 +96,80 @@ public class MarketStateHolder {
         public final String theirHash;
         public final String ourHash;
 
+        /**
+         * The last event both chains hold, or -1 when it could not be found out.
+         *
+         * The thing this class could never say. It knew a point where the two disagree
+         * and could not name where they parted, because the split is somewhere at or
+         * below that point and no message carried a hash from below it — so "differs at
+         * event 400" might mean four events of divergence or four hundred, and nothing
+         * could tell the difference. See MarketClient.findSplitPoint.
+         */
+        public final long splitAt;
+
         Divergence(String hostName, long seq, String theirHash, String ourHash) {
+            this(hostName, seq, theirHash, ourHash, -1);
+        }
+
+        Divergence(String hostName, long seq, String theirHash, String ourHash,
+                   long splitAt) {
             this.hostName = hostName;
             this.seq = seq;
             this.theirHash = theirHash;
             this.ourHash = ourHash;
+            this.splitAt = splitAt;
+        }
+
+        /** Events on our chain that are ours alone, or -1 if the split is unknown. */
+        public long oursSinceSplit(long ourHead) {
+            return splitAt < 0 ? -1 : Math.max(0, ourHead - splitAt);
         }
 
         public String describe() {
-            return (hostName == null ? "a host" : hostName)
-                    + " is on a different branch of this market (differs at event " + seq + ")";
+            String who = hostName == null ? "a host" : hostName;
+            if (splitAt < 0) {
+                return who + " is on a different branch of this market (differs at event "
+                        + seq + ")";
+            }
+            // The number somebody can act on. "Differs at event 400" says nothing about
+            // what a reset would cost; "you parted 12 events ago" says most of it.
+            return who + " is on a different branch of this market — you parted after"
+                    + " event " + splitAt + ", and everything either of you did since is"
+                    + " on one branch only";
         }
     }
 
     private static volatile Divergence divergence;
 
-    /** The most recently detected divergence, or null if everything we've seen agrees. */
-    public static Divergence divergence() { return divergence; }
+    /**
+     * The most recently detected divergence, or null if everything we've seen agrees.
+     *
+     * Retires a claim that has been answered since. Reported from play: Alice warned that
+     * Bob was on a different branch, Bob discarded his branch and joined her, and the
+     * banner stayed up for the rest of the session. Only observeHostHead cleared a
+     * divergence, and it clears one by watching the named host agree — so a peer who
+     * stops hosting in order to join you leaves the warning with nothing that could ever
+     * take it down. Somebody synced to our own host is the strongest possible evidence
+     * that the fork is over, and it was the one source nothing consulted.
+     *
+     * Cleared through the accessor rather than at the moment of syncing, because the
+     * moment is in core and the claim is here — and because everything that acts on a
+     * divergence comes through this method, which is what stops the banner and the reset
+     * disagreeing about whether there is still a fork. Ask this, never the field.
+     */
+    public static Divergence divergence() {
+        Divergence d = divergence;
+        if (d == null) return null;
+
+        HostServer host = hostServer;
+        if (host != null && host.hasSyncedClient(d.hostName)) {
+            divergence = null;
+            System.out.println("[economiesmod] " + d.hostName + " is synced to this host"
+                    + " now — retiring the fork warning about them");
+            return null;
+        }
+        return d;
+    }
 
     // (hostUserId → "seq:hash") for heads we've already compared. Checking costs a full
     // read of the log, and a poll repeats every 10s against a head that usually hasn't
@@ -239,6 +296,9 @@ public class MarketStateHolder {
     private static int myHostPort = 25555;
 
     public static void setMyHostPort(int port) { myHostPort = port; }
+
+    /** The port a market hosted from this game binds. */
+    public static int myHostPort() { return myHostPort; }
 
 
     private static Path identityFile;
@@ -419,6 +479,15 @@ public class MarketStateHolder {
 
     public static Mode mode() { return mode; }
 
+    /**
+     * Whether a HostServer of ours is actually running.
+     *
+     * The server itself, not the mode. Those can disagree — disconnect() used to leave
+     * one bound while dropping us to LOCAL, which is the state that made "Disconnect"
+     * stop nothing — and when they disagree the socket is the fact.
+     */
+    public static boolean isHosting() { return hostServer != null; }
+
     public static MarketState get() {
         if (mode != Mode.LOCAL) {
             return client != null ? client.state() : new MarketState();
@@ -562,6 +631,20 @@ public class MarketStateHolder {
                 System.err.println("[economiesmod] diverged from host at seq "
                         + refusal.hostSeq + " (ours " + ourHashAtTheirHead
                         + ", theirs " + refusal.hostHash + ") — not a fast-forward");
+
+                // This is where a fork is actually found in practice, and it used to end
+                // here — noted on the console, shown to the player, and forgotten. But a
+                // reset computes its re-place checklist from divergence, so leaving it
+                // null meant the reset that this very message recommends had nothing to
+                // offer back. The only thing that ever set it was the discovery poll,
+                // which is why the list appeared after Refresh and not before.
+                //
+                // The three values are already in hand and are exactly what the poll
+                // records: their head, their hash there, ours at the same seq. Safe as a
+                // split point because AHEAD means their head is below ours, so anything
+                // after it on our chain is genuinely ours alone.
+                divergence = new Divergence(refusal.hostName, refusal.hostSeq,
+                        refusal.hostHash, ourHashAtTheirHead);
                 return false;
             }
 
@@ -644,6 +727,17 @@ public class MarketStateHolder {
             mode = targetMode;
             lastRefusal = null;
 
+            // Every divergence on record was a claim about our chain against somebody
+            // else's, and we have just adopted this host's. The claims are not wrong so
+            // much as measured against a head we no longer have, and the poll recomputes
+            // any that still hold the moment it next sees that host — so this retires
+            // them rather than losing them. The mirror of hasSyncedClient in
+            // divergence(): that covers the peer joining us, this covers us joining them,
+            // and between them a fork warning cannot outlive the fork whichever way round
+            // the two players settled it.
+            divergence = null;
+            checkedHeads.clear();
+
             // Remembered so a dropped broadcast can be recovered by reconnecting to
             // the same host without the player re-entering anything. See resync().
             connectedHost = host;
@@ -655,6 +749,7 @@ public class MarketStateHolder {
                     + " at seq " + c.lastSeq());
         } catch (MarketClient.Refused e) {
             lastRefusal = e;
+            noteForkFromRefusal(log, e, host, port);
             onRejected.accept(e.getMessage() + explainRemedy(e.code, lossIfReset));
             System.err.println("[economiesmod] refused: " + e.getMessage());
             adoptAfterFailedConnect(log);
@@ -662,6 +757,68 @@ public class MarketStateHolder {
             onRejected.accept("connect failed: " + e.getMessage());
             System.err.println("[economiesmod] connect failed: " + e);
             adoptAfterFailedConnect(log);
+        }
+    }
+
+    /**
+     * Raises the FORKED banner when a refusal says our chain disagrees with the host's.
+     *
+     * This is the narrower of the two fork routes, and worth telling apart from the one
+     * in offerCatchUp. A FORK refusal is only sent when we are at or behind the host —
+     * the host tests AHEAD first — so the seq it names is our own head, and the hash it
+     * sends is theirs at that point. That is enough to know we disagree and to say so.
+     *
+     * It is NOT enough to compute a re-place checklist. The split is somewhere at or
+     * before our head, and locating it would need hashes below that point which neither
+     * side sends, so ordersOnlyAfter is handed our head and correctly finds nothing.
+     * That errs the safe way: a split point guessed too low would offer back orders the
+     * host still holds, which is how a reset creates duplicates.
+     *
+     * The case that produces a usable checklist is the opposite ordering — we are ahead,
+     * the host's head sits below ours, and everything after it on our chain is
+     * demonstrably ours alone. That is AHEAD, and offerCatchUp records it.
+     *
+     * The host's name rides along because observeHostHead clears a divergence by
+     * matching the name it stored; a mismatched label would strand the banner.
+     */
+    private static void noteForkFromRefusal(EventLog log, MarketClient.Refused e,
+                                            String forkHost, int forkPort) {
+        if (log == null || e == null) return;
+        if (!HostServer.Refusal.FORK.equals(e.code)) return;
+        if (e.hostSeq <= 0 || e.hostHash == null) return;
+
+        try {
+            if (e.hostSeq > log.lastSeq()) return;
+            String ours = log.hashAt(e.hostSeq);
+            if (ours == null || ours.equals(e.hostHash)) return;
+
+            // Ask where we actually parted, which until now nothing could. It is a
+            // separate round trip to a host that has just refused us — deliberately, so
+            // a failure here costs the detail and not the refusal itself, which the
+            // player needs either way.
+            long splitAt = -1;
+            if (forkHost != null && forkPort > 0) {
+                try {
+                    splitAt = MarketClient.findSplitPoint(forkHost, forkPort, log);
+                } catch (IOException probe) {
+                    System.err.println("[economiesmod] could not locate the split point: "
+                            + probe.getMessage());
+                }
+            }
+
+            divergence = new Divergence(e.hostName, e.hostSeq, e.hostHash, ours, splitAt);
+            System.err.println("[economiesmod] divergence: "
+                    + (e.hostName == null ? "that host" : e.hostName)
+                    + " reports " + e.hostHash + " at event " + e.hostSeq
+                    + ", we have " + ours
+                    + (splitAt >= 0
+                            ? " — parted after event " + splitAt + ", "
+                                    + (log.lastSeq() - splitAt) + " of ours since"
+                            : " — split point unknown"));
+        } catch (IOException io) {
+            // The refusal still reaches the player either way; only the checklist that
+            // a later reset could have offered is lost.
+            System.err.println("[economiesmod] could not locate the split point: " + io);
         }
     }
 
@@ -747,9 +904,17 @@ public class MarketStateHolder {
 
         // These two really do share nothing with the destination, so the full position
         // is the honest figure.
+        //
+        // "Add another market" leads the list because it is the only one of the three
+        // that costs nothing: slots are separate logs, so joining from a fresh one keeps
+        // this market exactly where it is. It used to go unmentioned, which left Migrate
+        // and Reset — import your wealth, or destroy it — as if those were the options.
+        // A dedicated server does not take migrations by default, so it is not offered
+        // one at all.
         String action = HostServer.Refusal.DIFFERENT_MARKET.equals(code)
-                ? " — to join theirs instead, Migrate (carries your balance) or Reset log"
-                : " — to join, Reset log";
+                ? " — to join theirs, Add another market and connect from it (keeps this"
+                        + " one), or Migrate to carry your balance across, or Reset log"
+                : " — to join, Add another market and connect from it, or Reset log";
 
         return "nothing".equals(loss)
                 ? action + " (Reset would lose nothing)"
@@ -757,7 +922,29 @@ public class MarketStateHolder {
     }
 
 
+    /**
+     * Leaves the network, whichever way we were on it.
+     *
+     * Hosting is a network role like any other, and this is what somebody presses to
+     * stop. It used to drop only the client — which, while hosting, meant dropping the
+     * self-connection and leaving the server bound, still serving whoever was already
+     * on it, still answering the discovery poll, and still advertising on everyone
+     * else's host list. The button said Disconnect and nothing disconnected.
+     *
+     * The quiet half was worse. stopHosting is the only thing that releases the
+     * HostServer's EventLog, so falling through to loadLocal below opened a *second*
+     * EventLog on the file the running host still owned — two writers, duplicate
+     * sequence numbers, broken chain. connect() has guarded against exactly that since
+     * it was written, with a comment saying so; the guard was never carried here.
+     *
+     * HOSTING and CONNECTED are mutually exclusive — connect() stops hosting first — so
+     * there is no case where somebody wants to leave one and keep the other.
+     */
     public static void disconnect() {
+        if (hostServer != null) {
+            stopHosting();   // drops the self-connect and reopens the local log itself
+            return;
+        }
         disconnectIfConnected();
         if (currentWorldDir != null) {
             loadLocal(currentWorldDir);
@@ -1024,9 +1211,15 @@ public class MarketStateHolder {
                 return Submission.failed(check.reason);
             }
 
-            // Sign local appends too. LOCAL mode is read-only for trades, but the
-            // genesis event is written through here, and an unsigned line would make
-            // the whole log unverifiable to anyone who later imports it.
+            // Sign local appends too. Trading is refused in LOCAL mode — but not here,
+            // and looking for the guard at this layer will not find it. It is
+            // requireConnected() in MarketScreen, on every trading action, and it tests
+            // the live socket rather than the mode because being in CONNECTED with a
+            // dead client is the case that used to let a trade through to fail later.
+            //
+            // What still reaches this branch is market management: genesis, policy, and
+            // anything else authored while offline. An unsigned line among those would
+            // make the whole log unverifiable to anyone who later imports it.
             if (keys == null) return Submission.failed("no identity loaded");
             String signature;
             try {
@@ -1135,13 +1328,37 @@ public class MarketStateHolder {
     }
 
     /**
+     * Where a world keeps the rules it hosts under.
+     *
+     * One method because two callers need the same answer: hosting reads it, and
+     * /trade hostconfig writes it. A command that created the file somewhere other than
+     * where hosting looks would be the §4 defect exactly, and silent — the file would
+     * appear, and nothing would ever read it.
+     *
+     * Normalised, because the world directory arrives with a trailing "." from
+     * getSavePath and the raw form prints as saves\world\.\economiesmod\... — which is
+     * the path an operator is about to go and edit.
+     *
+     * World-level rather than per-slot: the rules belong to whoever hosts, and every
+     * market slot in a world is hosted by the same person on the same port.
+     */
+    public static Path hostConfigPathFor(Path worldDir) {
+        return worldDir.resolve("economiesmod").resolve("host-config.json").normalize();
+    }
+
+    /** The world this client has a market open in, or null when there is none. */
+    public static Path currentWorldDir() {
+        return currentWorldDir;
+    }
+
+    /**
      * The policy this world hosts under.
      *
      * Friend-group defaults unless the world holds a host-config.json, which nothing
-     * creates and everything ignores when absent — so the ordinary case is exactly what
-     * it was, and somebody who wants admission rules, deposit caps or world checks on a
-     * market they host from their own game can have them without running a separate
-     * server.
+     * creates on its own and everything ignores when absent — so the ordinary case is
+     * exactly what it was, and somebody who wants admission rules, deposit caps or world
+     * checks on a market they host from their own game can have them without running a
+     * separate server.
      *
      * Deliberately not server-config.json. That file belongs to the dedicated launcher
      * and lives beside it; a market hosted from a world keeps its settings with that
@@ -1152,11 +1369,7 @@ public class MarketStateHolder {
      */
     private static ServerConfig hostPolicyFor(Path worldDir, int port, String playerName,
                                               UUID userId) {
-        // Normalised, because the world directory arrives with a trailing "." from
-        // getSavePath and the raw form prints as saves\world\.\economiesmod\... — which
-        // is the path an operator is about to go and create a file at.
-        Path file = worldDir.resolve("economiesmod").resolve("host-config.json")
-                .normalize();
+        Path file = hostConfigPathFor(worldDir);
 
         ServerConfig cfg;
         try {
@@ -1168,9 +1381,23 @@ public class MarketStateHolder {
                 // "no rules" and "rules that did not fire" look identical. The file also
                 // belongs to whoever hosts, which is easy to get wrong when two worlds
                 // are involved and only one of them is serving.
+                //
+                // The second line is the discoverability half, and it is here rather
+                // than in the UI because this is the moment the defaults start applying.
+                // A setting nobody can find is the same as a setting that does not
+                // exist — which is how the free-order allowance shipped switched off —
+                // and the welcome-grant ceiling is the sharpest case: a player refused
+                // at 10,000 has no way to learn the figure is movable. Naming the
+                // command rather than the keys, because the command writes every key
+                // with the value it currently resolves to.
                 System.out.println("[economiesmod] no " + file
                         + " — hosting with friend-group settings: open admission,"
-                        + " no deposit caps, no world checks");
+                        + " no deposit caps, no world checks, migrations accepted,"
+                        + " welcome grants capped at "
+                        + ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+                System.out.println("[economiesmod] to change any of that, run"
+                        + " /trade hostconfig write in game — it creates that file with"
+                        + " every setting in it — then edit it and host again");
             }
         } catch (IOException e) {
             // Unreadable rather than absent. Refusing to host would strand somebody
@@ -1181,18 +1408,14 @@ public class MarketStateHolder {
             cfg = ServerConfig.friendGroup(port);
         }
 
-        cfg.port = port;
-        cfg.hostName = playerName;
-        cfg.hostUserId = userId.toString();
-        cfg.dedicated = false;
+        cfg.asWorldHost(port, playerName, userId.toString());
 
         String bad = cfg.problem();
         if (bad != null) {
             System.err.println("[economiesmod] " + file + " is not usable (" + bad
                     + ") — hosting with the usual friend-group settings");
-            cfg = ServerConfig.friendGroup(port);
-            cfg.hostName = playerName;
-            cfg.hostUserId = userId.toString();
+            cfg = ServerConfig.friendGroup(port)
+                    .asWorldHost(port, playerName, userId.toString());
         }
         return cfg;
     }
@@ -1220,6 +1443,11 @@ public class MarketStateHolder {
             IOException bindErr = hostServer.awaitBound(3000);
             if (bindErr != null) {
                 System.err.println("[economiesmod] could not bind port " + port + ": " + bindErr);
+                // Stopped rather than dropped, like the self-connect failure below.
+                // Nulling the field alone left whatever start() had already brought up
+                // running, holding an EventLog on this world's market — and loadLocal
+                // then opens a second one on the same file.
+                hostServer.stop();
                 hostServer = null;
                 loadLocal(worldDir);
                 // Names the fix, because the overwhelmingly common cause is two clients
@@ -1416,7 +1644,65 @@ public class MarketStateHolder {
         return true;
     }
 
-    /** Discards the local history entirely. Only for resolving a fork — destructive. */
+    /**
+     * What a reset would cost, worked out before one happens.
+     *
+     * Exists so the confirmation can say the actual numbers rather than describe the
+     * shape of them. "Items you deposited after the split are handed back" is a promise
+     * a reader has to take on trust and cannot check; "60 cobblestone and 1 crafting
+     * table are handed back" is the same sentence with the doubt removed — and the doubt
+     * is the whole problem with a button that cannot be undone.
+     *
+     * Asked by resetLog as well, so what is shown and what is done are one computation.
+     * Two would be §4 in its most expensive form: a confirmation that promises something
+     * the action does not do is worse than no confirmation, because it was believed.
+     */
+    public static final class ResetCost {
+        /** The last event both branches hold, or -1 when there is no fork or it is unknown. */
+        public final long splitAt;
+        /** Events on this branch alone, or -1 when that cannot be worked out. */
+        public final long oursSince;
+        /** Items handed back, because discarding this branch destroys the only record. */
+        public final List<Refund> refunds;
+        /** Orders listed afterwards so they can be put back by hand. */
+        public final List<OldOrder> orders;
+
+        ResetCost(long splitAt, long oursSince, List<Refund> refunds, List<OldOrder> orders) {
+            this.splitAt = splitAt;
+            this.oursSince = oursSince;
+            this.refunds = refunds;
+            this.orders = orders;
+        }
+
+        /**
+         * Whether anything here is held by somebody else.
+         *
+         * The two cases the confirmation must not confuse. After a fork there is a host
+         * with the shared history, so most of what a reset destroys comes back on
+         * reconnecting. Without one there is nothing to rejoin, and every word about
+         * recovery would be false.
+         */
+        public boolean rejoinable() { return splitAt >= 0; }
+    }
+
+    /** @see ResetCost */
+    public static ResetCost resetCost() {
+        long splitAt = -1;
+        long oursSince = -1;
+
+        Divergence d = divergence();
+        if (d != null && currentWorldDir != null) {
+            splitAt = d.splitAt;
+            try {
+                oursSince = d.oursSinceSplit(new EventLog(logPathFor(currentWorldDir)).lastSeq());
+            } catch (IOException e) {
+                // The count is decoration; the lists below are the substance.
+                oursSince = -1;
+            }
+        }
+        return new ResetCost(splitAt, oursSince, depositsLostToReset(), ordersLostToReset());
+    }
+
     /** Discards the local history entirely. Only for resolving a fork — destructive. */
     public static void resetLog() {
         // Stop hosting first — otherwise the running HostServer keeps its in-memory
@@ -1431,8 +1717,14 @@ public class MarketStateHolder {
         if (currentWorldDir == null) return;
 
         // Before anything is deleted, and before divergence is cleared below — both are
-        // needed to work out which orders this reset actually costs.
-        List<OldOrder> lost = ordersLostToReset();
+        // needed to work out what this reset actually costs. Through resetCost rather
+        // than the two methods directly, because the confirmation the player just read
+        // came from there: a dialog that promised items back and an action that returned
+        // different ones would be believed, which is what makes that pair worse than no
+        // dialog at all.
+        ResetCost cost = resetCost();
+        List<OldOrder> lost = cost.orders;
+        List<Refund> owed = cost.refunds;
 
         try {
             Path log = logPathFor(currentWorldDir);
@@ -1458,6 +1750,16 @@ public class MarketStateHolder {
                 System.out.println("[economiesmod] " + lost.size()
                         + " orders held for re-placing after the reset");
             }
+
+            // Queued rather than handed over here. The inventory belongs to the server
+            // thread and this runs from a button; the client tick already drains refused
+            // deposits on the right thread and this rides along with them.
+            for (Refund r : owed) {
+                resetRefunds.add(r);
+                System.out.println("[economiesmod] returning " + r.quantity + " "
+                        + r.itemId + " — deposited after the split, and this reset would"
+                        + " otherwise destroy them");
+            }
         } catch (IOException e) {
             System.err.println("[economiesmod] reset failed: " + e);
         }
@@ -1476,10 +1778,69 @@ public class MarketStateHolder {
      * to rejoin, so an offer to re-place would be an offer to re-place them into
      * nothing.
      */
+    /** Items a reset would destroy, waiting for a thread that may touch an inventory. */
+    public static class Refund {
+        public final String itemId;
+        public final long quantity;
+
+        Refund(String itemId, long quantity) {
+            this.itemId = itemId;
+            this.quantity = quantity;
+        }
+    }
+
+    private static final java.util.Queue<Refund> resetRefunds =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    /** The next batch of items a reset owes back, or null. Drains one per call. */
+    public static Refund nextResetRefund() { return resetRefunds.poll(); }
+
+    /**
+     * What this reset would destroy that no history can restore.
+     *
+     * Items deposited after the split left a Minecraft inventory, and the branch holding
+     * the record of them is about to be deleted. Everything else a reset costs comes
+     * back — balances from the shared history when it is adopted again, orders as a
+     * checklist — so this is the only part that is simply gone.
+     *
+     * Needs the split point, which is why it could not be written until there was one.
+     * Prefers the measured answer and falls back to the old upper bound if the search
+     * could not reach the host: divergence.seq is where the hashes were seen to disagree,
+     * so one before it is the latest the split can possibly be. Erring high refunds less,
+     * which is the direction that cannot create items.
+     */
+    private static List<Refund> depositsLostToReset() {
+        List<Refund> out = new ArrayList<>();
+
+        Divergence split = divergence();
+        if (split == null || currentWorldDir == null) return out;
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return out;
+        UUID me = MinecraftIds.userIdOf(mc.player);
+
+        try {
+            long sharedThrough = split.splitAt >= 0
+                    ? split.splitAt : Math.max(0, split.seq - 1);
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            for (Map.Entry<String, Long> e
+                    : BranchDiff.depositsOnlyAfter(log, sharedThrough, me).entrySet()) {
+                out.add(new Refund(e.getKey(), e.getValue()));
+            }
+        } catch (Exception e) {
+            // The reset goes ahead regardless — being stuck on a forked branch is worse
+            // than losing the refund. Loud, because this is the one cost that is real.
+            System.err.println("[economiesmod] could not work out which deposits the"
+                    + " reset would destroy, so none are being returned: " + e);
+            return new ArrayList<>();
+        }
+        return out;
+    }
+
     private static List<OldOrder> ordersLostToReset() {
         List<OldOrder> out = new ArrayList<>();
 
-        Divergence split = divergence;
+        Divergence split = divergence();
         if (split == null || currentWorldDir == null) return out;
 
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -1489,8 +1850,23 @@ public class MarketStateHolder {
         try {
             // The arithmetic lives in core so it can be tested without Minecraft; all
             // that belongs here is knowing whose keyboard this is.
+            //
+            // One before the divergence, because the two numbers mean different things.
+            // Divergence.seq is where the hashes were seen to *disagree*, which is what
+            // its own message reports; ordersOnlyAfter wants the last seq both branches
+            // *agree* on, and that can be no later than one before. Passing the
+            // disagreement point straight through treated the first event of the split
+            // as shared, so a fork found at our own head — the ordinary case when both
+            // sides have written the same number of events — asked for orders after our
+            // last event and correctly found none.
+            //
+            // Still only an upper bound: the real split may be earlier, which under-
+            // reports. That is the safe direction. Guessing lower would offer back
+            // orders the host still holds, and re-placing those is how a reset ends up
+            // creating duplicates.
             EventLog log = new EventLog(logPathFor(currentWorldDir));
-            for (Order o : BranchDiff.ordersOnlyAfter(log, split.seq, me)) {
+            long sharedThrough = Math.max(0, split.seq - 1);
+            for (Order o : BranchDiff.ordersOnlyAfter(log, sharedThrough, me)) {
                 out.add(new OldOrder(o.itemID(), o.value(), o.volume(), o.isBid()));
             }
         } catch (Exception e) {
@@ -1566,12 +1942,17 @@ public class MarketStateHolder {
             // and re-placing them is the whole reason this is less painful than a reset.
             List<OldOrder> orders = new ArrayList<>();
             for (String itemId : mine.activeItems()) {
-                for (Order o : mine.bookFor(itemId).restingAsks()) {
+                // peekBook: activeItems only names items that already have one, so this
+                // is never null in practice — but bookFor creates on read, and nothing
+                // that is only reading should be able to write.
+                OrderBook book = mine.peekBook(itemId);
+                if (book == null) continue;
+                for (Order o : book.restingAsks()) {
                     if (o.userID().equals(userId)) {
                         orders.add(new OldOrder(itemId, o.value(), o.volume(), false));
                     }
                 }
-                for (Order o : mine.bookFor(itemId).restingBids()) {
+                for (Order o : book.restingBids()) {
                     if (o.userID().equals(userId)) {
                         orders.add(new OldOrder(itemId, o.value(), o.volume(), true));
                     }
@@ -1579,8 +1960,12 @@ public class MarketStateHolder {
             }
 
             List<String> lines = new EventLog(logPathFor(currentWorldDir)).rawLinesFrom(1);
-            Message.MigrateResult result =
-                    MarketClient.requestMigration(host, port, userId, lines);
+            // Described the same way a handshake describes it. Migration hands over more
+            // at once than any deposit does, so it is the last path that should be
+            // arriving without saying where the goods came from.
+            Message.MigrateResult result = MarketClient.requestMigration(host, port,
+                    userId, lines,
+                    WorldFacts.of(MinecraftClient.getInstance().getServer()));
 
             if (!result.accepted) {
                 onRejected.accept("migration refused: " + result.reason);

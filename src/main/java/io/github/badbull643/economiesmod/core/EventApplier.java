@@ -99,9 +99,82 @@ public class EventApplier {
         return null;
     }
 
+    /**
+     * Why this stipend would pay out more than the fills to earn it cost, or null.
+     *
+     * The rule the stipend's safety rests on, and it was wrong twice over.
+     *
+     * It assumed a fill costs two listing fees, on the reasoning that two orders have to
+     * cross. One order crossing a stacked book produces a fill per resting order it
+     * consumes — twenty fills for one fee, measured — so the floor is one fee per fill,
+     * paid by the resting side. Half what was assumed.
+     *
+     * And it counted one claimant. Every registered identity claims once per interval,
+     * so the payout is multiplied by however many people are in the market while the
+     * fees are not. Two colluders halved the real margin; ten wiped it out.
+     *
+     * Both corrected: the fees an interval can collect are listingFee per fill, and they
+     * have to cover a payment to everyone entitled to one.
+     *
+     * Public because MarketScreen has to ask it too, and could not: it lives in core and
+     * the screen lives in client, so the screen kept its own copy — the doubled one this
+     * used to have. It advertised a ceiling four times the real one and then let the
+     * engine do the refusing. Anything that wants to know this must call this.
+     */
+    public static String stipendOutpacesItsFees(long amount, long everyFills,
+                                                long listingFee, int claimants) {
+        if (amount <= 0) return null;
+        if (listingFee <= 0) {
+            return "a stipend needs a listing fee — without one, fills cost nothing to"
+                    + " produce and anyone could trade with themselves for it";
+        }
+        long heads = Math.max(1, claimants);
+
+        long collected;
+        long paid;
+        try {
+            collected = Math.multiplyExact(listingFee, everyFills);
+            paid = Math.multiplyExact(amount, heads);
+        } catch (ArithmeticException overflow) {
+            return "those figures are too large to compare safely";
+        }
+
+        if (paid >= collected) {
+            return "a stipend of " + amount + " every " + everyFills + " trades pays "
+                    + paid + " across " + heads + " registered "
+                    + (heads == 1 ? "identity" : "identities")
+                    + ", and " + everyFills + " trades collect at most " + collected
+                    + " in listing fees — so producing the trades costs less than the"
+                    + " stipend pays, and anyone could trade with themselves for it."
+                    + " Raise the listing fee, lengthen the interval, or lower the"
+                    + " stipend";
+        }
+        return null;
+    }
+
+    /**
+     * Settles one event, all of it or none of it as far as any reader can tell.
+     *
+     * The whole body runs under the state's write lock. Settling a single fill credits
+     * the buyer's items and the seller's money in separate steps, and a reader landing
+     * between them sees money gone and goods not yet arrived — a frame of a market that
+     * never existed. Per-collection monitors cannot fix that; only holding one lock
+     * across the whole event can.
+     *
+     * Nothing slow happens in here: no I/O, no network, no callbacks out. The log write
+     * and the broadcast are the caller's, and both are outside this.
+     */
     public static Result apply(MarketState state, SequencedEvent se) {
         if (se == null || se.event == null) return Result.reject("null event");
+        state.writeLock().lock();
+        try {
+            return applyLocked(state, se);
+        } finally {
+            state.writeLock().unlock();
+        }
+    }
 
+    private static Result applyLocked(MarketState state, SequencedEvent se) {
         Event e = se.event;
         if (e.userId == null) return Result.reject("missing userId");
 
@@ -121,6 +194,13 @@ public class EventApplier {
             return Result.ok(Collections.emptyList());
         }
 
+        if (e instanceof Event.Stipend) {
+            Event.Stipend st = (Event.Stipend) e;
+            state.wallets().adjust(st.userId, st.amount);
+            state.markStipended(st.userId, state.fillsEver());
+            return Result.ok(Collections.emptyList());
+        }
+
         if (e instanceof Event.WelcomeGrant) {
             Event.WelcomeGrant wg = (Event.WelcomeGrant) e;
             state.wallets().adjust(wg.targetUserId, wg.amount);
@@ -136,6 +216,8 @@ public class EventApplier {
             state.setTaxBps(applied.taxBps);
             state.setWelcomeGrant(applied.grantAmount);
             state.setListingFee(applied.listingFee);
+            state.setListingFreeOrders(applied.listingFreeOrders);
+            state.setStipend(applied.stipendAmount, applied.stipendEveryFills);
             return Result.ok(Collections.emptyList());
         }
 
@@ -197,6 +279,14 @@ public class EventApplier {
             if (d.quantity <= 0 || d.price <= 0) return Result.reject("invalid quantity or price");
             if (d.itemId == null || d.itemId.isEmpty()) return Result.reject("missing itemId");
 
+            // Asked before the deposit, and asked of the same function validate asks.
+            // Refusing after depositing left the goods in the ledger on an event whose
+            // author had just been told it failed — and the client answers a refusal by
+            // handing the physical items back, so they existed twice.
+            MarketState.SubmitResult listable =
+                    state.canDepositAndList(d.userId, d.itemId, d.quantity, d.price);
+            if (!listable.accepted) return Result.reject(listable.reason);
+
             state.deposit(d.userId, d.itemId, d.quantity);
             Order order = new Order(se.seq, d.price, d.itemId, d.quantity, false, d.userId);
             MarketState.SubmitResult sr = state.submitOrder(order);
@@ -208,21 +298,68 @@ public class EventApplier {
         return Result.reject("unknown event type: " + e.getClass().getSimpleName());
     }
 
+    /**
+     * A replayed state together with where the replay actually finished.
+     *
+     * The two belong together and must be read together. EventLog caches lastSeq when it
+     * is constructed while readFrom re-reads the file, so asking the log where it ends
+     * after replaying it can give an answer from before the replay — see replayWithHead.
+     */
+    public static final class Replayed {
+        public final MarketState state;
+        public final long headSeq;
+        public final String headHash;
+
+        Replayed(MarketState state, long headSeq, String headHash) {
+            this.state = state;
+            this.headSeq = headSeq;
+            this.headHash = headHash;
+        }
+    }
+
     /** Rebuilds market state from scratch by replaying an entire log. */
     public static MarketState replay(EventLog log) throws IOException {
+        return replayWithHead(log).state;
+    }
+
+    /**
+     * The same, saying which event the state actually ends at.
+     *
+     * For anyone who needs to know both, which is anyone about to apply more events on
+     * top. Taking the state from here and the position from {@code log.lastSeq()} reads
+     * as equivalent and is not: lastSeq is cached when the EventLog is constructed and
+     * readFrom re-reads the file every call, so if anything appends between the two the
+     * position lands behind the state built beside it.
+     *
+     * That is not hypothetical and not a rare race. Starting a host signals "bound"
+     * before it issues its opening welcome grants, and the self-connect that follows
+     * opens a second EventLog on the very file those grants are being appended to. The
+     * client then believed it was at seq 4 while holding state through seq 5, told the
+     * host so, was sent event 5 again, and applied a welcome grant to itself twice —
+     * ending the session a grant richer than the host it was mirroring. Which is replica
+     * divergence, the one thing this whole design exists to prevent, and it was silent
+     * until the client started validating what the host sends.
+     */
+    public static Replayed replayWithHead(EventLog log) throws IOException {
         MarketState state = new MarketState();
+        long headSeq = 0;
+        String headHash = "0";
         for (SequencedEvent se : log.readFrom(0)) {
             apply(state, se);
+            // From the events actually replayed, never from the log's own idea of where
+            // it ends. This line is the whole point of this method.
+            headSeq = se.seq;
+            headHash = se.hash;
         }
         // A log written before market identity existed replays to nothing, because
         // every event fails the genesis check. Say so — silence here looks like an
         // empty market rather than an incompatible one.
-        if (log.lastSeq() > 0 && state.marketId() == null) {
-            System.err.println("[economiesmod] log has " + log.lastSeq() + " events but no"
+        if (headSeq > 0 && state.marketId() == null) {
+            System.err.println("[economiesmod] log has " + headSeq + " events but no"
                     + " MarketCreated genesis — it predates market identity and cannot be"
                     + " replayed. Reset the log and create or join a market.");
         }
-        return state;
+        return new Replayed(state, headSeq, headHash);
     }
     /** Checks whether an event would be accepted, without mutating state. */
     public static Result validate(MarketState state, SequencedEvent se) {
@@ -274,6 +411,50 @@ public class EventApplier {
             return Result.ok(Collections.emptyList());
         }
 
+        if (e instanceof Event.Stipend) {
+            Event.Stipend st = (Event.Stipend) e;
+
+            // Self-claimed, so there is no author question to answer — but the amount is
+            // still the market's, for the same reason the welcome grant's is: nothing
+            // can check who was sequencing, so the figure has to come from the log.
+            // Asked first, because a market that has just switched the stipend off is
+            // exactly when a client is holding the old figure — and being told the
+            // amount is wrong sends somebody looking for the right one when there is
+            // none.
+            if (state.stipendAmount() <= 0) {
+                return Result.reject("this market pays no stipend");
+            }
+            if (st.amount != state.stipendAmount()) {
+                return Result.reject("stipend must be exactly this market's "
+                        + state.stipendAmount() + ", not " + st.amount);
+            }
+            if (!state.isRegistered(st.userId)) {
+                return Result.reject("only a registered identity can claim a stipend");
+            }
+            long since = state.fillsEver() - state.stipendedAtFill(st.userId);
+            if (since < state.stipendEveryFills()) {
+                return Result.reject("this market has settled " + since + " fills since"
+                        + " your last claim, and pays every "
+                        + state.stipendEveryFills());
+            }
+
+            // Asked again here, not only when the policy was written. The payout is per
+            // identity, so it grows every time somebody joins while the fees an interval
+            // collects do not — a stipend that was affordable for three people is a mint
+            // at thirty. Checked from the log like everything else, so every replica
+            // refuses the same claim.
+            //
+            // Refusing is the right failure: the alternative is paying out of a market
+            // that cannot cover it, which is the thing the whole rule exists to stop.
+            String unsafe = stipendOutpacesItsFees(state.stipendAmount(),
+                    state.stipendEveryFills(), state.listingFee(),
+                    state.registeredCount());
+            if (unsafe != null) {
+                return Result.reject("this market has outgrown its stipend — " + unsafe);
+            }
+            return Result.ok(Collections.emptyList());
+        }
+
         if (e instanceof Event.MarketPolicy) {
             Event.MarketPolicy mp = (Event.MarketPolicy) e;
 
@@ -297,6 +478,35 @@ public class EventApplier {
             }
             if (mp.listingFee < 0) {
                 return Result.reject("listing fee cannot be negative");
+            }
+            if (mp.listingFreeOrders < 0) {
+                return Result.reject("free order allowance cannot be negative");
+            }
+            if (mp.stipendAmount < 0) {
+                return Result.reject("stipend cannot be negative");
+            }
+            if (mp.stipendAmount > MarketState.MAX_STIPEND) {
+                return Result.reject("stipend may not exceed " + MarketState.MAX_STIPEND);
+            }
+            if (mp.stipendAmount > 0 && mp.stipendEveryFills < 1) {
+                return Result.reject("a stipend needs an interval of at least one fill");
+            }
+            // The interlock, and the reason a stipend is not a mint.
+            //
+            // Credits paid per fill must cost more to earn than they are worth, or
+            // anybody can trade with themselves indefinitely and print money. Producing
+            // one fill means two orders crossing, so at least two listing fees at the
+            // base rate — the rate a lone order pays, since that is the cheapest any
+            // order can ever be.
+            //
+            // Checked here rather than left to whoever writes the config, because a
+            // market whose policy is only safe when set carefully is a market that mints
+            // the first time somebody is careless. Every replica reaches this verdict
+            // from the log alone.
+            if (mp.stipendAmount > 0) {
+                String unsafe = stipendOutpacesItsFees(mp.stipendAmount,
+                        mp.stipendEveryFills, mp.listingFee, state.registeredCount());
+                if (unsafe != null) return Result.reject(unsafe);
             }
             if (mp.listingFee > MarketState.MAX_LISTING_FEE) {
                 return Result.reject("listing fee may not exceed "
@@ -340,7 +550,26 @@ public class EventApplier {
             // position here has had their allowance from this market, and carrying a
             // second one in is how you mint: join, take the grant, reset, create your
             // own market, take that grant too, migrate it back, repeat.
-            if (state.isRegistered(mb.beneficiary) || state.hasBeenGranted(mb.beneficiary)) {
+            //
+            // hasMigratedIn is the third of these and was missing, which meant the rule
+            // described above did not hold against the attack it names. A migration
+            // registers nobody and grants nobody, so neither of the other two tests is
+            // ever true of somebody who has only migrated — and hasMigrated above is
+            // keyed to the *source* market, which is a fresh random id every time
+            // somebody creates one. So the same identity could create a market at the
+            // grant ceiling, take it, migrate in, reset, and do it again, without limit
+            // and without ever registering here. Measured at four million credits in
+            // four passes against a market whose founder had fifty.
+            //
+            // It asks about this beneficiary and nobody else. isAccountedElsewhere was
+            // tried here first and is wrong: it holds everyone who was registered in a
+            // market somebody migrated out of, so the first arrival from a shared market
+            // filed all their friends and the second was turned away as though they had
+            // already been paid. Two people leaving one market together is the ordinary
+            // case — see M6e, which exists because M6b only ever tested one person
+            // arriving repeatedly and so had nothing to say about it.
+            if (state.isRegistered(mb.beneficiary) || state.hasBeenGranted(mb.beneficiary)
+                    || state.hasMigratedIn(mb.beneficiary)) {
                 return Result.reject("you already hold a position in this market"
                         + " — migration is for joining from outside it");
             }
@@ -385,7 +614,13 @@ public class EventApplier {
             if (d.quantity <= 0) return Result.reject("quantity must be positive");
             if (d.price <= 0) return Result.reject("price must be positive");
             if (d.itemId == null || d.itemId.isEmpty()) return Result.reject("missing itemId");
-            return Result.ok(Collections.emptyList());
+            // The listing fee, which this used not to ask about at all — so a seller
+            // who could not afford to list passed validate, was written into the log,
+            // and was refused by apply after the deposit had already landed.
+            MarketState.SubmitResult listable =
+                    state.canDepositAndList(d.userId, d.itemId, d.quantity, d.price);
+            return listable.accepted ? Result.ok(Collections.emptyList())
+                    : Result.reject(listable.reason);
         }
 
         return Result.reject("unknown event type: " + e.getClass().getSimpleName());

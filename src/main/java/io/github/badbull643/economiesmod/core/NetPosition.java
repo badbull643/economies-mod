@@ -46,16 +46,21 @@ public class NetPosition {
         }
 
         // Then fold in what's reserved in resting orders, which only the books know.
+        // peekBook rather than bookFor: this is a valuation and must not be able to
+        // change what it is valuing.
         for (String itemId : state.activeItems()) {
+            OrderBook book = state.peekBook(itemId);
+            if (book == null) continue;
+
             // Credits locked in this player's resting bids are still theirs.
-            for (Order o : state.bookFor(itemId).restingBids()) {
+            for (Order o : book.restingBids()) {
                 if (o.userID().equals(userId)) {
                     credits += o.volume() * o.value();
                 }
             }
 
             long resting = 0;
-            for (Order o : state.bookFor(itemId).restingAsks()) {
+            for (Order o : book.restingAsks()) {
                 if (o.userID().equals(userId)) resting += o.volume();
             }
             if (resting > 0) items.merge(itemId, resting, Long::sum);

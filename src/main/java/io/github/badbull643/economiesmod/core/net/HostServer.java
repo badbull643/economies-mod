@@ -104,12 +104,24 @@ public class HostServer {
      */
     private static final class ClientLink {
         final MessageChannel channel;
+        /**
+         * What this peer called itself in its Hello, or null.
+         *
+         * Kept so the host can answer "is this participant on my chain now" — a client
+         * that completed the handshake is, by definition, because this host sequenced
+         * everything it holds. A stale fork warning about somebody who has since joined
+         * you has no other way to be retired: the discovery poll is what clears one, and
+         * it only sees hosts, so a peer who stops hosting to come and join you leaves
+         * the warning standing forever.
+         */
+        final String peerName;
         private final BlockingQueue<Message> outbound;
         private final Thread writer;
         private volatile boolean open = true;
 
-        ClientLink(MessageChannel channel, int queueDepth) {
+        ClientLink(MessageChannel channel, int queueDepth, String peerName) {
             this.channel = channel;
+            this.peerName = peerName;
             this.outbound = new ArrayBlockingQueue<>(queueDepth);
             this.writer = new Thread(this::drain, "market-writer");
             this.writer.setDaemon(true);
@@ -260,13 +272,13 @@ public class HostServer {
         }
 
         this.config = config;
-        // Counting is switched on by either feature. The cap needs a total to compare
-        // against a ceiling; the attestation check needs one to compare against claimed
-        // play time. With neither configured the window is zero and nothing is kept.
-        boolean needsCounting = config.maxDepositUnitsPerWindow > 0
-                || config.maxDepositUnitsPerPlayHour > 0;
+        // Every deposit rule needs a running total, not just the cap: the cap compares
+        // one against a ceiling, the play-hour check against claimed time, and the
+        // statistics multiple against what the player has handled. Asked of the config
+        // rather than spelled out here, because this list having drifted from the one in
+        // problem() is what let the statistics rule run with no window at all.
         this.depositLimiter = new DepositLimiter(config.maxDepositUnitsPerWindow,
-                needsCounting ? config.depositWindowMinutes * 60_000L : 0L);
+                config.countsDeposits() ? config.depositWindowMinutes * 60_000L : 0L);
         this.welcomeGrantAmount = config.welcomeGrant;
         this.port = config.port;
         this.hostName = config.hostName;
@@ -291,27 +303,86 @@ public class HostServer {
 
         System.out.println("[host] serving '" + state.marketName() + "' ("
                 + state.marketId() + ") — replayed " + log.lastSeq() + " events");
+
+        warnIfGrantDisagrees();
+    }
+
+    /**
+     * Whether a peer by this name is synced to this host right now.
+     *
+     * Asked by a fork warning deciding whether it is still true. A client that completed
+     * the handshake holds exactly this host's chain — that is what the handshake is for —
+     * so a warning that they are on a different branch is answered by their presence, and
+     * nothing else will ever answer it: the discovery poll retires a warning by seeing
+     * the named host agree, and somebody who stops hosting in order to come and join you
+     * is no longer a host to be seen.
+     *
+     * By name, because a name is all a FORK refusal carries — Refused has hostName and no
+     * identity — and the two have to be comparable. That is weaker than a key and is the
+     * right weakness here: the cost of a collision is a warning retired early on a market
+     * the player is already connected to, and the cost of not asking is a warning that
+     * never goes away.
+     */
+    public boolean hasSyncedClient(String peerName) {
+        if (peerName == null) return false;
+        for (ClientLink c : clients) {
+            if (peerName.equals(c.peerName)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Says so when the configured welcome grant is not the one this market hands out.
+     *
+     * Nothing breaks when they disagree, and this deliberately does not claim
+     * otherwise. issueWelcomeGrant already takes the amount from the market and reads
+     * the config only as "issue grants at all, or not" — a host that used its own
+     * figure would be overruling policy it has no authority over, on a market it may
+     * not have created. So the grants that go out are correct whatever this says.
+     *
+     * What is worth reporting is the silence. An operator who edits welcomeGrant on a
+     * running market sees the number change in the file and nothing change anywhere
+     * else, because the amount was fixed when the market was created and this setting
+     * only reaches a market this server creates itself. Left unsaid, the natural
+     * conclusion is that the setting is broken.
+     *
+     * Zero is not a disagreement — it is the documented opt-out from issuing grants,
+     * so it passes silently rather than being reported as a mistake.
+     *
+     * Said at startup rather than at the first join, because the first join is the
+     * moment an operator is least likely to be reading the console.
+     */
+    public String grantMismatchWarning() {
+        // Zero is the opt-out, not a disagreement: issueWelcomeGrant reads it as "do
+        // not hand out grants at all", which is a decision a host is entitled to make
+        // about its own sequencing. Nothing to correct.
+        if (config.welcomeGrant <= 0) return null;
+
+        long market = state.welcomeGrant();
+        if (config.welcomeGrant == market) return null;
+
+        return "this market grants " + market + ", and welcomeGrant is set to "
+                + config.welcomeGrant + " — the configured figure is not used here."
+                + " The amount is the market's, recorded when it was created, so every"
+                + " host of it hands out the same one; this setting only chooses"
+                + " whether this server issues grants at all, and only sets the amount"
+                + " for a market it creates itself. Newcomers will receive " + market
+                + ". To hand out " + config.welcomeGrant + ", create a market with that"
+                + " figure (delete " + config.logFile + " first — that discards this"
+                + " market's history).";
+    }
+
+    private void warnIfGrantDisagrees() {
+        String warning = grantMismatchWarning();
+        if (warning != null) {
+            System.err.println("[host] welcome grant mismatch: " + warning);
+        }
     }
 
     private final CountDownLatch bound = new CountDownLatch(1);
     private volatile IOException bindError;
 
     public void start() throws IOException {
-        // Both of these exist because MarketBootstrap writes MarketCreated straight to
-        // the log, bypassing processProposal — so the KeyRegistered path that normally
-        // registers a player and issues their grant never runs for whoever is hosting.
-        try {
-            ensureHostRegistered();
-            issueWelcomeGrant(creatorUserId());
-            issueWelcomeGrant(hostUserIdAsUuid());
-        } catch (Exception e) {
-            System.err.println("[host] startup grants failed: " + e.getMessage());
-        }
-
-        sequencerThread = new Thread(this::sequencerLoop, "market-sequencer");
-        sequencerThread.setDaemon(true);
-        sequencerThread.start();
-
         try {
             // An explicit bindAddress listens on that interface only. Absent, this is
             // the same all-interfaces socket as before.
@@ -331,6 +402,27 @@ public class HostServer {
         System.out.println("[host] listening on port " + port
                 + (config.bindAddress == null || config.bindAddress.trim().isEmpty()
                         ? "" : " (" + config.bindAddress.trim() + " only)"));
+
+        // After the bind, deliberately. Both of these write to the log, and a server
+        // that cannot listen has no business changing the market — a failed start on a
+        // busy port used to register the host and grant it anyway, which is a market
+        // fact created by a server that never served. Idempotent afterwards, so it did
+        // not accumulate, but the first attempt still wrote two events nobody asked for.
+        //
+        // They exist at all because MarketBootstrap writes MarketCreated straight to the
+        // log, bypassing processProposal — so the KeyRegistered path that normally
+        // registers a player and issues their grant never runs for whoever is hosting.
+        try {
+            ensureHostRegistered();
+            issueWelcomeGrant(creatorUserId());
+            issueWelcomeGrant(hostUserIdAsUuid());
+        } catch (Exception e) {
+            System.err.println("[host] startup grants failed: " + e.getMessage());
+        }
+
+        sequencerThread = new Thread(this::sequencerLoop, "market-sequencer");
+        sequencerThread.setDaemon(true);
+        sequencerThread.start();
 
         try {
             while (running) {
@@ -459,6 +551,7 @@ public class HostServer {
 
             if (first instanceof Message.Query
                     || first instanceof Message.MigrateRequest
+                    || first instanceof Message.HashQuery
                     || first instanceof Message.CatchUp) {
                 if (!preAuthLimiter.allow()) {
                     sendError(channel, "rate limited");
@@ -490,6 +583,11 @@ public class HostServer {
                 }
                 channel.send(reply);
                 return;   // probe done, close the connection
+            }
+
+            if (first instanceof Message.HashQuery) {
+                handleHashQuery(channel, (Message.HashQuery) first);
+                return;   // one-shot, like a probe
             }
 
             if (first instanceof Message.MigrateRequest) {
@@ -525,7 +623,7 @@ public class HostServer {
             // Synced clients may sit idle indefinitely.
             socket.setSoTimeout(0);
 
-            link = new ClientLink(channel, config.outboundQueueDepth);
+            link = new ClientLink(channel, config.outboundQueueDepth, hello.displayName);
             clients.add(link);
             System.out.println("[host] " + channel.remoteAddress() + " synced and live ("
                     + clients.size() + " connected)");
@@ -742,6 +840,7 @@ public class HostServer {
                     + ", host " + log.lastSeq() + ")";
             err.hostSeq = log.lastSeq();
             err.hostHash = log.lastHash();
+            err.hostName = hostName;
             channel.send(err);
             return false;
         }
@@ -751,12 +850,25 @@ public class HostServer {
         if (ourHash == null || !ourHash.equals(hello.lastHash)) {
             System.err.println("[host] FORK DETECTED at seq " + hello.lastSeq
                     + " — client hash " + hello.lastHash + ", server hash " + ourHash);
-            sendError(channel, Refusal.FORK, "your history diverged from this market at"
-                    + " event " + hello.lastSeq);
+            // The point of disagreement rather than our head: this branch is only
+            // reached when the client is at or behind us, so our head says nothing
+            // about where the two chains parted, while our hash at their head is
+            // exactly the value they cannot compute for themselves.
+            //
+            // It does not locate the split — that is somewhere at or before this seq,
+            // and finding it would need hashes below their head that neither side
+            // sends. It is enough to state the disagreement honestly and to raise the
+            // FORKED banner, which is what a client on this branch needs.
+            Message.Error err = new Message.Error();
+            err.code = Refusal.FORK;
+            err.reason = "your history diverged from this market at event "
+                    + hello.lastSeq;
+            err.hostSeq = hello.lastSeq;
+            err.hostHash = ourHash;
+            err.hostName = hostName;
+            channel.send(err);
             return false;
         }
-
-        // Catch them up.
 
 // Catch them up.
 
@@ -770,11 +882,24 @@ public class HostServer {
 
         List<String> raw = log.rawLinesFrom(hello.lastSeq + 1);
 
-        // Don't propagate loopback addresses — they're only valid on the machine
-        // that recorded them.
+        // Who else is here, for a market where hosting rotates and the next host is one
+        // of these people.
+        //
+        // A dedicated server is not that market. It never hands over, so nobody needs
+        // to reach its clients; those clients are behind NAT with nothing forwarded, so
+        // the port they advertise is one no one can open; and a residential address is
+        // wrong again within days. Sharing the roster buys nobody a connection they
+        // could actually make, and costs every joiner the addresses of everyone who
+        // came before — merged into their own cache and written to disk. So a dedicated
+        // host tells nobody about anybody.
+        //
+        // Still recorded either way: server-peers.json is the operator's own note of
+        // who connected from where, which is an ordinary thing for a server to keep.
+        // The broadcast is what does not survive the reasoning, not the note.
         List<PeerCache.Peer> shareable = new ArrayList<>();
-        if (peerCache != null) {
+        if (peerCache != null && !config.dedicated) {
             for (PeerCache.Peer p : peerCache.all()) {
+                // Loopback is only valid on the machine that recorded it.
                 if (!"127.0.0.1".equals(p.address) && !"localhost".equals(p.address)) {
                     shareable.add(p);
                 }
@@ -816,9 +941,102 @@ public class HostServer {
      * — but the resulting write is queued, so the log still only ever has one writer.
      * The claim is recomputed from the verified branch, never taken from the request.
      */
+    /**
+     * Answers what this host's chain hashes to at a batch of sequence numbers.
+     *
+     * Read-only and pre-handshake. It exists so a client that has been told it forked
+     * can find out *where*, which nothing in the protocol could say before: the FORK
+     * refusal compares one hash at one point and the split is somewhere at or below it.
+     *
+     * Bounded, and the bound is the point. An unbounded batch would let anyone ask this
+     * host to hold its whole chain in memory and echo it back — so the cap is generous
+     * next to what a search needs (a few dozen probes total) and far under anything
+     * worth using as an amplifier.
+     */
+    private static final int MAX_HASH_PROBES = 64;
+
+    /**
+     * Rounds one connection may ask for before it is shown the door.
+     *
+     * The search is a conversation, not a one-shot: each round narrows the bracket using
+     * what the last one returned, so the asker has to come back. Serving one query per
+     * connection would mean a fresh socket and a fresh handshake per step of a binary
+     * search, which is worse for everyone.
+     *
+     * Bounded anyway, because "keep asking" is otherwise a way to hold a connection open
+     * for free. Generous next to what a search needs — it converges in three rounds on
+     * any log anybody has — and the socket timeout closes an idle one regardless.
+     */
+    private static final int MAX_HASH_ROUNDS = 12;
+
+    private void handleHashQuery(MessageChannel channel, Message.HashQuery first) {
+        Message.HashQuery q = first;
+        for (int round = 0; round < MAX_HASH_ROUNDS; round++) {
+            answerHashQuery(channel, q);
+            Message next;
+            try {
+                next = channel.receive();
+            } catch (Exception e) {
+                return;         // asker hung up, which is the ordinary ending
+            }
+            if (!(next instanceof Message.HashQuery)) return;
+            q = (Message.HashQuery) next;
+        }
+    }
+
+    private void answerHashQuery(MessageChannel channel, Message.HashQuery q) {
+        Message.HashReply reply = new Message.HashReply();
+        reply.seqs = new ArrayList<>();
+        reply.hashes = new ArrayList<>();
+        reply.lastSeq = log.lastSeq();
+
+        if (q.seqs == null || q.seqs.isEmpty()) {
+            channel.send(reply);
+            return;
+        }
+
+        List<Long> asked = q.seqs.size() > MAX_HASH_PROBES
+                ? q.seqs.subList(0, MAX_HASH_PROBES) : q.seqs;
+        try {
+            // One pass for the whole batch. hashAt would re-read the log per probe,
+            // which is the difference between a search costing one read and costing one
+            // read per step — see EventLog.hashesAt.
+            Map<Long, String> found = log.hashesAt(asked);
+            for (Long seq : asked) {
+                String hash = found.get(seq);
+                if (hash == null) continue;      // we simply do not have that one
+                reply.seqs.add(seq);
+                reply.hashes.add(hash);
+            }
+        } catch (IOException e) {
+            System.err.println("[host] could not read hashes: " + e.getMessage());
+        }
+        channel.send(reply);
+    }
+
     private void handleMigrate(MessageChannel channel, Message.MigrateRequest first) {
         Message.MigrateResult reply = new Message.MigrateResult();
         try {
+            // Before admission, before the chunks, before verifying a whole history: if
+            // this host does not take migrations at all, none of that work is worth
+            // doing and the sender should hear so immediately rather than after
+            // uploading their log.
+            //
+            // Names the alternative, because a refusal that leaves somebody thinking
+            // they cannot join is worse than the migration would have been. Adding a
+            // market slot and connecting from it costs them nothing — separate logs, so
+            // the market they already have is untouched.
+            if (!config.acceptsMigration()) {
+                System.out.println("[host] refused migration from " + first.userId
+                        + " — this host does not accept them");
+                reply.reason = "this server does not accept migrations. To join, add"
+                        + " another market in your world and connect from that one —"
+                        + " your existing market stays exactly as it is, and you arrive"
+                        + " here on the same welcome grant as everybody else";
+                channel.send(reply);
+                return;
+            }
+
             // Migration is a pre-handshake exchange that writes a MigrateBalance and
             // credits the sender. Gating only the handshake would leave the admission
             // policy bypassable by the one path that hands out money.
@@ -856,6 +1074,15 @@ public class HostServer {
             NetPosition position = NetPosition.of(foreign.state, who);
             if (position.isEmpty()) {
                 reply.reason = "you hold nothing in that market";
+                channel.send(reply);
+                return;
+            }
+
+            String implausible = migrationObjection(who, position, first.attestation);
+            if (implausible != null) {
+                System.out.println("[host] refused migration from " + who + ": "
+                        + implausible);
+                reply.reason = implausible;
                 channel.send(reply);
                 return;
             }
@@ -1149,6 +1376,33 @@ public class HostServer {
             return;
         }
 
+        // What this host will let a market grant a newcomer.
+        //
+        // A host rule, and it has to be: the ceiling in EventApplier is replicated, so
+        // every replica must reach the same verdict about the same event — and whether
+        // a market is "rotating" or "dedicated" is a fact about whoever is hosting right
+        // now, not about the market. Put it in validate and the same policy event would
+        // be legal on one host and illegal on the next, which forks the market the
+        // moment hosting changes hands. It sits here with admission and the deposit caps
+        // instead, and travels no better than they do — see the log's note on that.
+        //
+        // The nice consequence is that no existing market breaks. Lowering the number in
+        // validate would have made a market that had already set a larger grant fail to
+        // replay its own recorded policy, which is what kept this undone.
+        if (event instanceof Event.MarketPolicy) {
+            long asked = ((Event.MarketPolicy) event).grantAmount;
+            long ceiling = config.maxWelcomeGrant();
+            if (asked > ceiling) {
+                System.out.println("[host] refused a welcome grant of " + asked
+                        + " — this host allows " + ceiling);
+                reject(p.from, msg.clientEventId, "this host will not sequence a welcome"
+                        + " grant above " + ceiling + ", and you asked for " + asked
+                        + ". A grant far above what things trade for is the largest"
+                        + " single lever on what credits are worth");
+                return;
+            }
+        }
+
         // After validate, so an event refused for some other reason costs nobody any of
         // their allowance, and before append, because this is the last point at which
         // declining is free.
@@ -1387,6 +1641,74 @@ public class HostServer {
         }
     }
 
+    /**
+     * Why this migration should not be honoured, or null when it should.
+     *
+     * Migration was the one way into a market that no deposit rule reached. The three
+     * of them hang off depositUnitsOf in processProposal, and a migration never goes
+     * near it — it is queued as host work and appended directly, so items arrived in
+     * any quantity from any world with nothing consulted but the admission list. Build
+     * a market in a creative world, dump into it, migrate it in on first contact: the
+     * grant guards stop the credits and nothing stopped the goods.
+     *
+     * The statistics multiple is the rule that fits here, and the only one that does.
+     * A migration is a stock transfer, and statistics are a stock measure: goods you
+     * really mined and put in your own market are goods your own statistics counted,
+     * while goods you spawned are not. The window cap is deliberately not applied — it
+     * bounds a rate, and refusing a long-lived market's whole position for arriving at
+     * once would break migration for exactly the people using it honestly. Claimed play
+     * time is not applied for the same reason, and is weak besides.
+     *
+     * Judged against what is being carried in, not what has been deposited lately, so
+     * it needs no window and nothing is recorded here. The market being left is
+     * evidence in itself: its history was verified event by event on the way in.
+     */
+    private String migrationObjection(UUID who, NetPosition position,
+                                      WorldAttestation claim) {
+        if (config.requireAttestation && claim == null) {
+            return "this server needs to know what world you are trading from, and your"
+                    + " client did not say — it may be too old to migrate here";
+        }
+
+        // Credits, before items, and before the attestation is consulted at all —
+        // because unlike the item rules this one needs no evidence from the client.
+        // It is the receiving market's own limit on how much money may walk in at once,
+        // and everything below this line is unreachable for somebody bringing nothing
+        // but credits, which is what made this the gap: migrationObjection weighed
+        // items and only items, so a balance of any size passed unexamined.
+        if (config.maxMigratedCredits > 0 && position.credits > config.maxMigratedCredits) {
+            return "you would be bringing " + position.credits + " credits, and this"
+                    + " server accepts up to " + config.maxMigratedCredits
+                    + " in a migration — a market that grants more than this one does"
+                    + " would otherwise reprice everything here on the way in";
+        }
+
+        if (claim == null || config.maxDepositMultipleOfHandled <= 0) return null;
+
+        for (Map.Entry<String, Long> entry : position.items.entrySet()) {
+            String itemId = entry.getKey();
+            long bringing = entry.getValue() == null ? 0 : entry.getValue();
+            if (bringing <= 0) continue;
+
+            long handled = claim.handledOf(itemId);
+            // Plus whatever this market has already handed them, for the same reason the
+            // deposit path allows it: a withdrawal arrives through insertStack and
+            // increments no statistic, so goods this market gave out would otherwise
+            // look spawned on the way back in.
+            long allowed = Math.addExact(
+                    Math.multiplyExact(handled, (long) config.maxDepositMultipleOfHandled),
+                    state.withdrawnBy(who, itemId));
+
+            if (bringing > allowed) {
+                return "you would be bringing " + bringing + " " + itemId
+                        + ", and your own statistics show " + handled
+                        + " ever handled — this server accepts up to "
+                        + config.maxDepositMultipleOfHandled + " times that";
+            }
+        }
+        return null;
+    }
+
     private UUID hostUserIdAsUuid() {
         return UUID.fromString(hostUserId);
     }
@@ -1555,16 +1877,22 @@ public class HostServer {
             System.exit(2);
         }
 
+        // Reached only from the standalone launcher, so this is what "dedicated" means:
+        // started from a command line rather than from inside somebody's game. Forced
+        // rather than read, so a config copied from a client cannot claim otherwise.
+        //
+        // Ahead of --write-config, not after it. Everything below this point is true of
+        // anything that reaches this main, so writing the file first produced a snapshot
+        // taken before the one line that makes it a server — it wrote dedicated:false
+        // for a dedicated server, and now that a default is derived from it, the wrong
+        // answer for anything keyed to it. --help calls this "the effective config".
+        cfg.dedicated = true;
+
         if (writeConfig) {
             cfg.save(configFile);
             System.out.println("[host] wrote " + configFile.toAbsolutePath());
             return;
         }
-
-        // Reached only from the standalone launcher, so this is what "dedicated" means:
-        // started from a command line rather than from inside somebody's game. Forced
-        // rather than read, so a config copied from a client cannot claim otherwise.
-        cfg.dedicated = true;
 
         Path logFile = Paths.get(cfg.logFile);
         System.out.println("[host] log file: " + logFile.toAbsolutePath());
@@ -1639,9 +1967,9 @@ public class HostServer {
             // The server is its own creator. Simplest case, and the only one that needs
             // nothing kept anywhere else.
             UUID creatorId = UUID.fromString(cfg.hostUserId);
-            MarketBootstrap.createMarket(log, creatorId, name, serverKeys);
+            MarketBootstrap.createMarket(log, creatorId, name, serverKeys,
+                    cfg.welcomeGrant, cfg.listingFee, cfg.stipendAmount);
             System.out.println("[host] created '" + name + "' owned by this server");
-            writeInitialPolicy(log, cfg, creatorId, serverKeys);
             return;
         }
 
@@ -1656,46 +1984,9 @@ public class HostServer {
 
         PlayerKeys creator = PlayerKeys.loadOrCreate(creatorKeyFile);
         UUID creatorId = UUID.fromString(cfg.creatorUserId.trim());
-        MarketBootstrap.createMarket(log, creatorId, name, creator);
+        MarketBootstrap.createMarket(log, creatorId, name, creator, cfg.welcomeGrant,
+                cfg.listingFee, cfg.stipendAmount);
         System.out.println("[host] created '" + name + "' owned by " + cfg.creatorUserId
                 + " — that key is not needed on this machine again");
-        writeInitialPolicy(log, cfg, creatorId, creator);
-    }
-
-    /**
-     * Records the configured welcome grant as the new market's policy.
-     *
-     * Only at creation, and only when it differs from the default every market starts
-     * with. After this the figure is the market's, not the server's: a host joining a
-     * market it did not create has no authority to change what newcomers are given, and
-     * a grant that disagreed with policy would be rejected by every replica including
-     * its own.
-     *
-     * Signed by the creator, because policy is creator-gated — which is the whole
-     * reason --creator-key records an operator rather than the box.
-     */
-    private static void writeInitialPolicy(EventLog log, ServerConfig cfg,
-                                           UUID creatorId, PlayerKeys creatorKeys) {
-        if (cfg.welcomeGrant == ServerConfig.DEFAULT_WELCOME_GRANT) return;
-
-        try {
-            Event.MarketPolicy mp = new Event.MarketPolicy();
-            mp.userId = creatorId;
-            mp.marketId = log.marketId();
-            mp.taxBps = 0;
-            mp.grantAmount = cfg.welcomeGrant;
-            mp.clientEventId = UUID.randomUUID().toString();
-            mp.timestamp = System.currentTimeMillis();
-
-            log.append(mp, creatorKeys.sign(EventCanonical.canonicalPayload(mp)));
-            System.out.println("[host] welcome grant for this market set to "
-                    + cfg.welcomeGrant);
-        } catch (Exception e) {
-            // Not fatal: the market exists and works, it just uses the default grant.
-            // Saying so is better than a server that quietly ignores its own config.
-            System.err.println("[host] could not record the configured welcome grant ("
-                    + e.getMessage() + ") — this market will use "
-                    + ServerConfig.DEFAULT_WELCOME_GRANT);
-        }
     }
 }
