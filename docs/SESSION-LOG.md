@@ -45,12 +45,17 @@ nothing depends on that.
 4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was backlog item
-4 — CI, and the port race that had to be fixed before it. **The suites now run on every
-push**, which changes what the sentence above this one is worth.
+**What is being worked on right now:** nothing. The last things finished were backlog item
+4 — CI, and the port race that had to be fixed before it — and clearing §9, which turned
+up a 443-line test suite in a worktree the log had called safe to remove.
 
 Still a person at a keyboard: `E9` and `E23` in `docs/testing/group-e.md`, which the
 author has said they will run later. Nothing in CI launches Minecraft.
+
+**Before starting the dedicated server again**, read §9: its market was deleted so the
+config and the log would stop describing different economies, and the restart that
+recreates it is the only moment `--creator-key` can be passed. Without it that market's
+policy is frozen for good.
 
 ---
 
@@ -961,22 +966,50 @@ of the same items is §4 again, in prose.*
 
 ## 9. Loose ends in the tree
 
-- A worktree at `.claude/worktrees/practical-diffie-e9fbf4` sits at `4fb4ec5`. It was for
+*Cleared 2026-08-23. Both entries below are done; they are kept because what each turned
+out to be is worth more than the fact that it is gone.*
+
+- ~~A worktree at `.claude/worktrees/practical-diffie-e9fbf4` sits at `4fb4ec5`. It was for
   a background task on the migration bypass that never ran; that bug was fixed here
-  instead. Safe to remove.
-- ~~`server-market.jsonl` is the dedicated server's live market, bootstrapped during C4
-  with `welcomeGrant: 50`.~~ **Recreated 2026-08-22, and it disagrees with its own
-  config.** The market on disk holds `grantAmount 1000, listingFee 0, stipendAmount 0`;
-  `server-config.json` says `50 / 2 / 20`. It was created during an E6 run at a moment
-  when the config file was absent, so it took the compiled defaults, and **genesis is
-  permanent** — that market was bootstrapped without `--creator-key`, so its creator is
-  the server itself and its policy is frozen forever.
+  instead. **Safe to remove.**~~ **It was not safe to remove, and "never ran" was wrong.**
+  It held eight modified files and a **443-line `MigrationCapTest`** that exists nowhere
+  else — migration weighed against deposit caps, attestation, creative worlds, the
+  statistics multiple and the free allowance. The bug it was written for was indeed fixed
+  on this branch instead, so none of it was ever needed; that is a reason not to merge it
+  and not a reason to delete it unread.
 
-  Nothing is broken by this; the server serves that market perfectly well. But the two
-  files describe different economies, and anyone reading the config to learn what the
-  server does will be wrong. To make them agree, stop the server, delete
-  `server-market.jsonl`, and start it — E6's first instruction, for exactly this reason.
+  Committed to its own branch as `c22abf6` before the directory went, so
+  `claude/practical-diffie-e9fbf4` still holds all of it. Nothing there is claimed to
+  build against the current tree — it sits on `4fb4ec5` and the code around it has moved a
+  very long way. **Whether any of those checks are worth porting is an open question**;
+  `depositCapTest` is six checks and `admissionTest` twenty-five, and neither reads a
+  `MigrateBalance`.
 
-  The config also predates `maxWelcomeGrant`, since it is only rewritten when the server
-  has no identity yet. Absent means the default, which for a dedicated box is the
-  compiled ceiling — see backlog item 3.
+  The lesson is the entry itself. It said "safe to remove" for four days, in a file that
+  is otherwise careful, because whoever wrote it knew what the worktree was *for* and did
+  not look at what was *in* it. A directory's purpose and its contents are two facts.
+
+- ~~`server-market.jsonl` disagrees with `server-config.json`.~~ **Done 2026-08-23.** The
+  market held five events — genesis, one policy, one key registration and two welcome
+  grants — with no trade or deposit in it, so deleting it discarded nothing anybody had
+  done. It is gone, and the next start bootstraps from the config, which is what makes the
+  two agree.
+
+  `server-config.json` was rewritten through `--write-config` at the same time, which
+  validated it (the `50 / 2 / 20` grant, fee and stipend pass the interlock) and added
+  `maxWelcomeGrant: 1000000` — the compiled dedicated ceiling, previously absent and
+  therefore invisible, which is §0.18's whole argument applied to the file it was written
+  about.
+
+  **One thing to decide before starting it**, and it is the only moment the decision can
+  be made: bootstrapping without `--creator-key` makes the box itself the creator, and a
+  market whose creator is a machine with no screen has its policy frozen for good. That is
+  recorded in §7 as a known trap, and this restart is the one chance to avoid it. Passing
+  `--creator-key` with a player's key, and that player's uuid in `creatorUserId`, leaves
+  the policy changeable from the Market screen afterwards.
+
+- **`server-identity.key` is tracked, unencrypted**, along with the rest of `run/`, because
+  `.gitignore` was removed on purpose. Raised before and reaffirmed, so this is not a new
+  objection — but CI now exists and this branch is pushed to GitHub, so the question is no
+  longer theoretical. If that repository is public, so is the key. Worth answering
+  deliberately rather than by default.
