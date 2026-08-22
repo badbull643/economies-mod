@@ -4,7 +4,7 @@
 that now scrolls. All of it has automated coverage and none of it has been run in game.
 The UI half matters most, because nobody has looked at it.*
 
-Run the suites first. Expect `487 / 6 / 5 / 16 / 16 / 6 / 12 / 11`:
+Run the suites first. Expect `487 / 6 / 5 / 16 / 16 / 6 / 12 / 16`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -231,6 +231,14 @@ change to the live sync path, so the thing to watch for is the opposite failure:
 - A dedicated server, since its market's creator is the box and its policy path differs
 
 If it does fire, the console line names the rule and the sequence number. Keep it.
+
+**It already fired once, and was right.** The first real session produced
+`REFUSING event 5 from host: breaks this market's rules — already granted in this market`
+on a plain self-connect. Not a false refusal: the client was holding state through event
+5 while believing it was at event 4, so the host re-sent it and the welcome grant was
+applied to that replica twice. See ``0.13` in the session log; fixed, with `H3` behind it.
+The reason it looked like a false positive is the reason to keep reading these lines
+rather than assuming.
 
 ## E11. Two markets with different grants, meeting
 

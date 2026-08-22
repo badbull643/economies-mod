@@ -57,9 +57,18 @@ public class MarketClient {
         this.persist = persist;
         this.peerCache = peerCache;
         this.myHostPort = myHostPort;
-        this.appliedSeq = log.lastSeq();
-        this.lastHash = log.lastHash();
-        this.state = EventApplier.replay(log);
+        // All three from one read of the log, not from the log's cached idea of where it
+        // ends plus a separate replay of the file. Those two can disagree, and on the
+        // path that matters most they routinely did: starting a host signals "bound"
+        // before it writes its opening welcome grants, and the self-connect that follows
+        // opens a second EventLog on the file those grants are landing in. lastSeq was
+        // captured before the grant, the replay picked it up, and this client believed
+        // it was one event behind state it already held — so the host re-sent that
+        // event, and the grant was applied to this replica twice.
+        EventApplier.Replayed replayed = EventApplier.replayWithHead(log);
+        this.state = replayed.state;
+        this.appliedSeq = replayed.headSeq;
+        this.lastHash = replayed.headHash;
     }
     /**
      * A host declining the handshake, carrying the reason in a form the UI can act on.
@@ -172,8 +181,12 @@ public class MarketClient {
         Message.Hello hello = new Message.Hello();
         hello.userId = userId.toString();
         hello.publicKey = keys.publicKeyString();
-        hello.lastSeq = log.lastSeq();
-        hello.lastHash = log.lastHash();
+        // What we have actually applied, not where the log object thinks the file ends.
+        // The host decides what to send us from this, so a figure behind our real state
+        // asks for events we already hold — which is how the same welcome grant got
+        // applied to this replica twice. Same two numbers, same one source.
+        hello.lastSeq = appliedSeq;
+        hello.lastHash = lastHash;
         hello.hostPort = myHostPort;
         hello.displayName = displayName;
         hello.protocolVersion = HostServer.PROTOCOL_VERSION;

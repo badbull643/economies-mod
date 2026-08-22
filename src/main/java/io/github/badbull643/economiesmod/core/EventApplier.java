@@ -298,21 +298,68 @@ public class EventApplier {
         return Result.reject("unknown event type: " + e.getClass().getSimpleName());
     }
 
+    /**
+     * A replayed state together with where the replay actually finished.
+     *
+     * The two belong together and must be read together. EventLog caches lastSeq when it
+     * is constructed while readFrom re-reads the file, so asking the log where it ends
+     * after replaying it can give an answer from before the replay — see replayWithHead.
+     */
+    public static final class Replayed {
+        public final MarketState state;
+        public final long headSeq;
+        public final String headHash;
+
+        Replayed(MarketState state, long headSeq, String headHash) {
+            this.state = state;
+            this.headSeq = headSeq;
+            this.headHash = headHash;
+        }
+    }
+
     /** Rebuilds market state from scratch by replaying an entire log. */
     public static MarketState replay(EventLog log) throws IOException {
+        return replayWithHead(log).state;
+    }
+
+    /**
+     * The same, saying which event the state actually ends at.
+     *
+     * For anyone who needs to know both, which is anyone about to apply more events on
+     * top. Taking the state from here and the position from {@code log.lastSeq()} reads
+     * as equivalent and is not: lastSeq is cached when the EventLog is constructed and
+     * readFrom re-reads the file every call, so if anything appends between the two the
+     * position lands behind the state built beside it.
+     *
+     * That is not hypothetical and not a rare race. Starting a host signals "bound"
+     * before it issues its opening welcome grants, and the self-connect that follows
+     * opens a second EventLog on the very file those grants are being appended to. The
+     * client then believed it was at seq 4 while holding state through seq 5, told the
+     * host so, was sent event 5 again, and applied a welcome grant to itself twice —
+     * ending the session a grant richer than the host it was mirroring. Which is replica
+     * divergence, the one thing this whole design exists to prevent, and it was silent
+     * until the client started validating what the host sends.
+     */
+    public static Replayed replayWithHead(EventLog log) throws IOException {
         MarketState state = new MarketState();
+        long headSeq = 0;
+        String headHash = "0";
         for (SequencedEvent se : log.readFrom(0)) {
             apply(state, se);
+            // From the events actually replayed, never from the log's own idea of where
+            // it ends. This line is the whole point of this method.
+            headSeq = se.seq;
+            headHash = se.hash;
         }
         // A log written before market identity existed replays to nothing, because
         // every event fails the genesis check. Say so — silence here looks like an
         // empty market rather than an incompatible one.
-        if (log.lastSeq() > 0 && state.marketId() == null) {
-            System.err.println("[economiesmod] log has " + log.lastSeq() + " events but no"
+        if (headSeq > 0 && state.marketId() == null) {
+            System.err.println("[economiesmod] log has " + headSeq + " events but no"
                     + " MarketCreated genesis — it predates market identity and cannot be"
                     + " replayed. Reset the log and create or join a market.");
         }
-        return state;
+        return new Replayed(state, headSeq, headHash);
     }
     /** Checks whether an event would be accepted, without mutating state. */
     public static Result validate(MarketState state, SequencedEvent se) {
