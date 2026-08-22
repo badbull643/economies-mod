@@ -171,7 +171,7 @@ who thinks to check. It does not cover somebody who does not.
 
 ---
 
-## 7. The split point is only found on one of the three paths that need it
+## 7. The poll cannot tell a longer chain from a different one
 
 **From §0.20 in the session log. `MarketClient.findSplitPoint` exists and works.**
 
@@ -189,6 +189,34 @@ It reaches past the banner. `depositsLostToReset` falls back to `divergence.seq 
 the split is unknown. That is a true upper bound and a very loose one: against a
 poll-sourced divergence at 52, on a pair of chains that parted at 22, it looks for
 deposits after event 51 and finds nearly none.
+
+**Second symptom, reported 2026-08-22, and it is worse than the banner.** The poll calls
+`observeMarketHeight` **first, unconditionally**, before any hash is compared — so a
+forked peer's head is recorded as this market advancing. Alice at 90 against Bob's forked
+98 came away permanently "8 events behind", on a branch that was never hers to catch up
+to, and the mark is monotonic and persisted in `high-water.json`.
+
+That is not cosmetic. `eventsBehind()` gates **Host**: `onHost` opens a DANGER overlay
+saying *"Hosting now would refuse everyone who is up to date, and split the market the
+moment you trade"*, and advises connecting to somebody serving it to catch up
+automatically. Against a phantom mark every clause of that is false, and the advice leads
+to a refusal — the honest host, on the chain everybody else shares, is the one warned off
+hosting it.
+
+The watermark's own design note is where the reasoning breaks: it stands in for a quorum,
+*"a note of how far ahead the market was last time we saw anyone serving it"*, and it is
+deliberately monotonic so it survives peers going offline. That is right for the case it
+was built for — somebody returning after a week — and it assumes a market id identifies
+one chain. A fork is precisely the state where it does not.
+
+**The same missing question answers both.** When a peer reports a head above ours the poll
+cannot compare — `if (seq > log.lastSeq()) return;` — so it holds no opinion, which is
+correct given what it knows and is why a fork with a longer peer stays invisible until
+somebody presses Connect. One `HashQuery` at **our** head settles it: matching means they
+genuinely extend us, so the height is real and "behind" is true; not matching means a
+fork, so the height must not be recorded and a divergence should be raised with a split
+point. Cached by (peer, head), a poll cycle costs one extra round trip only when a peer's
+head has moved.
 
 **Cost of not doing it:** a reset started from the poll's banner refunds almost nothing
 while the confirmation names what it will hand back. It errs the safe way — under-refunding
