@@ -814,9 +814,17 @@ public class MarketStateHolder {
 
         // These two really do share nothing with the destination, so the full position
         // is the honest figure.
+        //
+        // "Add another market" leads the list because it is the only one of the three
+        // that costs nothing: slots are separate logs, so joining from a fresh one keeps
+        // this market exactly where it is. It used to go unmentioned, which left Migrate
+        // and Reset — import your wealth, or destroy it — as if those were the options.
+        // A dedicated server does not take migrations by default, so it is not offered
+        // one at all.
         String action = HostServer.Refusal.DIFFERENT_MARKET.equals(code)
-                ? " — to join theirs instead, Migrate (carries your balance) or Reset log"
-                : " — to join, Reset log";
+                ? " — to join theirs, Add another market and connect from it (keeps this"
+                        + " one), or Migrate to carry your balance across, or Reset log"
+                : " — to join, Add another market and connect from it, or Reset log";
 
         return "nothing".equals(loss)
                 ? action + " (Reset would lose nothing)"

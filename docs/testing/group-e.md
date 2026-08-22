@@ -4,7 +4,7 @@
 that now scrolls. All of it has automated coverage and none of it has been run in game.
 The UI half matters most, because nobody has looked at it.*
 
-Run the suites first. Expect `487 / 6 / 5 / 16 / 16 / 6 / 12 / 16`:
+Run the suites first. Expect `494 / 6 / 5 / 16 / 21 / 6 / 12 / 16`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -328,3 +328,40 @@ only the one that applies is live.
 Then the same from the other side: connect out to somebody else's host and press
 Disconnect. That path was always correct and must stay correct — it is the one the
 greying could plausibly break.
+
+## E14. Joining a dedicated server without giving up your own market
+
+Migration is for people who know each other. The balance it carries was set by a welcome
+grant the migrant *chose*, in a world they control, up to the 1,000,000 ceiling — so on a
+public box it is not "bringing your savings", it is "naming your opening balance". A
+dedicated server now declines migrations unless its operator turns them on:
+
+```json
+{ "dedicated": true, "acceptsMigration": true }   // to allow them again
+```
+
+Unset is not false: unset means **off for a dedicated server, on for somebody's game**.
+
+The route that replaces it costs nothing, and is worth knowing regardless of servers —
+market slots are separate log files, so joining from a new one leaves your existing
+market untouched. That is now what the UI recommends first, everywhere.
+
+With a dedicated server running and a market of your own in your world:
+
+- The Network tab lists it with its `[server]` badge, as before
+- On the Market tab, **Migrate is not offered** for it, and the guidance beside the
+  column says why and names the alternative
+- Use **Add another market**, then Connect → you sync the server's market and receive
+  its welcome grant like any newcomer
+- **Switch back to your first market slot** → it is exactly as you left it. Same balance,
+  same orders, same history. This is the whole point of the recommendation
+- Set `acceptsMigration: true` on the server, restart, **Refresh hosts** → Migrate is
+  offered again and works
+
+And the refusal itself, which needs a modified or older client to reach — or just point a
+second in-game host at it — should arrive **before** you upload a history, and should say
+what to do instead rather than only "no".
+
+Then confirm nothing regressed for the ordinary case: two in-game hosts, different
+markets, Migrate between them still offered and still works. That path is unchanged and
+is the one this could plausibly have broken.
