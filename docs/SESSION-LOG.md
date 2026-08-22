@@ -4,21 +4,49 @@
 This file is the current picture, and where it disagrees with anything older, this one
 is right.*
 
-*Branch `trust-model-and-migration`, **24 commits ahead of
-`origin/trust-model-and-migration` and 0 behind it**. It has been pushed before and
-merged to `main` through PR #6 — the log before this one said "never pushed, `main` has
-no PR", which was out of date and got repeated for most of a session before anyone
-checked. Local `main` is 53 behind `origin/main`; nothing depends on that.*
+---
 
-*`origin/main` carries six commits this branch does not, and **all six are merge commits
-of this branch** — so nothing on `main` is missing from here. The check, rather than the
-number, because the number goes stale and this one already did: it said 21 ahead at the
-handoff when it was 22.*
+## Start here
+
+**The build is green and the tree is clean.** Nothing is half-finished; there is no
+in-progress edit to pick up.
+
+```
+./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
+    depositCapTest attestationTest hostTrustTest splitPointTest
+```
+
+Expect `531 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`. If any of it fails on a clean
+checkout, that is news — it has only ever been run on one machine (backlog item 4).
+
+**Where the code is.** Branch `trust-model-and-migration`, ahead of its remote and 0
+behind. Don't trust that sentence for a number — the count has been wrong in this header
+twice. Ask git:
 
 ```
 git rev-list --left-right --count origin/trust-model-and-migration...HEAD
 git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of its own
 ```
+
+`origin/main` carries commits this branch does not, and they are all merge commits *of
+this branch*, so nothing on `main` is missing from here. The branch has been pushed
+before and merged to `main` through PR #6. Local `main` is far behind `origin/main`;
+nothing depends on that.
+
+**What to read, in order.**
+
+1. **§4 below** — one paragraph, and it predicted most of two sessions' worth of bugs.
+   If you read nothing else, read that.
+2. **§0** — an inspection that found seventeen defects behind 437 passing checks, then
+   what a play session found on top. Long, but it is the current state of the code.
+3. **`docs/BACKLOG.md`** — everything deliberately not built, in the order worth doing,
+   each saying what it costs to keep not doing it. This is where the next work is.
+4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with five items wanting a short
+   re-check because their code moved afterwards or is newer than the sitting.
+
+**What is being worked on right now:** nothing. The last thing finished was backlog item
+1's second piece (returning items a discarded fork would destroy). The next piece is
+named at the top of that entry.
 
 ---
 
@@ -498,6 +526,19 @@ of the same items is §4 again, in prose.*
 - A worktree at `.claude/worktrees/practical-diffie-e9fbf4` sits at `4fb4ec5`. It was for
   a background task on the migration bypass that never ran; that bug was fixed here
   instead. Safe to remove.
-- `server-market.jsonl` is the dedicated server's live market, bootstrapped during C4 with
-  `welcomeGrant: 50`. It has no listing fee, so it cannot have a stipend without being
-  recreated.
+- ~~`server-market.jsonl` is the dedicated server's live market, bootstrapped during C4
+  with `welcomeGrant: 50`.~~ **Recreated 2026-08-22, and it disagrees with its own
+  config.** The market on disk holds `grantAmount 1000, listingFee 0, stipendAmount 0`;
+  `server-config.json` says `50 / 2 / 20`. It was created during an E6 run at a moment
+  when the config file was absent, so it took the compiled defaults, and **genesis is
+  permanent** — that market was bootstrapped without `--creator-key`, so its creator is
+  the server itself and its policy is frozen forever.
+
+  Nothing is broken by this; the server serves that market perfectly well. But the two
+  files describe different economies, and anyone reading the config to learn what the
+  server does will be wrong. To make them agree, stop the server, delete
+  `server-market.jsonl`, and start it — E6's first instruction, for exactly this reason.
+
+  The config also predates `maxWelcomeGrant`, since it is only rewritten when the server
+  has no identity yet. Absent means the default, which for a dedicated box is the
+  compiled ceiling — see backlog item 3.
