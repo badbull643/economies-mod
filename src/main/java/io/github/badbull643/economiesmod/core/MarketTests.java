@@ -1040,8 +1040,14 @@ public class MarketTests {
             check("and not negative", negative.problem() != null ? 1 : 0, 1);
 
             // A server that bootstraps a market above its own ceiling would refuse to
-            // sequence the figure it had just written into genesis.
+            // sequence the figure it had just written into genesis. Dedicated, because
+            // that is the host the sentence describes and the only one that bootstraps
+            // from this file — R1d is the world, where the two settings are unrelated.
+            // The ceiling is set rather than inherited: dedicated raises the unset
+            // default to the compiled figure, and these numbers would then agree.
             ServerConfig arguing = new ServerConfig();
+            arguing.dedicated = true;
+            arguing.maxWelcomeGrant = ServerConfig.ROTATING_MAX_WELCOME_GRANT;
             arguing.welcomeGrant = ServerConfig.ROTATING_MAX_WELCOME_GRANT + 1;
             check("a host cannot create a market it would then refuse",
                     arguing.problem() != null ? 1 : 0, 1);
@@ -1760,6 +1766,52 @@ public class MarketTests {
             }
             check("every key the command lists reaches the file", missing, 0);
             check("and there is something to list", printed.isEmpty() ? 0 : 1, 1);
+        }
+
+        section("R1d: lowering the ceiling in a world does not brick the file");
+        {
+            // Found running E17. The generated file carries welcomeGrant at its compiled
+            // default of 1000; lowering maxWelcomeGrant under it — which is the whole
+            // point of the setting — made problem() call the file unusable, and
+            // hostPolicyFor answers that by discarding all of it and hosting on the
+            // defaults. So the one edit the file exists for turned off every rule in it,
+            // including the ceiling being lowered, and said so in one console line.
+            //
+            // The pair is real on a host that bootstraps: it writes welcomeGrant into
+            // genesis and would then refuse to sequence it. A world bootstraps nothing —
+            // MarketBootstrap creates its market and never reads this file — and there
+            // welcomeGrant is a switch, tested against zero by issueWelcomeGrant, with
+            // the amount taken from the market. Different things, wrongly paired.
+            ServerConfig world = ServerConfig.friendGroup(25615)
+                    .asWorldHost(25615, "Alice", ALICE.toString());
+            world.maxWelcomeGrant = 100L;
+            check("the default grant figure is above that ceiling",
+                    world.welcomeGrant > world.maxWelcomeGrant() ? 1 : 0, 1);
+            check("and a world's file is still usable", world.problem() == null ? 1 : 0, 1);
+            check("with the lowered ceiling actually in force",
+                    world.maxWelcomeGrant(), 100L);
+
+            // The same numbers on the host the rule was written for. A server that would
+            // decline to sequence the grant it had just bootstrapped with is arguing with
+            // itself, and that is still refused.
+            ServerConfig box = new ServerConfig();
+            box.dedicated = true;
+            box.maxWelcomeGrant = 100L;
+            check("a bootstrapping host still refuses the pair",
+                    box.problem() != null ? 1 : 0, 1);
+            check("naming the setting that moves",
+                    String.valueOf(box.problem()).contains("maxWelcomeGrant") ? 1 : 0, 1);
+
+            // Zero is the opt-out and has to survive a low ceiling on either kind of
+            // host: it means no grants at all, which cannot exceed anything.
+            box.welcomeGrant = 0;
+            check("and lets a server that issues no grants through",
+                    box.problem() == null ? 1 : 0, 1);
+
+            // What the ceiling is actually for still works on a world: it gates policy
+            // events, which is a different question from what the file says.
+            check("the ceiling a world hosts under is its own",
+                    world.maxWelcomeGrant(), 100L);
         }
 
         section("R2: a server nobody could use is refused, not clamped");

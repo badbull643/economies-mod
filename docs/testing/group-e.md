@@ -569,17 +569,24 @@ And the console refusal, which needs a second client proposing it rather than th
 [host] refused a welcome grant of 20000 — this host allows 10000
 ```
 
-- Set `maxWelcomeGrant: 500` in a world's `host-config.json` with `welcomeGrant` **above**
-  it → **a world does not refuse to start.** `hostPolicyFor` catches `problem()` itself
-  and falls back before `HostServer` ever sees the config, so you get one console line
-  naming both figures and a host running on the friend-group defaults with none of your
-  rules. The dedicated launcher is the one that refuses and exits, and this bullet used
-  to describe that as though it were true of both. Run `/trade hostconfig` instead — it
-  asks the same `problem()` against the same stamped config and says so in chat, where
-  somebody editing the file will actually see it
-- Then the same on a dedicated server, which does refuse to start, naming both figures.
-  A box that would decline to sequence the grant it had just bootstrapped with is arguing
-  with itself, and it says so rather than starting
+- Set `maxWelcomeGrant: 500` in a world's `host-config.json`, leaving `welcomeGrant` at
+  the 1000 the generated file carries → **nothing complains, and the ceiling applies.**
+  The two are unrelated on a world: nothing there bootstraps a market from this file, so
+  `welcomeGrant` is only the switch deciding whether grants go out at all, and the amount
+  is the market's. `/trade hostconfig` must show the file as usable, and a grant of 1000
+  proposed by the creator must then be refused at 500
+- **This is the step that found the bug**, so it is worth knowing what it used to do.
+  `problem()` paired those two settings on every host, so lowering the ceiling in a
+  generated file made the file unusable — and `hostPolicyFor` answers unusable by
+  discarding all of it and hosting on the friend-group defaults. The one edit the file
+  exists for silently turned off every rule in it, *including the ceiling being lowered*,
+  and said so in one console line. Pinned by `R1d`
+- The same numbers on a dedicated server still refuse to start, naming both figures: a
+  box **does** bootstrap a market from this file, and one that would decline to sequence
+  the grant it had just created a market with is arguing with itself
+- Set `welcomeGrant: 0` in a world → grants stop going out entirely. Newcomers arrive
+  with nothing. This is the only thing that key does on a world, and it is worth seeing
+  once so the other value never gets read as an amount
 
 ### E17b. Finding the file at all
 
