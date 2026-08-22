@@ -401,3 +401,30 @@ fills the column past its bottom.
   losing its lower half
 - With only one market in the world the switcher is correctly absent — that case is
   "nothing to choose between", not "no room"
+
+## E16. Hosting a market a dedicated server already has
+
+Reported from play: a player can still press **Host** on a market a dedicated server is
+serving. That is the one reliable way to fork a market permanently — the box does not
+stop, so both of you keep sequencing, and two branches of one market cannot be merged.
+See `docs/design/fork-rebase.md` for why there is no way back from it.
+
+There was a collision warning, but it offered **"Take over"**, which is a fair offer
+against somebody's game — they may be about to log off — and never against a server that
+is always up. A comment beside the Migrate button had claimed the Host button was greyed
+on a dedicated market since before anything greyed it.
+
+With the dedicated server running and your client holding that same market:
+
+- **Host is greyed** on the Network tab, and the host list says why:
+  *"a dedicated server has this market — connect, don't host"*
+- The greying holds whether you are connected to the server or merely see it in the list
+- Refresh hosts, then **click a host row** → it still joins the right one. This is the
+  regression to watch: the explanation line sits above the rows, and the row positions
+  used to be computed twice — once for drawing, once for clicking. They are one function
+  now, but a shifted row that joins the wrong host would be silent
+- Stop the dedicated server, **Refresh hosts** → Host comes back, and the line goes
+- Hosting a market *no* dedicated server has is unchanged, warning and all
+
+If you can still reach the warning (a stale poll leaves the button live), it now has no
+confirm button — only **OK**. There is no "Take over" for a box that never leaves.

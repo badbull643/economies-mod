@@ -26,7 +26,7 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found sixteen defects in code that had 437 passing checks behind it — one a whole
+and it found seventeen defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
@@ -258,6 +258,26 @@ And a sixteenth, from a screenshot: **the market switcher disappeared.**
     stacking content downwards with no bound, and both failed by hiding a control rather
     than by drawing outside the box. Anything else in this file that stacks without a
     scroll is the next one. `E15`.
+
+And a seventeenth, from the same play session:
+
+17. **Host was live on a market a dedicated server already served.** That is the one
+    reliable way to fork a market permanently: the box does not stop, so both hosts keep
+    sequencing, and `docs/design/fork-rebase.md` is the whole essay on why there is no way
+    back. The collision warning that existed offered **"Take over"** — fair against
+    somebody's game, never against a server that is always up — and a comment beside the
+    Migrate button had claimed Host was greyed on a dedicated market since before
+    anything greyed it. Now greyed, with the host list saying why, and the warning has no
+    confirm button at all.
+
+    The fix nearly introduced this file's oldest bug. Explaining the greying means a line
+    of text above the host list, and the host rows had their positions computed **twice**
+    — a cursor walked down while drawing, and the same walk redone in the click handler.
+    Inserting a line moved every drawn row and left every clickable row where it was.
+    Both go through `discoveryRowY` now. Worth noticing that the code carried a comment
+    warning about exactly this — "rows stay one line each so the click test keeps
+    measuring in fixed steps" — and the warning was not enough, because the duplication
+    it was guarding was still there to be tripped over.
 
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 

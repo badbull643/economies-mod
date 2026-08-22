@@ -702,7 +702,14 @@ public class MarketScreen extends Screen {
 
         boolean has = MarketStateHolder.hasMarket();
         boolean hosting = MarketStateHolder.isHosting();
-        if (hostButton != null) hostButton.active = hostButton.visible && has && !hosting;
+        // Greyed rather than hidden when a dedicated server has this market, because
+        // every player could plausibly host and a dead control here teaches why they
+        // should not — which is what a comment beside the Migrate button has claimed
+        // this does since before it did any of it.
+        boolean servedByBox = dedicatedServesThisMarket();
+        if (hostButton != null) {
+            hostButton.active = hostButton.visible && has && !hosting && !servedByBox;
+        }
 
         // Only one of these can ever be the right thing to press: connect() stops
         // hosting before it dials out, so the two modes are exclusive. Leaving both live
@@ -792,6 +799,29 @@ public class MarketScreen extends Screen {
             for (PeerPoll.HostInfo h : discovered) {
                 boolean isOther = h.reply.userId != null && !h.reply.userId.equals(myUuid);
                 boolean sameMarket = myMarket != null && myMarket.equals(h.reply.marketId);
+
+                // A dedicated server is not a host you take over from. "Take over" is a
+                // reasonable offer against somebody's game — they may be about to log
+                // off, and one of you should be serving it. Against a box that is always
+                // up it is an offer to fork the market permanently: it will not stop, so
+                // both of you keep sequencing, and two branches of one market cannot be
+                // merged afterwards. No confirm button here, because there is no version
+                // of this that ends well.
+                if (isOther && sameMarket && h.reply.dedicated) {
+                    status = h.reply.hostName + " is a dedicated server and is always"
+                            + " serving this market — connect to it instead";
+                    showDanger("You cannot host this market",
+                            h.reply.hostName + " is a dedicated server serving this"
+                                    + " market right now (" + h.reply.lastSeq + " events),"
+                                    + " and it does not stop. Hosting it as well means two"
+                                    + " hosts sequencing one market, which splits it into"
+                                    + " two histories that can never be merged — you would"
+                                    + " lose everything you traded on the losing side."
+                                    + " Connect to it from the Network tab instead.",
+                            null, null);
+                    return;
+                }
+
                 if (isOther && sameMarket) {
                     showDanger(h.reply.hostName + " is already hosting this",
                             h.reply.hostName + " is serving this market right now ("
@@ -978,6 +1008,24 @@ public class MarketScreen extends Screen {
      * tests do too. When this meant "header" to one of them and "first entry" to the
      * other, every click on a host landed one row low and the last one was unreachable.
      */
+    /**
+     * Top of host row {@code index}. The single source for drawing one and for hitting it.
+     *
+     * There were two of these — the render walked a running cursor down from the "Hosts:"
+     * heading, and the click test recomputed the same walk from `discoveryStartY()`. They
+     * agreed only because nothing had ever been inserted between the heading and the
+     * first row. Adding one line of explanation above the list moved every drawn row down
+     * and left every clickable row where it was, which is this file's oldest bug and the
+     * one its own comments keep warning about.
+     *
+     * Anything that appears above the rows belongs in here, so both callers move together.
+     */
+    private int discoveryRowY(int index) {
+        int y = discoveryStartY() + DISCOVERY_ROW_HEIGHT + 2;   // below "Hosts:"
+        if (dedicatedServesThisMarket()) y += DISCOVERY_ROW_HEIGHT + 2;
+        return y + index * DISCOVERY_ROW_HEIGHT;
+    }
+
     private int discoveryStartY() {
         return panelTop();
     }
@@ -1343,6 +1391,35 @@ public class MarketScreen extends Screen {
      * Self-reported and signed, so nobody can change it in transit and a host can still
      * describe itself however it likes. That is enough for advice, which is all this is.
      */
+    /**
+     * Whether a dedicated server is serving the market this world holds.
+     *
+     * Two sources because they answer at different times and neither covers the other.
+     * Being connected to one is certain and needs no poll. The discovery list covers the
+     * case that actually bites — holding the market offline, or connected to nobody, and
+     * about to press Host on something a box is already sequencing.
+     *
+     * Used to grey Host, which a comment beside the Migrate button has claimed happens
+     * since before it did. Hosting a market a dedicated server also serves is the one
+     * reliable way to fork a market permanently: the box does not stop, so both of you
+     * keep sequencing, and two branches of one market cannot be merged.
+     */
+    private boolean dedicatedServesThisMarket() {
+        if (MarketStateHolder.isConnected() && MarketStateHolder.hostIsDedicated()) {
+            return true;
+        }
+        MarketState mine = MarketStateHolder.get();
+        if (mine == null || mine.marketId() == null) return false;
+        String myMarket = mine.marketId().toString();
+        for (PeerPoll.HostInfo h : discovered) {
+            if (h.reply != null && h.reply.dedicated
+                    && myMarket.equals(h.reply.marketId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean foreignIsDedicated() {
         PeerPoll.HostInfo h = foreignHost();
         return h != null && h.reply != null && h.reply.dedicated;
@@ -2547,6 +2624,16 @@ public class MarketScreen extends Screen {
                 x, y, stale ? 0xAA8844 : 0xFFFFFF);
         y += DISCOVERY_ROW_HEIGHT + 2;
 
+        // Says why Host is dead, next to the list that explains it. A greyed control
+        // with no reason beside it teaches nothing — it reads as broken, and somebody
+        // who wants to host goes looking for a way around it rather than understanding
+        // that there is nothing to work around.
+        if (dedicatedServesThisMarket()) {
+            label(matrices, "  a dedicated server has this market — connect, don't host",
+                    x, y, 0xFFAA55);
+            y += DISCOVERY_ROW_HEIGHT + 2;
+        }
+
         if (polling) {
             label(matrices, "  searching...", x, y, 0x808080);
             return;
@@ -2566,7 +2653,11 @@ public class MarketScreen extends Screen {
         String myMarket = mine != null && mine.marketId() != null
                 ? mine.marketId().toString() : null;
 
-        for (PeerPoll.HostInfo h : hosts) {
+        for (int i = 0; i < hosts.size(); i++) {
+            PeerPoll.HostInfo h = hosts.get(i);
+            // From discoveryRowY, not from a cursor walked down alongside the click
+            // test's own copy of the same walk.
+            y = discoveryRowY(i);
             boolean isSelf = h.reply.userId != null && h.reply.userId.equals(myUuid);
             // Whether this host serves the market we hold decides whether clicking it
             // will work at all, so it belongs on the row rather than in a failure later.
@@ -2594,7 +2685,6 @@ public class MarketScreen extends Screen {
             label(matrices, shown, x, y, colour);
             tipIfHovered(line.trim(), shown, x, y, listW - 8, DISCOVERY_ROW_HEIGHT,
                     (int) mouseX, (int) mouseY);
-            y += DISCOVERY_ROW_HEIGHT;
         }
     }
 
@@ -2684,16 +2774,17 @@ public class MarketScreen extends Screen {
                     ? MinecraftIds.userIdOf(mc.player).toString() : null;
 
             int x = listX + 4;
-            int y = discoveryStartY() + DISCOVERY_ROW_HEIGHT + 2;
+            List<PeerPoll.HostInfo> hosts = discovered;
 
-            for (PeerPoll.HostInfo h : discovered) {
+            for (int i = 0; i < hosts.size(); i++) {
+                PeerPoll.HostInfo h = hosts.get(i);
+                int y = discoveryRowY(i);      // the same function the drawing uses
                 boolean isSelf = h.reply.userId != null && h.reply.userId.equals(myUuid);
                 if (!isSelf && mouseX >= x && mouseX <= x + listW - 8
                         && mouseY >= y && mouseY < y + DISCOVERY_ROW_HEIGHT) {
                     joinHost(h);
                     return true;
                 }
-                y += DISCOVERY_ROW_HEIGHT;
             }
         }
         return super.mouseClicked(mouseX, mouseY, button);
