@@ -4,7 +4,7 @@
 that now scrolls. All of it has automated coverage and none of it has been run in game.
 The UI half matters most, because nobody has looked at it.*
 
-Run the suites first. Expect `494 / 6 / 5 / 16 / 21 / 6 / 12 / 16`:
+Run the suites first. Expect `505 / 6 / 5 / 16 / 21 / 6 / 12 / 16`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -256,16 +256,53 @@ A and B now hold 4.8% of the money in their own market
 Nobody is robbed — A and B keep every credit. But share is what buys things, and theirs
 went from all of it to a twentieth. Prices reprice to what C and D can pay.
 
-`maxMigratedCredits` in `host-config.json` is the answer to that, and it is **off by
-default** so nothing changes until a host sets it:
+### Do not watch your own credit counter
+
+**It is supposed to be unchanged, and watching it is how this test looks like it failed.**
+You had 1000 before migrating and you have 1000 after; that is what "carries your balance"
+means. The migrant's number is the one number that does not move. Neither does the
+founder's — they still have their 50.
+
+What moves is the market underneath both of them:
+
+| | before | after |
+| --- | --- | --- |
+| founder's credits | 50 | **50** |
+| migrant's credits | 1000 | **1000** |
+| the market's total | 50 | **1050** |
+| founder's share of it | 100% | **4.8%** |
+
+There is no screen that shows a total, so read it one of two ways. Add the two credit
+counters together across the two clients — or, better, watch the effect, which is the
+thing that actually matters:
+
+- **As the founder, list something for sale. As the migrant, outbid them twenty to one.**
+  Then try it the other way round and watch the founder be unable to compete for anything
+  the migrant wants. That is the whole finding, and it is invisible in any single number
+
+To confirm it landed at all, the host console is unambiguous:
+
+```
+[host] seq N MigrateBalance
+[host] migrated 1000 credits for <uuid> from '<market>'
+[host] welcome grant … refused: already accounted for by a migration
+```
+
+That last line is a pass, not a fault — a migrant brings their balance *instead of* a
+welcome grant, never as well.
+
+### The cap
+
+`maxMigratedCredits` in `host-config.json` is the answer to the dilution, and it is **off
+by default** so nothing changes until a host sets it:
 
 ```json
 { "maxMigratedCredits": 500 }
 ```
 
 - Build the two markets above, or any pair with different grants
-- With the cap unset, the migration goes through and the supply jumps. Watch the credit
-  totals on both sides — this is the behaviour, not a bug, and it is worth seeing once
+- With the cap unset, the migration goes through and the supply jumps. This is the
+  behaviour, not a bug, and it is worth seeing once
 - Set `maxMigratedCredits` to something under what the incoming player holds → the
   migration is refused before anything is written, naming both figures
 - Set it above → it goes through as before
@@ -428,3 +465,23 @@ With the dedicated server running and your client holding that same market:
 
 If you can still reach the warning (a stale poll leaves the button live), it now has no
 confirm button — only **OK**. There is no "Take over" for a box that never leaves.
+
+## E11b. Two people leaving one market together
+
+Split from E11 because it is a different guard and it regressed once already.
+
+The fix for repeated migration (`§0.11` in the session log) first used the wrong set: the
+one recording everyone who was *registered* in a market somebody migrated out of, which
+exists to deny them a second welcome grant. The first arrival filed all their friends, so
+the second was turned away as though they had already been paid. `M6b` passed throughout,
+because it only ever tested one identity arriving repeatedly.
+
+With **two** players in one market, both migrating into a third:
+
+- **Both land.** The second must not be told *"you already hold a position in this
+  market"* — they hold nothing here
+- Each keeps their own balance, and the receiving market's total goes up by both
+- **Neither collects a welcome grant on top.** The console says *"already accounted for by
+  a migration"* for each of them, which is the correct refusal
+- Then try a **second** migration for one of them, from a market they make fresh → refused.
+  That is the mint, and it stays shut

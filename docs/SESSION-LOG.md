@@ -33,7 +33,7 @@ Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`494 / 6 / 5 / 16 / 21 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
+`505 / 6 / 5 / 16 / 21 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -143,9 +143,22 @@ one with a small one:
     keyed to the *source* market id, which is a fresh random id every time somebody makes
     a market. So the rule never fired against the thing it was written for. Measured:
     **4,000,000 credits in four passes**, into a market whose founder held 50, by an
-    identity that never registered. `isAccountedElsewhere` is the test that *is* true of
-    them — it was already refusing their second welcome grant — and is now asked here
-    too. `M6b`.
+    identity that never registered. The guard now asks `hasMigratedIn` — has *this*
+    beneficiary carried a balance in here before, from anywhere — which is a set added
+    for it. `M6b`.
+
+    **The first attempt used `isAccountedElsewhere` and was wrong**, which `E11` caught
+    the next day. That set holds everyone who was *registered* in a market somebody
+    migrated out of, and exists to deny them a second welcome grant — its own note says
+    they get their own balance "if they turn up". So the first arrival from a shared
+    market filed all their friends, and the second was turned away as though already
+    paid. Two people leaving one market together is the ordinary case, not the abusive
+    one.
+
+    `M6b` passed throughout, because it only ever tested one identity arriving
+    repeatedly — the attack — so a guard that refused everyone from a migrated-out-of
+    market satisfied it completely. `M6e` is the ordinary case, and the lesson is that a
+    test which only describes the attack cannot tell you the fix is safe.
 
 12. **Nothing bounded migrated credits at all**, honestly or otherwise.
     `migrationObjection` weighs the *items* a migrant brings against their own Minecraft
@@ -294,7 +307,7 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 494   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 505   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 21   depositCapTest 6   attestationTest 12   hostTrustTest 16
 ```
 
