@@ -22,6 +22,7 @@ import java.util.Set;
  * {@value #MAX_PER_ITEM} trades per item, which is what a chart wants anyway. If full
  * history is ever needed, it is still in the log; read it from there rather than
  * growing this.
+ *
  */
 public class TradeHistory {
 

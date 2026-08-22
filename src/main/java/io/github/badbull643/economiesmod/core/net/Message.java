@@ -183,6 +183,39 @@ public abstract class Message {
         public Attest() { type = "Attest"; }
     }
 
+    /**
+     * "What do your events at these sequence numbers hash to?"
+     *
+     * The one thing missing to locate where two branches of a market parted. A FORK
+     * refusal can say *that* two chains disagree — it compares one hash at one point —
+     * and cannot say *where*, because the split is somewhere at or before that point and
+     * neither side ever sends a hash below it. Everything a fork could offer somebody
+     * afterwards needs the where: which of your orders were only ever yours, which
+     * deposits a reset would destroy, how much you actually did since you parted.
+     *
+     * A batch rather than one at a time, because answering costs a pass over the log —
+     * so a search that probed one point per message would read the whole file once per
+     * probe. The asker sends a spread of candidates, narrows to the bracket that
+     * contains the split, and asks again inside it. Two or three rounds covers any log
+     * anybody has.
+     *
+     * Pre-handshake and read-only, like Query. It reveals hashes of events the asker
+     * mostly already holds, and a host that would refuse them can refuse the connection.
+     */
+    public static class HashQuery extends Message {
+        public List<Long> seqs;
+        public HashQuery() { type = "HashQuery"; }
+    }
+
+    public static class HashReply extends Message {
+        /** Parallel to hashes. Only sequence numbers this host actually has. */
+        public List<Long> seqs;
+        public List<String> hashes;
+        /** So the asker can bound its search without a second round trip. */
+        public long lastSeq;
+        public HashReply() { type = "HashReply"; }
+    }
+
     /** Lightweight liveness/status probe. No handshake, no state. */
     public static class Query extends Message {
         public String protocolVersion;

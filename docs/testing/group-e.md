@@ -17,7 +17,7 @@ individual item on it.
 `E11` also had to be rewritten: it pointed at the migrant's own credit counter, which is
 the one number migration guarantees will not change. It looked like a failure and was not.
 
-### Three items want a short re-check
+### Four items want a short re-check
 
 Everything was tested against the code as it stood. Two runtime changes landed at 13:58
 after the session ended (`59eb94f`), both in `MarketScreen`, and `E17` is new work since:
@@ -31,7 +31,8 @@ after the session ended (`59eb94f`), both in `MarketScreen`, and `E17` is new wo
   dedicated server: Migrate should be offered, targeting the non-dedicated one. With only
   the server visible, nothing changed
 - **`E17`** is new since the sitting and has not been run at all: the welcome-grant
-  ceiling now differs by who is hosting. Worth five minutes on its own.
+  ceiling now differs by who is hosting. Worth five minutes on its own
+- **`E18`** is also new: the FORK banner now says where two branches parted
 
 Nothing else on this list has moved since it was run.
 
@@ -40,11 +41,11 @@ Nothing else on this list has moved since it was run.
 *The stipend, the escalating listing fee, the welcome grant control, and a Market column
 that now scrolls. The UI half mattered most, because nobody had looked at it.*
 
-Run the suites first. Expect `520 / 6 / 5 / 16 / 25 / 6 / 12 / 16`:
+Run the suites first. Expect `520 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
-    depositCapTest attestationTest hostTrustTest
+    depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
 `hostTrustTest` is new — it checks a host is trusted to order events and for nothing
@@ -561,3 +562,32 @@ And the console refusal, which needs a second client proposing it rather than th
   it → the host refuses to start, naming both figures. A server that would decline to
   sequence the grant it had just bootstrapped with is arguing with itself, and it says so
   rather than starting
+
+## E18. Where two branches parted
+
+New, never run. Until now the protocol could say *that* your chain disagreed with a
+host's and never *where*: the FORK refusal compares one hash at one point, and the split
+is somewhere at or below it. So "differs at event 400" might have meant four events of
+divergence or four hundred, and nothing could tell them apart.
+
+Build a fork the way `B2` does — Alice hosts, Bob syncs, Bob disconnects, **both** trade,
+Bob reconnects.
+
+- The FORKED banner now names where you parted: *"you parted after event N, and
+  everything either of you did since is on one branch only"*
+- **N must be the last event you both actually hold.** Count from the trade that split
+  you: if Bob disconnected at event 30 and both sides then traded, N is 30. Too high
+  hides events that were only ever Bob's; too low would offer back orders Alice still
+  holds, which is how a reset creates duplicates
+- The host console shows the search finishing; the client logs
+  `parted after event N, M of ours since`
+- **Diverge by a lot.** Trade fifty or more events on each side and confirm the number is
+  still exact — the search narrows a bracket rather than walking, so an off-by-one in it
+  would only show up over a long divergence
+- Kill the host between the refusal and the banner → the banner still appears, saying it
+  could not locate the split rather than failing outright. Asking is a second round trip
+  on purpose, so losing it costs the detail and not the refusal
+
+It does not change what a reset does yet. That is the next backlog item — refunding the
+deposits a reset would otherwise destroy, which needs exactly this number to know which
+deposits were only ever on the losing branch.
