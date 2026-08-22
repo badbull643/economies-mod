@@ -4,11 +4,21 @@
 This file is the current picture, and where it disagrees with anything older, this one
 is right.*
 
-*Branch `trust-model-and-migration`, **21 commits ahead of
-`origin/trust-model-and-migration`**. The branch has been pushed before and merged to
-`main` through PR #6 — the previous log's "never pushed, `main` has no PR" is out of
-date, and was repeated for most of this session before anyone checked. Local `main` is
-53 behind `origin/main`; nothing depends on that.*
+*Branch `trust-model-and-migration`, **24 commits ahead of
+`origin/trust-model-and-migration` and 0 behind it**. It has been pushed before and
+merged to `main` through PR #6 — the log before this one said "never pushed, `main` has
+no PR", which was out of date and got repeated for most of a session before anyone
+checked. Local `main` is 53 behind `origin/main`; nothing depends on that.*
+
+*`origin/main` carries six commits this branch does not, and **all six are merge commits
+of this branch** — so nothing on `main` is missing from here. The check, rather than the
+number, because the number goes stale and this one already did: it said 21 ahead at the
+handoff when it was 22.*
+
+```
+git rev-list --left-right --count origin/trust-model-and-migration...HEAD
+git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of its own
+```
 
 ---
 
