@@ -26,7 +26,7 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found fifteen defects in code that had 437 passing checks behind it — one a whole
+and it found sixteen defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
@@ -239,6 +239,25 @@ And a fifteenth, raised as a design question rather than a bug — correctly:
     Also worth recording: there was no way for any operator to refuse a migration at all
     before this. `maxMigratedCredits: 0` means unlimited, not none — a gap in §0.12,
     added the same day.
+
+And a sixteenth, from a screenshot: **the market switcher disappeared.**
+
+16. The Market tab's left column had no bottom, and every piece in it independently gave
+    up when it ran out of room — `if (y > panelBottom() - 24) { slotListTop = -1;
+    return; }` for the switcher, `panelBottom() - 40` for the About block. The switcher is
+    drawn last, so it went first, and it is the only *control* in that column: the one
+    thing that had to survive was the one guaranteed not to. `E14`'s dedicated-server
+    paragraph was enough to push it over.
+
+    Same disease as §0.4 and the same fix, applied to the other half of the screen. The
+    column scrolls; one `guideLine` decides what is drawn, so nothing can be lost a new
+    way; and `slotRowVisible` is asked by both the drawing and the hit test, because a
+    row you cannot see that still switches your market when clicked is §4 exactly.
+
+    Worth noting what the two halves of this screen now have in common: both were built
+    stacking content downwards with no bound, and both failed by hiding a control rather
+    than by drawing outside the box. Anything else in this file that stacks without a
+    scroll is the next one. `E15`.
 
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
