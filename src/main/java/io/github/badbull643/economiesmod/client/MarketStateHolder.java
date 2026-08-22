@@ -1588,8 +1588,9 @@ public class MarketStateHolder {
         if (currentWorldDir == null) return;
 
         // Before anything is deleted, and before divergence is cleared below — both are
-        // needed to work out which orders this reset actually costs.
+        // needed to work out what this reset actually costs.
         List<OldOrder> lost = ordersLostToReset();
+        List<Refund> owed = depositsLostToReset();
 
         try {
             Path log = logPathFor(currentWorldDir);
@@ -1615,6 +1616,16 @@ public class MarketStateHolder {
                 System.out.println("[economiesmod] " + lost.size()
                         + " orders held for re-placing after the reset");
             }
+
+            // Queued rather than handed over here. The inventory belongs to the server
+            // thread and this runs from a button; the client tick already drains refused
+            // deposits on the right thread and this rides along with them.
+            for (Refund r : owed) {
+                resetRefunds.add(r);
+                System.out.println("[economiesmod] returning " + r.quantity + " "
+                        + r.itemId + " — deposited after the split, and this reset would"
+                        + " otherwise destroy them");
+            }
         } catch (IOException e) {
             System.err.println("[economiesmod] reset failed: " + e);
         }
@@ -1633,6 +1644,65 @@ public class MarketStateHolder {
      * to rejoin, so an offer to re-place would be an offer to re-place them into
      * nothing.
      */
+    /** Items a reset would destroy, waiting for a thread that may touch an inventory. */
+    public static class Refund {
+        public final String itemId;
+        public final long quantity;
+
+        Refund(String itemId, long quantity) {
+            this.itemId = itemId;
+            this.quantity = quantity;
+        }
+    }
+
+    private static final java.util.Queue<Refund> resetRefunds =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    /** The next batch of items a reset owes back, or null. Drains one per call. */
+    public static Refund nextResetRefund() { return resetRefunds.poll(); }
+
+    /**
+     * What this reset would destroy that no history can restore.
+     *
+     * Items deposited after the split left a Minecraft inventory, and the branch holding
+     * the record of them is about to be deleted. Everything else a reset costs comes
+     * back — balances from the shared history when it is adopted again, orders as a
+     * checklist — so this is the only part that is simply gone.
+     *
+     * Needs the split point, which is why it could not be written until there was one.
+     * Prefers the measured answer and falls back to the old upper bound if the search
+     * could not reach the host: divergence.seq is where the hashes were seen to disagree,
+     * so one before it is the latest the split can possibly be. Erring high refunds less,
+     * which is the direction that cannot create items.
+     */
+    private static List<Refund> depositsLostToReset() {
+        List<Refund> out = new ArrayList<>();
+
+        Divergence split = divergence;
+        if (split == null || currentWorldDir == null) return out;
+
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return out;
+        UUID me = MinecraftIds.userIdOf(mc.player);
+
+        try {
+            long sharedThrough = split.splitAt >= 0
+                    ? split.splitAt : Math.max(0, split.seq - 1);
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            for (Map.Entry<String, Long> e
+                    : BranchDiff.depositsOnlyAfter(log, sharedThrough, me).entrySet()) {
+                out.add(new Refund(e.getKey(), e.getValue()));
+            }
+        } catch (Exception e) {
+            // The reset goes ahead regardless — being stuck on a forked branch is worse
+            // than losing the refund. Loud, because this is the one cost that is real.
+            System.err.println("[economiesmod] could not work out which deposits the"
+                    + " reset would destroy, so none are being returned: " + e);
+            return new ArrayList<>();
+        }
+        return out;
+    }
+
     private static List<OldOrder> ordersLostToReset() {
         List<OldOrder> out = new ArrayList<>();
 

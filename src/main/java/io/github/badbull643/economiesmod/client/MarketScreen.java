@@ -537,7 +537,9 @@ public class MarketScreen extends Screen {
                         + " diverged from, everything you did before the split is in"
                         + " their copy too and comes back when you reconnect, and any"
                         + " orders you placed after it are listed afterwards so you can"
-                        + " put them back.",
+                        + " put them back. Items you deposited after the split are handed"
+                        + " back to your inventory — they came out of it, and discarding"
+                        + " this branch destroys the only record that they exist.",
                 "Discard", () -> {
                     MarketStateHolder.resetLog();
                     // Only claims the list exists when it does — a reset with no fork
