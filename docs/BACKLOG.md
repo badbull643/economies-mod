@@ -119,8 +119,14 @@ somebody remembering to run them.
 **Cost of not doing it:** unknown, which is the point. A missing file or a machine-local
 dependency would not be noticed until somebody else tried to build.
 
-Cheap to fix badly (a workflow that runs the eight suites), and the cheap version is
-most of the value.
+Cheap to fix badly (a workflow that runs the nine suites), and the cheap version is most
+of the value.
+
+**Read §0.26's closing note first.** Running all nine in one gradle invocation failed the
+build twice on 2026-08-22 with every suite reporting all checks passed, and succeeded on
+an immediate re-run — most likely a port race in the suites that bind sockets. A CI
+workflow that hits that on its first day will look like the tests are broken when they are
+not.
 
 ---
 
