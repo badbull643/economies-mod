@@ -37,14 +37,26 @@ meant four events or four hundred. `Divergence.splitAt` carries it, `-1` when it
 be found out, and asking is a separate round trip so a failure costs the detail rather
 than the refusal.
 
-**Next: refund-only** — before a reset deletes the losing branch, walk its tail for this
-player's own deposits and hand those items back. It is the only part of a reset that
-destroys something outside the ledger, and it is now unblocked: the split point is what
-tells it which deposits were only ever on the losing side.
+**~~Next: refund-only.~~ DONE 2026-08-22.** `BranchDiff.depositsOnlyAfter` works out what
+a reset destroys that nothing can restore — items deposited since the split, which left a
+Minecraft inventory and whose only record is about to be deleted — and `resetLog` queues
+them back to the inventory. `X3`, `X3b`, and `E19` for the live half.
 
-**Then** a full rebase, if refund-only turns out not to be enough. Never a merge —
+Bounded twice, because this ends in items appearing in a world and the only unacceptable
+direction is too many: by **what went in since the split**, netted against withdrawals, so
+pre-split holdings (which return with the shared history) and already-withdrawn goods are
+never handed over again; and by **what the ledger still says they hold**, counting goods
+reserved in resting sells, so somebody who deposited and then *sold* gets nothing — they
+hold credits, the buyer holds the goods. It can under-refund and cannot over-refund.
+
+**Then** a full rebase, if refund-only turns out not to be enough — and it may well be
+enough, since items were the only part of a reset that was unrecoverable. Never a merge:
 matching is order-dependent, so interleaving two branches produces fills nobody
 experienced. The design note explains why at length.
+
+**What is still lost to a reset:** credits earned since the split, and fills. Both are
+ledger entries with no existence outside it, so "restoring" them means choosing an
+arithmetic rather than returning a thing — which is the rebase question, not this one.
 
 ---
 

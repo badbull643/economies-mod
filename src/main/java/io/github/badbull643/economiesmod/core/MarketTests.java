@@ -7,6 +7,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 
@@ -2839,6 +2840,104 @@ public class MarketTests {
                     BranchDiff.ordersOnlyAfter(log, 1, ALICE).size(), 4);
         }
 
+        section("X3: what a reset destroys that nothing can give back");
+        {
+            // Items deposited after the split are the only loss a reset causes outside
+            // the ledger: they left a Minecraft inventory, and the branch recording them
+            // is about to be deleted. Balances from before come back with the shared
+            // history; orders come back as a checklist; these are simply gone.
+            //
+            // The whole risk here is over-refunding, because this ends in items
+            // appearing in a world. Every case below is a way that could happen.
+            Path p = scratch("test-branchdiff-x3.jsonl");
+            Files.deleteIfExists(p);
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(p);
+            MarketBootstrap.createMarket(log, ALICE, "refund market", keys);
+            UUID marketId = log.marketId();
+
+            // Before the split: 100 iron. The host's copy has these too.
+            long split = depositAt(log, keys, ALICE, marketId, IRON, 100);
+
+            // After it: 40 more iron, 10 diamond, and 7 wood that get withdrawn again.
+            depositAt(log, keys, ALICE, marketId, IRON, 40);
+            depositAt(log, keys, ALICE, marketId, DIAMOND, 10);
+            depositAt(log, keys, ALICE, marketId, WOOD, 7);
+            withdrawAt(log, keys, ALICE, marketId, WOOD, 7);
+
+            Map<String, Long> owed = BranchDiff.depositsOnlyAfter(log, split, ALICE);
+
+            check("only what went in after the split", owed.getOrDefault(IRON, 0L), 40L);
+            check("counted per item", owed.getOrDefault(DIAMOND, 0L), 10L);
+            // Already back in the inventory. Refunding again is the plainest duplication
+            // this could produce.
+            check("nothing for what was withdrawn again",
+                    owed.containsKey(WOOD) ? 1 : 0, 0);
+
+            // The 100 from before the split must never appear here — the market still
+            // says they are Alice's and hands them back on reconnecting.
+            check("the pre-split balance is not refunded",
+                    owed.getOrDefault(IRON, 0L) < 100 ? 1 : 0, 1);
+
+            check("and none of it is anybody else's",
+                    BranchDiff.depositsOnlyAfter(log, split, BOB).size(), 0);
+
+            // A branch that never diverged owes nothing.
+            check("no divergence, nothing owed",
+                    BranchDiff.depositsOnlyAfter(log, log.lastSeq(), ALICE).size(), 0);
+        }
+
+        section("X3b: sold and reserved goods, which are the two ways to over-refund");
+        {
+            Path p = scratch("test-branchdiff-x3b.jsonl");
+            Files.deleteIfExists(p);
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(p);
+            MarketBootstrap.createMarket(log, ALICE, "refund edges", keys);
+            UUID marketId = log.marketId();
+            long split = log.lastSeq();
+
+            register(log, EventApplier.replay(log), BOB);   // so Bob may author events
+
+            // Alice deposits 50 iron after the split and rests a sell for 20 of them.
+            depositAt(log, keys, ALICE, marketId, IRON, 50);
+            Event.PlaceOrder ask = placeOrder(ALICE, IRON, 5, 20, false);
+            ask.marketId = marketId;
+            ask.timestamp = 9L;
+            log.append(ask, keys.sign(EventCanonical.canonicalPayload(ask)));
+
+            // Reserved goods are still hers — the ledger shows 30 free, but she put 50
+            // in and 50 is what a reset costs her.
+            check("goods reserved in a resting sell still count",
+                    BranchDiff.depositsOnlyAfter(log, split, ALICE)
+                            .getOrDefault(IRON, 0L), 50L);
+
+            // Bob buys the 20. Alice now holds credits for them, and the buyer holds the
+            // goods — refunding her would create iron that exists twice.
+            grant(log, EventApplier.replay(log), BOB, 1000);
+            Event.PlaceOrder bid = placeOrder(BOB, IRON, 5, 20, true);
+            bid.marketId = marketId;
+            bid.timestamp = 10L;
+            log.append(bid, keys.sign(EventCanonical.canonicalPayload(bid)));
+
+            MarketState after = EventApplier.replay(log);
+            check("the trade happened", after.fillsEver(), 1);
+            check("and the buyer holds the goods",
+                    after.itemBalances().getBalance(BOB, IRON), 20L);
+
+            check("what she sold is not refunded to her",
+                    BranchDiff.depositsOnlyAfter(log, split, ALICE)
+                            .getOrDefault(IRON, 0L), 30L);
+
+            // Bob deposited nothing, so his 20 are not his to be given back either —
+            // they came from Alice through a fill, not from his inventory.
+            check("and the buyer is owed nothing for them",
+                    BranchDiff.depositsOnlyAfter(log, split, BOB)
+                            .getOrDefault(IRON, 0L), 0L);
+        }
+
         section("W3: deposits are weighed against the player's own statistics");
         {
             // The one figure here the player did not write. Minecraft counts mined,
@@ -3491,6 +3590,26 @@ public class MarketTests {
         se.seq = seq;
         se.event = e;
         return EventApplier.apply(state, se);
+    }
+
+    /** Appends a signed deposit and returns the seq it landed at. */
+    private static long depositAt(EventLog log, PlayerKeys keys, UUID user, UUID marketId,
+                                  String item, long qty) throws Exception {
+        Event.Deposit d = new Event.Deposit();
+        d.userId = user; d.marketId = marketId; d.itemId = item; d.quantity = qty;
+        d.clientEventId = UUID.randomUUID().toString();
+        d.timestamp = System.currentTimeMillis();
+        return log.append(d, keys.sign(EventCanonical.canonicalPayload(d))).seq;
+    }
+
+    /** The same for a withdrawal — the half that stops a refund being paid twice. */
+    private static long withdrawAt(EventLog log, PlayerKeys keys, UUID user, UUID marketId,
+                                   String item, long qty) throws Exception {
+        Event.Withdraw w = new Event.Withdraw();
+        w.userId = user; w.marketId = marketId; w.itemId = item; w.quantity = qty;
+        w.clientEventId = UUID.randomUUID().toString();
+        w.timestamp = System.currentTimeMillis();
+        return log.append(w, keys.sign(EventCanonical.canonicalPayload(w))).seq;
     }
 
     private static Event.Deposit deposit(UUID user, String item, long qty) {
