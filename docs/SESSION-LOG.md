@@ -25,14 +25,14 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 ## 0. The read-through, and what it found
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
-built here: the whole of it was an inspection, and it found twelve defects in code that
+built here: the whole of it was an inspection, and it found thirteen defects in code that
 had 437 passing checks behind it — one of them a whole feature that could not be switched
 on, and one an unbounded mint that the guard written to stop it never fired against.
 Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`487 / 6 / 5 / 16 / 16 / 6 / 12 / 11`, the last being a new `hostTrustTest`, and each
+`487 / 6 / 5 / 16 / 16 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -160,6 +160,36 @@ one with a small one:
     produces identical arithmetic to a deliberate one, which is exactly why it needed a
     setting rather than a rule.
 
+And a thirteenth, which is the one that justifies §0.8 on its own — **found by §0.8
+firing** on an ordinary self-connect, three minutes into the first real play session:
+
+13. **A client could hold state one event ahead of where it believed it was**, and so
+    apply that event twice. `EventLog` caches `lastSeq` when it is constructed;
+    `readFrom` re-reads the file on every call. `MarketClient` took its position from the
+    first and its state from the second, and anything appending between them separated
+    the two. Starting a host does exactly that — it counts down its `bound` latch
+    *before* issuing its opening welcome grants, and the self-connect that follows opens
+    a second `EventLog` on the very file those grants are landing in. The client then
+    told the host "I have 4", was sent event 5 which it already held, and **applied its
+    own welcome grant twice**: a replica a thousand credits richer than the host it
+    mirrors, for the rest of the session.
+
+    Silent until §0.8 made the client check what it was being sent. It surfaced as
+    `[client] REFUSING event 5 from host: breaks this market's rules — already granted in
+    this market`, which reads exactly like a false refusal and was not one.
+
+    `MarketClient` now takes state, position and hash from one read
+    (`EventApplier.replayWithHead`), and the handshake reports what it has applied rather
+    than what the log object thinks. `H3` reproduces the race with two log handles and no
+    threads at all, so it fails every run without the fix rather than one run in ten.
+
+    **The general point, which is worth more than the bug.** A validation you add to
+    catch dishonesty finds your own bugs first, because your own bugs are far more
+    common than attackers. §0.8 was justified on a threat nobody here faces; it paid for
+    itself within minutes on a defect that was corrupting an ordinary single-player
+    session. Two things that must agree, kept in two places — §4 again, in the constructor
+    of the class the previous fix was written into.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -176,7 +206,7 @@ session went on what running it turned up, then on one new feature.
 
 ```
 coreTests 487   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
-admissionTest 16   depositCapTest 6   attestationTest 12   hostTrustTest 11
+admissionTest 16   depositCapTest 6   attestationTest 12   hostTrustTest 16
 ```
 
 *(437 across seven suites when this section was written; the extra 23 checks and the

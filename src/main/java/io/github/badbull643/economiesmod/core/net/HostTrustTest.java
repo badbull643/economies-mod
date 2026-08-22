@@ -71,6 +71,7 @@ public class HostTrustTest {
 
         mintingHostIsRefused(dir, hostKeys, joinerKeys);
         honestHostStillSyncs(dir, hostKeys, joinerKeys);
+        clientKnowsWhereItsOwnStateEnds(dir, hostKeys, joinerKeys);
 
         System.out.println();
         if (failures == 0) {
@@ -259,6 +260,69 @@ public class HostTrustTest {
         } finally {
             host.stop();
         }
+    }
+
+    /**
+     * H3: a client's position must match the state it replayed, not the log's cache.
+     *
+     * Found by H1's fix firing on an ordinary self-connect, refusing a welcome grant
+     * with "already granted in this market". It was right to: the client was holding
+     * state through seq 5 while believing it was at seq 4, so the host re-sent event 5
+     * and the client applied the same grant to itself a second time. Silent before the
+     * client validated anything, and worth more than the check that caught it — a
+     * replica a thousand credits richer than the host it mirrors is the exact failure
+     * this architecture exists to prevent.
+     *
+     * The cause is two readings of one log. EventLog caches lastSeq when constructed;
+     * readFrom re-reads the file every call. MarketClient took its position from the
+     * first and its state from the second, and anything appending in between separated
+     * them. Starting a host does exactly that: it signals "bound" before it issues its
+     * opening grants, and the self-connect opens a second EventLog on the same file
+     * while those grants are being written.
+     *
+     * No threads here. The race needs only a stale EventLog handle, which is trivial to
+     * produce on purpose, so this reproduces the exact condition every run.
+     */
+    private static void clientKnowsWhereItsOwnStateEnds(Path dir, PlayerKeys hostKeys,
+                                                        PlayerKeys joinerKeys)
+            throws Exception {
+        System.out.println("  [H3: a client's position matches the state it replayed]");
+
+        Path logFile = dir.resolve("trust-stale.jsonl");
+        Files.deleteIfExists(logFile);
+
+        EventLog writer = new EventLog(logFile);
+        MarketBootstrap.createMarket(writer, HOST, "stale market", hostKeys);
+        long before = writer.lastSeq();
+
+        // A second handle, opened while the file is at `before` — this is the
+        // self-connect opening the world's log a moment before the host appends to it.
+        EventLog stale = new EventLog(logFile);
+        check("the second handle agrees, for now", stale.lastSeq(), before);
+
+        // Now the host writes its opening welcome grant, exactly as start() does after
+        // it has already signalled that it is bound.
+        Event.WelcomeGrant wg = new Event.WelcomeGrant();
+        wg.userId = HOST;
+        wg.marketId = writer.marketId();
+        wg.targetUserId = HOST;
+        wg.amount = ServerConfig.DEFAULT_WELCOME_GRANT;
+        wg.clientEventId = UUID.randomUUID().toString();
+        wg.timestamp = System.currentTimeMillis();
+        writer.append(wg, hostKeys.sign(EventCanonical.canonicalPayload(wg)));
+
+        check("the file has moved on", countLines(logFile), before + 1);
+        check("but the stale handle has not noticed", stale.lastSeq(), before);
+
+        // The client is built from the stale handle, which is the whole scenario.
+        MarketClient client = new MarketClient(JOINER, "Joiner", joinerKeys,
+                stale, false, new PeerCache(dir.resolve("trust-joiner-peers.json")), 0);
+
+        check("its state includes the grant it replayed",
+                client.state().wallets().getBalance(HOST),
+                ServerConfig.DEFAULT_WELCOME_GRANT);
+        // The assertion the bug was: this said `before`, one behind the state above.
+        check("and its position says so too", client.lastSeq(), before + 1);
     }
 
     private static long countLines(Path p) throws IOException {
