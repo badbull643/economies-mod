@@ -9,6 +9,7 @@ import java.net.Socket;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -302,6 +303,123 @@ public class MarketClient {
      * so there is no session to do this inside. On success the caller should reset and
      * connect normally; nothing about the local log is touched here.
      */
+    /**
+     * The last sequence number at which our chain and a host's still agree.
+     *
+     * The thing the protocol could not say. A FORK refusal compares one hash at one
+     * point and reports a disagreement; where the two branches actually parted is
+     * somewhere at or below that, and no message carried a hash from below it. So every
+     * answer a fork could offer afterwards — which orders were only ever yours, what a
+     * reset would destroy, how much you did since you parted — had nothing to stand on,
+     * and {@code ordersOnlyAfter} was handed our own head and correctly found nothing.
+     *
+     * Returns the agreed seq, or -1 if we could not find out. **0 is a real answer**: it
+     * means the two chains share nothing but the empty prefix, which for two markets
+     * with the same id means one of them was rebuilt from scratch.
+     *
+     * <h2>How it searches</h2>
+     *
+     * Bracketing rather than one probe per round trip. Answering costs the host a pass
+     * over its log, so asking for one hash at a time would read the whole file once per
+     * step; instead each round asks for a spread of points inside the bracket that still
+     * contains the split, and narrows to the gap between the last agreeing probe and the
+     * first disagreeing one. With {@value #SPLIT_PROBES_PER_ROUND} probes a round the
+     * bracket shrinks by that factor each time, so three rounds covers a log far longer
+     * than anybody has.
+     *
+     * Seq 0 is the floor and needs no probe: the empty prefix agrees by definition, and
+     * that is what lets the search start without trusting anything.
+     */
+    private static final int SPLIT_PROBES_PER_ROUND = 24;
+    private static final int SPLIT_MAX_ROUNDS = 8;
+
+    public static long findSplitPoint(String host, int port, EventLog ours)
+            throws IOException {
+        long ourHead = ours.lastSeq();
+        if (ourHead <= 0) return 0;
+
+        Socket socket = new Socket(host, port);
+        socket.setSoTimeout(15_000);
+        try (MessageChannel ch = new MessageChannel(socket)) {
+            // agreed is the highest seq we have confirmed identical; disputed the lowest
+            // we have confirmed different. The answer is agreed once they are adjacent.
+            long agreed = 0;
+            long disputed = -1;
+
+            for (int round = 0; round < SPLIT_MAX_ROUNDS; round++) {
+                long upper = disputed > 0 ? disputed - 1 : ourHead;
+                if (upper <= agreed) break;
+
+                List<Long> probes = spread(agreed, upper, SPLIT_PROBES_PER_ROUND);
+                if (probes.isEmpty()) break;
+
+                Message.HashQuery q = new Message.HashQuery();
+                q.seqs = probes;
+                ch.send(q);
+
+                Message reply = ch.receive();
+                if (!(reply instanceof Message.HashReply)) return -1;
+                Message.HashReply hr = (Message.HashReply) reply;
+                if (hr.seqs == null || hr.hashes == null) return -1;
+
+                // Never probe above the host's own head again — beyond it there is
+                // nothing to disagree with, only nothing at all.
+                if (hr.lastSeq > 0 && hr.lastSeq < upper) upper = hr.lastSeq;
+
+                Map<Long, String> mine = ours.hashesAt(probes);
+                boolean learned = false;
+
+                for (int i = 0; i < hr.seqs.size() && i < hr.hashes.size(); i++) {
+                    long seq = hr.seqs.get(i);
+                    if (seq <= agreed || (disputed > 0 && seq >= disputed)) continue;
+                    String theirs = hr.hashes.get(i);
+                    String our = mine.get(seq);
+                    if (our == null || theirs == null) continue;
+
+                    learned = true;
+                    if (our.equals(theirs)) {
+                        if (seq > agreed) agreed = seq;
+                    } else if (disputed < 0 || seq < disputed) {
+                        disputed = seq;
+                    }
+                }
+
+                // Nothing usable came back — a host that has none of these, or one
+                // answering something we cannot line up. Stop rather than spin.
+                if (!learned) break;
+                if (disputed > 0 && disputed == agreed + 1) return agreed;
+            }
+
+            // Ran out of rounds with the bracket still open. agreed is still true — it
+            // is a point we checked and matched — so it is a floor rather than the
+            // answer, and reporting it beats reporting nothing.
+            return agreed;
+        }
+    }
+
+    /**
+     * Up to {@code count} sequence numbers spread through (lo, hi].
+     *
+     * hi is always included, because the most common shape by far is a client that
+     * simply extends a host or trails it — where the disagreement, if any, is at the top
+     * and one probe settles it.
+     */
+    static List<Long> spread(long lo, long hi, int count) {
+        List<Long> out = new ArrayList<>();
+        if (hi <= lo || count < 1) return out;
+
+        long span = hi - lo;
+        if (span <= count) {
+            for (long s = lo + 1; s <= hi; s++) out.add(s);
+            return out;
+        }
+        for (int i = 1; i <= count; i++) {
+            long at = lo + (span * i) / count;
+            if (at > lo && (out.isEmpty() || at != out.get(out.size() - 1))) out.add(at);
+        }
+        return out;
+    }
+
     public static Message.MigrateResult requestMigration(String host, int port,
                                                          UUID userId, List<String> logLines,
                                                          WorldAttestation attestation)

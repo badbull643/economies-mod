@@ -33,7 +33,7 @@ Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`520 / 6 / 5 / 16 / 25 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
+`520 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`, the last being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -309,6 +309,7 @@ session went on what running it turned up, then on one new feature.
 ```
 coreTests 520   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 25   depositCapTest 6   attestationTest 12   hostTrustTest 16
+splitPointTest 22
 ```
 
 *(437 across seven suites when this section was written; the extra 23 checks and the

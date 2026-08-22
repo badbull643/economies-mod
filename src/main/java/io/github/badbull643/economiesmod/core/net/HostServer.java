@@ -515,6 +515,7 @@ public class HostServer {
 
             if (first instanceof Message.Query
                     || first instanceof Message.MigrateRequest
+                    || first instanceof Message.HashQuery
                     || first instanceof Message.CatchUp) {
                 if (!preAuthLimiter.allow()) {
                     sendError(channel, "rate limited");
@@ -546,6 +547,11 @@ public class HostServer {
                 }
                 channel.send(reply);
                 return;   // probe done, close the connection
+            }
+
+            if (first instanceof Message.HashQuery) {
+                handleHashQuery(channel, (Message.HashQuery) first);
+                return;   // one-shot, like a probe
             }
 
             if (first instanceof Message.MigrateRequest) {
@@ -899,6 +905,79 @@ public class HostServer {
      * — but the resulting write is queued, so the log still only ever has one writer.
      * The claim is recomputed from the verified branch, never taken from the request.
      */
+    /**
+     * Answers what this host's chain hashes to at a batch of sequence numbers.
+     *
+     * Read-only and pre-handshake. It exists so a client that has been told it forked
+     * can find out *where*, which nothing in the protocol could say before: the FORK
+     * refusal compares one hash at one point and the split is somewhere at or below it.
+     *
+     * Bounded, and the bound is the point. An unbounded batch would let anyone ask this
+     * host to hold its whole chain in memory and echo it back — so the cap is generous
+     * next to what a search needs (a few dozen probes total) and far under anything
+     * worth using as an amplifier.
+     */
+    private static final int MAX_HASH_PROBES = 64;
+
+    /**
+     * Rounds one connection may ask for before it is shown the door.
+     *
+     * The search is a conversation, not a one-shot: each round narrows the bracket using
+     * what the last one returned, so the asker has to come back. Serving one query per
+     * connection would mean a fresh socket and a fresh handshake per step of a binary
+     * search, which is worse for everyone.
+     *
+     * Bounded anyway, because "keep asking" is otherwise a way to hold a connection open
+     * for free. Generous next to what a search needs — it converges in three rounds on
+     * any log anybody has — and the socket timeout closes an idle one regardless.
+     */
+    private static final int MAX_HASH_ROUNDS = 12;
+
+    private void handleHashQuery(MessageChannel channel, Message.HashQuery first) {
+        Message.HashQuery q = first;
+        for (int round = 0; round < MAX_HASH_ROUNDS; round++) {
+            answerHashQuery(channel, q);
+            Message next;
+            try {
+                next = channel.receive();
+            } catch (Exception e) {
+                return;         // asker hung up, which is the ordinary ending
+            }
+            if (!(next instanceof Message.HashQuery)) return;
+            q = (Message.HashQuery) next;
+        }
+    }
+
+    private void answerHashQuery(MessageChannel channel, Message.HashQuery q) {
+        Message.HashReply reply = new Message.HashReply();
+        reply.seqs = new ArrayList<>();
+        reply.hashes = new ArrayList<>();
+        reply.lastSeq = log.lastSeq();
+
+        if (q.seqs == null || q.seqs.isEmpty()) {
+            channel.send(reply);
+            return;
+        }
+
+        List<Long> asked = q.seqs.size() > MAX_HASH_PROBES
+                ? q.seqs.subList(0, MAX_HASH_PROBES) : q.seqs;
+        try {
+            // One pass for the whole batch. hashAt would re-read the log per probe,
+            // which is the difference between a search costing one read and costing one
+            // read per step — see EventLog.hashesAt.
+            Map<Long, String> found = log.hashesAt(asked);
+            for (Long seq : asked) {
+                String hash = found.get(seq);
+                if (hash == null) continue;      // we simply do not have that one
+                reply.seqs.add(seq);
+                reply.hashes.add(hash);
+            }
+        } catch (IOException e) {
+            System.err.println("[host] could not read hashes: " + e.getMessage());
+        }
+        channel.send(reply);
+    }
+
     private void handleMigrate(MessageChannel channel, Message.MigrateRequest first) {
         Message.MigrateResult reply = new Message.MigrateResult();
         try {

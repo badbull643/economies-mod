@@ -11,9 +11,12 @@ items whose code moved afterwards and want a short re-check.*
 *A5 is the exception on this page and is un-marked below: it passed once against a build
 where its last step was the recipe for an item-duplication bug.*
 
-Run `./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest
-depositCapTest attestationTest hostTrustTest` first — if any of those fail, stop, because everything
-below assumes they pass.
+Run this first — if any of it fails, stop, because everything below assumes it passes:
+
+```
+./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
+    depositCapTest attestationTest hostTrustTest splitPointTest
+```
 
 ## Already confirmed — do not spend time here
 
