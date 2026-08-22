@@ -117,8 +117,10 @@ only if a real market is seen pressing against the floor.
 
 ## Not on this list
 
-**Anything Group E covers.** That is untested rather than unbuilt — see
-[`testing/group-e.md`](testing/group-e.md), which is the thing to do before any of this.
+**Anything Group E covers.** Built, and now tested — see
+[`testing/group-e.md`](testing/group-e.md), done 2026-08-22. It was "the thing to do
+before any of this", and it has been done, so this list is now the next thing rather than
+the thing after the next thing.
 
 **A true fork merge**, **a host-asserted checkpoint**, and **a quorum checkpoint.** All
 three are refused with reasons in the design notes above, and refused is a different
