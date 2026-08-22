@@ -296,8 +296,19 @@ grant finally has a control — see §7.
 ## 6. Known gaps
 
 - **Group E is untested.** See §2.
+- **Everything deliberately unbuilt now lives in `docs/BACKLOG.md`**, in the order it is
+  worth doing, with what it costs to keep not doing it. Added because the roadmap is
+  finished, so nothing else says "this is known about and not done" — and without such a
+  file an unbuilt thing cannot be told apart from an overlooked one. §0.10 was exactly
+  that failure in miniature: a feature nobody had noticed was switched off.
 - **Log compaction unbuilt**, deliberately. `docs/design/log-compaction.md` has the full
   pass; its recommendation is build option A only, when it is worth a session of its own.
+  Backlog item 2.
+- **A forked market cannot be recovered from**, only reset away from — and a reset
+  destroys items that have already left somebody's Minecraft inventory. This is the case
+  a friend group hits by splitting into two play groups and both continuing: same market
+  id, so migration is refused, and no merge exists. `docs/design/fork-rebase.md` is the
+  pass; backlog item 1, and split-point discovery is the small piece to do first.
 - **`.gitignore` is gone**, removed deliberately, so `build/`, `run/` and
   `server-identity.key` are tracked. That last is an unencrypted private key. Raised, and
   the decision reaffirmed — recorded here because it is not obvious from the tree.
@@ -336,24 +347,18 @@ grant finally has a control — see §7.
 
 ## 8. Open decisions
 
-- **Whether `MAX_WELCOME_GRANT` should be 1,000,000.** Raised while fixing §0.11 and
-  §0.12 and deliberately left alone, because both of those were repairs and this is a
-  balance change. It is four orders of magnitude above what items actually trade for,
-  and it is the number every migration problem is denominated in: the ceiling is what a
-  market can hand somebody to carry elsewhere. Lowering it to, say, 10,000 would bound
-  the whole family at once without adding a rule anywhere. Against: it silently breaks
-  any existing market that set a grant above the new ceiling, since `validate` would then
-  refuse its own recorded policy — that needs thought before anyone touches it.
+*Judgements with nothing to build behind them. Anything that is "a thing to build when it
+is worth a session" is in `docs/BACKLOG.md` instead, and is not repeated here — two lists
+of the same items is §4 again, in prose.*
+
 - Whether the stipend's interval of 50 is right. It is a guess, and nothing has watched a
   real session. Fills only accrue while somebody is hosting and connected — there is no
   offline trading — so a small group produces them slowly.
-- Sub-unit prices: denominate in hundredths as integers, never floats (Java 8 without
-  `strictfp` is not reproducible across platforms, which would fork replicas). Gives
-  roughly 100× headroom before the price floor bites. Treats the symptom rather than the
-  cause, which the stipend now covers, so no longer urgent.
-- Whether `MarketScreen` gets split. 3,900 lines, and three of this session's UI bugs
-  lived in it. Split by component, never by layer — separating render from hit-test is
-  the §4 defect waiting to happen.
+- Whether the welcome-grant ceiling should come down. Backlog item 3 has the argument;
+  the decision is the blocker, not the code, because lowering it can make an existing
+  market's own recorded policy invalid on replay.
+- Whether `MarketScreen` gets split — backlog item 5 — and whether sub-unit prices are
+  ever worth it — backlog item 6.
 
 ## 9. Loose ends in the tree
 
