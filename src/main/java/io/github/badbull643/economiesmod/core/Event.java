@@ -104,6 +104,45 @@ public abstract class Event {
          * healthy market wants people doing.
          */
         public long listingFee;
+
+        /**
+         * How many orders an identity may hold open before the listing fee climbs.
+         *
+         * The fee it modifies is what makes producing market activity cost something,
+         * which is the only reason paying a stipend per fill is not a mint. Zero means
+         * every order pays the base fee, which is safe; a large allowance paired with a
+         * generous stipend is not, and validate refuses that pairing.
+         */
+        public int listingFreeOrders;
+
+        /**
+         * Credits an identity may claim once per stipendEveryFills fills. Zero disables.
+         *
+         * The welcome grant solves a cold start and pays once. This solves supply. The
+         * grant is otherwise the only source of credits, so money enters only when new
+         * people do, while goods accrue for every hour anybody plays — and item prices
+         * fall until they reach the integer floor of 1, where the price signal dies.
+         *
+         * Keyed to fills so supply tracks trade rather than noise, and because a fill is
+         * the one thing that cannot be produced for free.
+         */
+        public long stipendAmount;
+
+        /** Fills between claims. Ignored when stipendAmount is zero. */
+        public long stipendEveryFills;
+    }
+
+    /**
+     * One identity claiming the market's stipend.
+     *
+     * Self-authored, unlike WelcomeGrant. A grant is issued to somebody arriving, so it
+     * has to be written by whoever is already here; a stipend is claimed by somebody who
+     * already holds a key in this market and can sign for themselves. That removes the
+     * question of who was sequencing, which is the same problem the grant amount had to
+     * be moved into policy to escape.
+     */
+    public static class Stipend extends Event {
+        public long amount;
     }
 
     /**

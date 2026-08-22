@@ -2,7 +2,7 @@
   "port": 25555,
   "maxConnections": 64,
   "outboundQueueDepth": 256,
-  "maxDepositUnitsPerWindow": 1000000,
+  "maxDepositUnitsPerWindow": 0,
   "depositWindowMinutes": 60,
   "requireAttestation": true,
   "refuseCreativeWorlds": false,

@@ -9,6 +9,7 @@ import java.net.Socket;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -57,9 +58,18 @@ public class MarketClient {
         this.persist = persist;
         this.peerCache = peerCache;
         this.myHostPort = myHostPort;
-        this.appliedSeq = log.lastSeq();
-        this.lastHash = log.lastHash();
-        this.state = EventApplier.replay(log);
+        // All three from one read of the log, not from the log's cached idea of where it
+        // ends plus a separate replay of the file. Those two can disagree, and on the
+        // path that matters most they routinely did: starting a host signals "bound"
+        // before it writes its opening welcome grants, and the self-connect that follows
+        // opens a second EventLog on the file those grants are landing in. lastSeq was
+        // captured before the grant, the replay picked it up, and this client believed
+        // it was one event behind state it already held — so the host re-sent that
+        // event, and the grant was applied to this replica twice.
+        EventApplier.Replayed replayed = EventApplier.replayWithHead(log);
+        this.state = replayed.state;
+        this.appliedSeq = replayed.headSeq;
+        this.lastHash = replayed.headHash;
     }
     /**
      * A host declining the handshake, carrying the reason in a form the UI can act on.
@@ -67,15 +77,25 @@ public class MarketClient {
      */
     public static class Refused extends IOException {
         public final String code;   // one of HostServer.Refusal, or null
-        /** Only meaningful for AHEAD — where the refusing host's own log ends. */
+        /** Where the refusing host's own log ends. Sent with AHEAD, so the client can
+         *  tell "I extend you" from "we diverged", and with FORK, so a reset knows the
+         *  point to compute its re-place checklist against. Zero/null otherwise. */
         public final long hostSeq;
         public final String hostHash;
+        /** The refusing host's name, when it sent one. */
+        public final String hostName;
 
         public Refused(String code, String reason, long hostSeq, String hostHash) {
+            this(code, reason, hostSeq, hostHash, null);
+        }
+
+        public Refused(String code, String reason, long hostSeq, String hostHash,
+                       String hostName) {
             super(reason == null ? "connection refused" : reason);
             this.code = code;
             this.hostSeq = hostSeq;
             this.hostHash = hostHash;
+            this.hostName = hostName;
         }
     }
 
@@ -162,8 +182,12 @@ public class MarketClient {
         Message.Hello hello = new Message.Hello();
         hello.userId = userId.toString();
         hello.publicKey = keys.publicKeyString();
-        hello.lastSeq = log.lastSeq();
-        hello.lastHash = log.lastHash();
+        // What we have actually applied, not where the log object thinks the file ends.
+        // The host decides what to send us from this, so a figure behind our real state
+        // asks for events we already hold — which is how the same welcome grant got
+        // applied to this replica twice. Same two numbers, same one source.
+        hello.lastSeq = appliedSeq;
+        hello.lastHash = lastHash;
         hello.hostPort = myHostPort;
         hello.displayName = displayName;
         hello.protocolVersion = HostServer.PROTOCOL_VERSION;
@@ -181,7 +205,8 @@ public class MarketClient {
         if (reply instanceof Message.Error) {
             Message.Error err = (Message.Error) reply;
             channel.close();
-            throw new Refused(err.code, err.reason, err.hostSeq, err.hostHash);
+            throw new Refused(err.code, err.reason, err.hostSeq, err.hostHash,
+                    err.hostName);
         }
         if (!(reply instanceof Message.Sync)) {
             channel.close();
@@ -278,8 +303,126 @@ public class MarketClient {
      * so there is no session to do this inside. On success the caller should reset and
      * connect normally; nothing about the local log is touched here.
      */
+    /**
+     * The last sequence number at which our chain and a host's still agree.
+     *
+     * The thing the protocol could not say. A FORK refusal compares one hash at one
+     * point and reports a disagreement; where the two branches actually parted is
+     * somewhere at or below that, and no message carried a hash from below it. So every
+     * answer a fork could offer afterwards — which orders were only ever yours, what a
+     * reset would destroy, how much you did since you parted — had nothing to stand on,
+     * and {@code ordersOnlyAfter} was handed our own head and correctly found nothing.
+     *
+     * Returns the agreed seq, or -1 if we could not find out. **0 is a real answer**: it
+     * means the two chains share nothing but the empty prefix, which for two markets
+     * with the same id means one of them was rebuilt from scratch.
+     *
+     * <h2>How it searches</h2>
+     *
+     * Bracketing rather than one probe per round trip. Answering costs the host a pass
+     * over its log, so asking for one hash at a time would read the whole file once per
+     * step; instead each round asks for a spread of points inside the bracket that still
+     * contains the split, and narrows to the gap between the last agreeing probe and the
+     * first disagreeing one. With {@value #SPLIT_PROBES_PER_ROUND} probes a round the
+     * bracket shrinks by that factor each time, so three rounds covers a log far longer
+     * than anybody has.
+     *
+     * Seq 0 is the floor and needs no probe: the empty prefix agrees by definition, and
+     * that is what lets the search start without trusting anything.
+     */
+    private static final int SPLIT_PROBES_PER_ROUND = 24;
+    private static final int SPLIT_MAX_ROUNDS = 8;
+
+    public static long findSplitPoint(String host, int port, EventLog ours)
+            throws IOException {
+        long ourHead = ours.lastSeq();
+        if (ourHead <= 0) return 0;
+
+        Socket socket = new Socket(host, port);
+        socket.setSoTimeout(15_000);
+        try (MessageChannel ch = new MessageChannel(socket)) {
+            // agreed is the highest seq we have confirmed identical; disputed the lowest
+            // we have confirmed different. The answer is agreed once they are adjacent.
+            long agreed = 0;
+            long disputed = -1;
+
+            for (int round = 0; round < SPLIT_MAX_ROUNDS; round++) {
+                long upper = disputed > 0 ? disputed - 1 : ourHead;
+                if (upper <= agreed) break;
+
+                List<Long> probes = spread(agreed, upper, SPLIT_PROBES_PER_ROUND);
+                if (probes.isEmpty()) break;
+
+                Message.HashQuery q = new Message.HashQuery();
+                q.seqs = probes;
+                ch.send(q);
+
+                Message reply = ch.receive();
+                if (!(reply instanceof Message.HashReply)) return -1;
+                Message.HashReply hr = (Message.HashReply) reply;
+                if (hr.seqs == null || hr.hashes == null) return -1;
+
+                // Never probe above the host's own head again — beyond it there is
+                // nothing to disagree with, only nothing at all.
+                if (hr.lastSeq > 0 && hr.lastSeq < upper) upper = hr.lastSeq;
+
+                Map<Long, String> mine = ours.hashesAt(probes);
+                boolean learned = false;
+
+                for (int i = 0; i < hr.seqs.size() && i < hr.hashes.size(); i++) {
+                    long seq = hr.seqs.get(i);
+                    if (seq <= agreed || (disputed > 0 && seq >= disputed)) continue;
+                    String theirs = hr.hashes.get(i);
+                    String our = mine.get(seq);
+                    if (our == null || theirs == null) continue;
+
+                    learned = true;
+                    if (our.equals(theirs)) {
+                        if (seq > agreed) agreed = seq;
+                    } else if (disputed < 0 || seq < disputed) {
+                        disputed = seq;
+                    }
+                }
+
+                // Nothing usable came back — a host that has none of these, or one
+                // answering something we cannot line up. Stop rather than spin.
+                if (!learned) break;
+                if (disputed > 0 && disputed == agreed + 1) return agreed;
+            }
+
+            // Ran out of rounds with the bracket still open. agreed is still true — it
+            // is a point we checked and matched — so it is a floor rather than the
+            // answer, and reporting it beats reporting nothing.
+            return agreed;
+        }
+    }
+
+    /**
+     * Up to {@code count} sequence numbers spread through (lo, hi].
+     *
+     * hi is always included, because the most common shape by far is a client that
+     * simply extends a host or trails it — where the disagreement, if any, is at the top
+     * and one probe settles it.
+     */
+    static List<Long> spread(long lo, long hi, int count) {
+        List<Long> out = new ArrayList<>();
+        if (hi <= lo || count < 1) return out;
+
+        long span = hi - lo;
+        if (span <= count) {
+            for (long s = lo + 1; s <= hi; s++) out.add(s);
+            return out;
+        }
+        for (int i = 1; i <= count; i++) {
+            long at = lo + (span * i) / count;
+            if (at > lo && (out.isEmpty() || at != out.get(out.size() - 1))) out.add(at);
+        }
+        return out;
+    }
+
     public static Message.MigrateResult requestMigration(String host, int port,
-                                                         UUID userId, List<String> logLines)
+                                                         UUID userId, List<String> logLines,
+                                                         WorldAttestation attestation)
             throws IOException {
         Socket socket = new Socket(host, port);
         socket.setSoTimeout(30_000);   // verifying a whole branch is not instant
@@ -296,6 +439,9 @@ public class MarketClient {
                 req.userId = userId.toString();
                 req.logLines = chunks.get(i);
                 req.complete = (i == chunks.size() - 1);
+                // First chunk only, like Sync: the host reads it off the message that
+                // opened the exchange and the rest are just more history.
+                if (i == 0) req.attestation = attestation;
                 ch.send(req);
             }
 
@@ -505,6 +651,35 @@ public class MarketClient {
             System.err.println("[client] REFUSING event " + se.seq + " from host: " + problem);
             onRejected.accept("host sent an event that failed verification ("
                     + problem + ") — disconnected");
+            return false;
+        }
+
+        // And the market's own rules, which the signature says nothing about.
+        //
+        // A signature proves who wrote an event, not that the event was allowed. The
+        // money rules — a grant must be this market's published figure, once per
+        // identity; a stipend must be the market's and its interval must have elapsed;
+        // policy is the creator's alone — all live in validate, because that is where a
+        // host asks them before it appends. This ran apply and nothing else, so a
+        // modified host could sequence a grant to itself for any sum, correctly signed
+        // with its own key, and every connected replica would apply it, persist it, and
+        // re-serve it the next time that player hosted. The same hole MarketArchive had
+        // on the migration path.
+        //
+        // Safe to ask, because it is the identical question asked against the identical
+        // state: every path by which a host appends validates first, against its state
+        // at seq-1, and ours is that state if replay is deterministic — which is the
+        // premise the whole project rests on. So a refusal here means the host is lying
+        // or we have diverged, and both are reasons to stop rather than to carry on.
+        //
+        // Before persisting. An event we refuse must not reach the log, or we would
+        // re-serve the thing we just declined.
+        EventApplier.Result allowed = EventApplier.validate(state, se);
+        if (!allowed.accepted) {
+            System.err.println("[client] REFUSING event " + se.seq + " from host: breaks"
+                    + " this market's rules — " + allowed.reason);
+            onRejected.accept("host sent an event this market's own rules refuse ("
+                    + allowed.reason + ") — disconnected");
             return false;
         }
 

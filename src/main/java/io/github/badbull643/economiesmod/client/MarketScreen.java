@@ -41,6 +41,8 @@ public class MarketScreen extends Screen {
     private TextFieldWidget hostPortField;
     private TextFieldWidget marketNameField;
     private ButtonWidget hostButton;
+    private ButtonWidget disconnectButton;
+    private ButtonWidget stopHostButton;
     private ButtonWidget createButton;
     private ButtonWidget importButton;
     private ButtonWidget migrateButton;
@@ -51,6 +53,11 @@ public class MarketScreen extends Screen {
     private ButtonWidget feeButton;
     private TextFieldWidget listingFeeField;
     private ButtonWidget listingFeeButton;
+    private TextFieldWidget stipendField;
+    private ButtonWidget stipendButton;
+    private ButtonWidget claimStipendButton;
+    private TextFieldWidget grantField;
+    private ButtonWidget grantButton;
     private ButtonWidget addMarketButton;
     private ButtonWidget deleteMarketButton;
 
@@ -381,10 +388,17 @@ public class MarketScreen extends Screen {
                 new LiteralText("Host"), b -> onHost());
         onScreen(SCREEN_NETWORK, this.hostButton);
 
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 2, halfW, FIELD_HEIGHT,
-                new LiteralText("Disconnect"), b -> onDisconnect()));
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX + halfW + PAD, rowY + ROW_STEP * 2, halfW,
-                FIELD_HEIGHT, new LiteralText("Stop hosting"), b -> onStopHosting()));
+        // Both were always live, side by side, whatever mode you were in — so while
+        // hosting the obvious-looking one was Disconnect, which dropped the
+        // self-connection and left the server running. Greyed by mode now, so the pair
+        // says which of the two things you are actually doing.
+        this.disconnectButton = new ButtonWidget(rowX, rowY + ROW_STEP * 2, halfW,
+                FIELD_HEIGHT, new LiteralText("Disconnect"), b -> onDisconnect());
+        onScreen(SCREEN_NETWORK, this.disconnectButton);
+
+        this.stopHostButton = new ButtonWidget(rowX + halfW + PAD, rowY + ROW_STEP * 2, halfW,
+                FIELD_HEIGHT, new LiteralText("Stop hosting"), b -> onStopHosting());
+        onScreen(SCREEN_NETWORK, this.stopHostButton);
 
         onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 3, halfW, FIELD_HEIGHT,
                 new LiteralText("Refresh hosts"), b -> startPoll()));
@@ -425,24 +439,50 @@ public class MarketScreen extends Screen {
         // Only the market's creator can author policy, so these appear for exactly one
         // person per market — see refreshMarketActions.
         this.feeField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Trading fee"));
+                rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Trading fee"));
         this.feeField.setMaxLength(6);
-        hint(this.feeField, "fee %, e.g. 2.5");
+        hint(this.feeField, "e.g. 2.5");
         onScreen(SCREEN_MARKET, this.feeField);
 
         this.feeButton = onScreen(SCREEN_MARKET,
-                new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
-                        new LiteralText("Set trading fee"), b -> onSetFee()));
+                new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
+                        new LiteralText("Trading fee"), b -> onSetFee()));
 
         this.listingFeeField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, controlsW, FIELD_HEIGHT, new LiteralText("Listing fee"));
-        this.listingFeeField.setMaxLength(6);
-        hint(this.listingFeeField, "listing fee in credits");
+                rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Listing fee"));
+        // Long enough for "1000/1000" — the field takes a fee, optionally followed by
+        // the allowance that goes with it.
+        this.listingFeeField.setMaxLength(9);
+        hint(this.listingFeeField, "2 or 2/3");
         onScreen(SCREEN_MARKET, this.listingFeeField);
 
         this.listingFeeButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
+                        new LiteralText("Listing fee"), b -> onSetListingFee()));
+
+        this.stipendField = new TextFieldWidget(this.textRenderer,
+                rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Stipend"));
+        this.stipendField.setMaxLength(6);
+        hint(this.stipendField, "credits");
+        onScreen(SCREEN_MARKET, this.stipendField);
+
+        this.stipendButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
+                        new LiteralText("Set stipend"), b -> onSetStipend()));
+
+        this.grantField = new TextFieldWidget(this.textRenderer,
+                rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Welcome grant"));
+        this.grantField.setMaxLength(7);
+        hint(this.grantField, "credits");
+        onScreen(SCREEN_MARKET, this.grantField);
+
+        this.grantButton = onScreen(SCREEN_MARKET,
+                new ButtonWidget(rowX + halfW + PAD, rowY, halfW, FIELD_HEIGHT,
+                        new LiteralText("Welcome grant"), b -> onSetGrant()));
+
+        this.claimStipendButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
-                        new LiteralText("Set listing fee"), b -> onSetListingFee()));
+                        new LiteralText("Claim stipend"), b -> onClaimStipend()));
 
         this.addMarketButton = onScreen(SCREEN_MARKET,
                 new ButtonWidget(rowX, rowY, controlsW, FIELD_HEIGHT,
@@ -486,18 +526,72 @@ public class MarketScreen extends Screen {
         return false;
     }
 
+    /**
+     * The reset confirmation, written as three lists rather than a paragraph.
+     *
+     * It used to be one block of prose that opened with what you lose and buried the
+     * recovery in a subordinate clause — "if you are rejoining a market you diverged
+     * from" — which is a condition the reader cannot evaluate about themselves. Reported
+     * from play as reading like everything was gone, on a screen that was about to hand
+     * 61 items back.
+     *
+     * Three changes. The categories are separated, because "comes back by itself",
+     * "comes back if you do something" and "is gone" are three different decisions and
+     * were three clauses of one sentence. The numbers are real — resetCost has already
+     * worked out exactly which items and how many orders, and naming them removes the
+     * doubt that a paragraph about what generally happens cannot. And what is
+     * permanently lost is finally stated: credits earned since the split and the trades
+     * themselves have no existence outside this branch's ledger, which the old wording
+     * never said at all while listing three kinds of recovery.
+     *
+     * The no-fork case says none of it. Without a host holding the shared history there
+     * is nothing to rejoin and every sentence about recovery would be false.
+     */
     private void onReset() {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
         UUID me = MinecraftIds.userIdOf(mc.player);
 
-        showDanger("Discard this world's market?",
-                "You would lose " + MarketStateHolder.describeLoss(me) + "."
-                        + " This cannot be undone. If you are rejoining a market you"
-                        + " diverged from, everything you did before the split is in"
-                        + " their copy too and comes back when you reconnect, and any"
-                        + " orders you placed after it are listed afterwards so you can"
-                        + " put them back.",
+        MarketStateHolder.ResetCost cost = MarketStateHolder.resetCost();
+        StringBuilder body = new StringBuilder();
+
+        if (cost.rejoinable()) {
+            body.append("You parted from the other copy after event ").append(cost.splitAt)
+                    .append(cost.oursSince > 0
+                            ? ". The " + cost.oursSince + " events since are yours alone."
+                            : ".");
+            body.append("\n\nComes back when you reconnect: everything up to event ")
+                    .append(cost.splitAt)
+                    .append(" — your credits, holdings and trades are in their copy too.");
+        } else {
+            // No fork, or one whose split point could not be found. Either way there is
+            // no known shared history, so nothing is promised.
+            body.append("You would lose ").append(MarketStateHolder.describeLoss(me))
+                    .append(". Nothing here is held anywhere else unless somebody is"
+                            + " still hosting this market.");
+        }
+
+        if (!cost.refunds.isEmpty()) {
+            body.append("\n\nHanded to your inventory: ").append(describeRefunds(cost))
+                    .append(". They left your inventory after the split, and this is the"
+                            + " only record that they exist.");
+        }
+
+        if (!cost.orders.isEmpty()) {
+            body.append("\n\nListed afterwards to put back by hand: ")
+                    .append(cost.orders.size())
+                    .append(cost.orders.size() == 1 ? " order." : " orders.");
+        }
+
+        if (cost.rejoinable()) {
+            // The one category with no remedy, and the one the old wording omitted.
+            body.append("\n\nGone for good: credits you earned since the split, and the"
+                    + " trades themselves. Those exist only in this branch's ledger.");
+        }
+
+        body.append("\n\nThis cannot be undone.");
+
+        showDanger("Discard this world's market?", body.toString(),
                 "Discard", () -> {
                     MarketStateHolder.resetLog();
                     // Only claims the list exists when it does — a reset with no fork
@@ -507,6 +601,31 @@ public class MarketScreen extends Screen {
                             : "Local history discarded — orders from after the split are"
                                     + " listed to re-place";
                 });
+    }
+
+    /**
+     * The returned items, named the way a player would recognise them.
+     *
+     * Capped at three kinds, because this goes into an overlay that grows a line at a
+     * time and has no scroll — the same unbounded stacking that hid the market switcher
+     * and ran the dedicated-server warning off the panel. A count for the rest keeps the
+     * total honest without letting the box grow with somebody's inventory.
+     */
+    private static String describeRefunds(MarketStateHolder.ResetCost cost) {
+        StringBuilder s = new StringBuilder();
+        int shown = 0;
+        for (MarketStateHolder.Refund r : cost.refunds) {
+            if (shown == 3) {
+                s.append(" and ").append(cost.refunds.size() - 3).append(" more");
+                break;
+            }
+            if (shown > 0) s.append(", ");
+            Item item = MinecraftIds.idToItem(r.itemId);
+            s.append(r.quantity).append(" ")
+                    .append(item == Items.AIR ? r.itemId : item.getName().getString());
+            shown++;
+        }
+        return s.toString();
     }
 
     // ─────────── connection ───────────
@@ -661,7 +780,32 @@ public class MarketScreen extends Screen {
         }
 
         boolean has = MarketStateHolder.hasMarket();
-        if (hostButton != null) hostButton.active = hostButton.visible && has;
+        boolean hosting = MarketStateHolder.isHosting();
+        // Greyed rather than hidden when a dedicated server has this market, because
+        // every player could plausibly host and a dead control here teaches why they
+        // should not — which is what a comment beside the Migrate button has claimed
+        // this does since before it did any of it.
+        boolean servedByBox = dedicatedServesThisMarket();
+        if (hostButton != null) {
+            hostButton.active = hostButton.visible && has && !hosting && !servedByBox;
+        }
+
+        // Only one of these can ever be the right thing to press: connect() stops
+        // hosting before it dials out, so the two modes are exclusive. Leaving both live
+        // meant somebody hosting reached for Disconnect — the left one, and the word
+        // people use — and stopped only their own self-connection.
+        if (disconnectButton != null) {
+            // On the mode, not on the live socket. Being in CONNECTED with a dead client
+            // is a state this code already knows about — requireConnected has a message
+            // for exactly it — and it is precisely when somebody wants to press
+            // Disconnect. Greying it on isConnected() left them in a market they could
+            // not trade in and could not leave.
+            disconnectButton.active = disconnectButton.visible && !hosting
+                    && MarketStateHolder.mode() != MarketStateHolder.Mode.LOCAL;
+        }
+        if (stopHostButton != null) {
+            stopHostButton.active = stopHostButton.visible && hosting;
+        }
 
         // Create and Import are governed by the Market screen's situation now, which
         // already only offers them where there is no market to displace.
@@ -739,6 +883,29 @@ public class MarketScreen extends Screen {
             for (PeerPoll.HostInfo h : discovered) {
                 boolean isOther = h.reply.userId != null && !h.reply.userId.equals(myUuid);
                 boolean sameMarket = myMarket != null && myMarket.equals(h.reply.marketId);
+
+                // A dedicated server is not a host you take over from. "Take over" is a
+                // reasonable offer against somebody's game — they may be about to log
+                // off, and one of you should be serving it. Against a box that is always
+                // up it is an offer to fork the market permanently: it will not stop, so
+                // both of you keep sequencing, and two branches of one market cannot be
+                // merged afterwards. No confirm button here, because there is no version
+                // of this that ends well.
+                if (isOther && sameMarket && h.reply.dedicated) {
+                    status = h.reply.hostName + " is a dedicated server and is always"
+                            + " serving this market — connect to it instead";
+                    showDanger("You cannot host this market",
+                            h.reply.hostName + " is a dedicated server serving this"
+                                    + " market right now (" + h.reply.lastSeq + " events),"
+                                    + " and it does not stop. Hosting it as well means two"
+                                    + " hosts sequencing one market, which splits it into"
+                                    + " two histories that can never be merged — you would"
+                                    + " lose everything you traded on the losing side."
+                                    + " Connect to it from the Network tab instead.",
+                            null, null);
+                    return;
+                }
+
                 if (isOther && sameMarket) {
                     showDanger(h.reply.hostName + " is already hosting this",
                             h.reply.hostName + " is serving this market right now ("
@@ -925,6 +1092,24 @@ public class MarketScreen extends Screen {
      * tests do too. When this meant "header" to one of them and "first entry" to the
      * other, every click on a host landed one row low and the last one was unreachable.
      */
+    /**
+     * Top of host row {@code index}. The single source for drawing one and for hitting it.
+     *
+     * There were two of these — the render walked a running cursor down from the "Hosts:"
+     * heading, and the click test recomputed the same walk from `discoveryStartY()`. They
+     * agreed only because nothing had ever been inserted between the heading and the
+     * first row. Adding one line of explanation above the list moved every drawn row down
+     * and left every clickable row where it was, which is this file's oldest bug and the
+     * one its own comments keep warning about.
+     *
+     * Anything that appears above the rows belongs in here, so both callers move together.
+     */
+    private int discoveryRowY(int index) {
+        int y = discoveryStartY() + DISCOVERY_ROW_HEIGHT + 2;   // below "Hosts:"
+        if (dedicatedServesThisMarket()) y += DISCOVERY_ROW_HEIGHT + 2;
+        return y + index * DISCOVERY_ROW_HEIGHT;
+    }
+
     private int discoveryStartY() {
         return panelTop();
     }
@@ -1273,10 +1458,66 @@ public class MarketScreen extends Screen {
         MarketState mine = MarketStateHolder.get();
         if (mine == null || mine.marketId() == null) return null;
         String myMarket = mine.marketId().toString();
+
+        // Prefers one you could actually migrate to. There can be several foreign
+        // markets on the network and this picks one of them for the whole Market
+        // column — which used to be arbitrary and harmless, because every answer led to
+        // the same offer. It stopped being harmless when a dedicated server started
+        // meaning "no Migrate at all": whichever host the poll happened to list first
+        // then decided whether the button existed, so a box could hide a migration to
+        // somebody else's game entirely.
+        PeerPoll.HostInfo fallback = null;
         for (PeerPoll.HostInfo h : discovered) {
-            if (h.reply.marketId != null && !myMarket.equals(h.reply.marketId)) return h;
+            if (h.reply.marketId == null || myMarket.equals(h.reply.marketId)) continue;
+            if (!h.reply.dedicated) return h;
+            if (fallback == null) fallback = h;
         }
-        return null;
+        return fallback;
+    }
+
+    /**
+     * Whether the foreign market on offer is served by a dedicated server.
+     *
+     * From the discovery reply rather than from a connection, because the question has
+     * to be answerable before deciding whether to offer Migrate — and `dedicated` is on
+     * QueryReply for exactly that reason, with a comment saying a badge that only
+     * appeared after connecting would answer too late to be of use in choosing.
+     *
+     * Self-reported and signed, so nobody can change it in transit and a host can still
+     * describe itself however it likes. That is enough for advice, which is all this is.
+     */
+    /**
+     * Whether a dedicated server is serving the market this world holds.
+     *
+     * Two sources because they answer at different times and neither covers the other.
+     * Being connected to one is certain and needs no poll. The discovery list covers the
+     * case that actually bites — holding the market offline, or connected to nobody, and
+     * about to press Host on something a box is already sequencing.
+     *
+     * Used to grey Host, which a comment beside the Migrate button has claimed happens
+     * since before it did. Hosting a market a dedicated server also serves is the one
+     * reliable way to fork a market permanently: the box does not stop, so both of you
+     * keep sequencing, and two branches of one market cannot be merged.
+     */
+    private boolean dedicatedServesThisMarket() {
+        if (MarketStateHolder.isConnected() && MarketStateHolder.hostIsDedicated()) {
+            return true;
+        }
+        MarketState mine = MarketStateHolder.get();
+        if (mine == null || mine.marketId() == null) return false;
+        String myMarket = mine.marketId().toString();
+        for (PeerPoll.HostInfo h : discovered) {
+            if (h.reply != null && h.reply.dedicated
+                    && myMarket.equals(h.reply.marketId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean foreignIsDedicated() {
+        PeerPoll.HostInfo h = foreignHost();
+        return h != null && h.reply != null && h.reply.dedicated;
     }
 
     /** Lays out only the applicable actions, top to bottom with no gaps. */
@@ -1293,8 +1534,20 @@ public class MarketScreen extends Screen {
         // Only where there is somewhere to migrate TO, and never as an answer to a
         // fork — the host refuses that, because our position already includes the
         // history their copy has and crediting it again would pay us twice.
+        //
+        // And not towards a dedicated server, which by default does not take them: the
+        // balance a migrant carries was set by a welcome grant they chose in a world
+        // they control, which is fine among people who know each other and is not what
+        // a public box wants. The guidance beside this offers the route that costs
+        // nothing instead — add a market slot and connect from it.
+        //
+        // Read from the discovery reply, which carries `dedicated` precisely so it can
+        // be known before connecting. It is advice, not the answer: the server's own
+        // acceptsMigration is what actually decides, and an operator may have turned it
+        // back on. Erring this way hides a button that would have worked; erring the
+        // other way sends somebody's whole log over the wire to be refused.
         boolean migrate = foreign && situation != MS_NO_MARKET && situation != MS_FORKED
-                && situation != MS_DAMAGED;
+                && situation != MS_DAMAGED && !foreignIsDedicated();
         boolean reset = situation != MS_NO_MARKET;
 
         // Hidden rather than greyed, unlike the Host button on a dedicated market.
@@ -1313,15 +1566,12 @@ public class MarketScreen extends Screen {
         // and sets absolute positions, so it has to arrive at the same answer the shift
         // in reflowForAlerts gives everything else. Two rules for one column is how the
         // buttons ended up through the tab row.
-        int y = rowY + 4 + alertBandH();
+        int top = rowY + 4 + alertBandH();
+        int y = top - scrollOf("marketcol");
 
-        marketNameField.visible = create;
-        marketNameField.active = create;
-        if (create) {
-            // Above the button that consumes it.
-            marketNameField.y = y;
-            y += ROW_STEP;
-        }
+        placeField(marketNameField, create, y);
+        // Above the button that consumes it.
+        if (create) y += ROW_STEP;
 
         y = place(createButton, create, y);
         y = place(importButton, importFile, y);
@@ -1329,19 +1579,34 @@ public class MarketScreen extends Screen {
         y = place(migrateButton, migrate, y);
         y = place(resetButton, reset, y);
 
-        feeField.visible = canSetFee;
-        feeField.active = canSetFee;
-        listingFeeField.visible = canSetFee;
-        listingFeeField.active = canSetFee;
         if (canSetFee) {
-            feeField.y = y + 6;
-            y = place(feeButton, true, y + 6 + ROW_STEP);
-            listingFeeField.y = y + 6;
-            y = place(listingFeeButton, true, y + 6 + ROW_STEP);
+            // Each control on one row, field beside its button. Stacking the field above
+            // the button cost 58px a control, and four of those ran the column past the
+            // bottom of its own panel. One padding before the group, not before each.
+            y += 6;
+            placeField(feeField, true, y);
+            y = place(feeButton, true, y);
+            placeField(listingFeeField, true, y);
+            y = place(listingFeeButton, true, y);
+            placeField(stipendField, true, y);
+            y = place(stipendButton, true, y);
+            placeField(grantField, true, y);
+            y = place(grantButton, true, y);
         }  else {
+            placeField(feeField, false, y);
+            placeField(listingFeeField, false, y);
+            placeField(stipendField, false, y);
+            placeField(grantField, false, y);
             y = place(feeButton, false, y);
             y = place(listingFeeButton, false, y);
+            y = place(stipendButton, false, y);
+            y = place(grantButton, false, y);
         }
+
+        // Offered to anyone the market owes, not only its creator, and only while it
+        // owes them — a button that is always there and usually does nothing teaches
+        // people to stop reading it.
+        y = place(claimStipendButton, stipendClaimable(), y);
 
         // Offered wherever there is a world to put one in — including a world with no
         // market at all, since "another" is only ever one more than however many there
@@ -1350,8 +1615,29 @@ public class MarketScreen extends Screen {
 
         // Only where there is more than one to choose between, for the same reason the
         // list itself is hidden then: a world with a single market has nothing to leave.
-        place(deleteMarketButton, MarketStateHolder.availableSlots().size() > 1, y);
+        y = place(deleteMarketButton, MarketStateHolder.availableSlots().size() > 1, y);
+
+        // What the column would need if nothing were hidden, measured from where it
+        // started rather than assumed — the rows shown depend on the situation, so a
+        // fixed figure would be wrong for most of them.
+        //
+        // Measured from panelTop, and to the bottom edge of the last row rather than to
+        // the cursor sitting a whole ROW_STEP past it. Both corrections are the same
+        // point: this figure is only ever compared against what place() will accept, and
+        // place() asks whether y + FIELD_HEIGHT fits between panelTop and panelBottom.
+        // Measured any other way the two disagree, and they disagreed by nine pixels —
+        // exactly enough that the last row could never be scrolled into view.
+        marketColumnHeight = (y + scrollOf("marketcol")) - ROW_STEP + FIELD_HEIGHT
+                - panelTop();
     }
+
+    /**
+     * Set by refreshMarketActions, read by render to size the scrollable region.
+     *
+     * From panelTop to the bottom of the last row, which is the span place() clips
+     * against. Not from the frame, and not to the cursor past the last row.
+     */
+    private int marketColumnHeight;
 
     /** Whether the player at this keyboard is the identity named in the genesis event. */
     private boolean amCreator() {
@@ -1370,17 +1656,25 @@ public class MarketScreen extends Screen {
      * overlay though — nothing is destroyed and the next event can put it back, which
      * is the line the overlay kinds are drawn on.
      *
-     * There is deliberately no equivalent control for the welcome grant. Engine-side
-     * the two are symmetric — same event, same creator gate, same ceiling — but the
-     * grant is a one-time mint per identity rather than something felt per trade, so a
-     * casual friend-group creator fat-fingering it has more consequence and less
-     * feedback than fat-fingering a fee. Restricting the amount by hosting mode was
-     * considered and rejected: core has no concept of dedicated vs rotating — that is a
-     * self-reported per-connection flag on Sync/QueryReply, not a property of the log —
-     * so there is nowhere honest to enforce such a split, and the creator's key could
-     * author the event by hand regardless of what the shipped UI offers. Leaving the
-     * button out is the whole mitigation; setWelcomeGrant via ServerConfig at bootstrap
-     * remains the only path, which is deliberate rather than a gap to fill in later.
+     * The welcome grant has a control too now, but a DANGER one rather than this plain
+     * confirm. It used to have none, on the grounds that a fat-fingered grant has more
+     * consequence and less feedback than a fat-fingered fee. The first half holds and is
+     * why the overlay is the harsher kind; the second half did not survive being looked
+     * at, because hasBeenGranted means a grant only ever reaches identities that have
+     * not joined yet. That makes a mistake forward-only and correctable before the next
+     * person arrives — the same recoverability the stipend has.
+     *
+     * What the omission actually cost was worse than what it prevented. A market made
+     * in-game is created with the built-in default and nothing could change it
+     * afterwards, so every rotating market granted exactly a thousand credits against
+     * items trading for one or two. The largest lever on what credits are worth was the
+     * one nobody could reach.
+     *
+     * Restricting the amount by hosting mode was considered and rejected: core has no
+     * concept of dedicated vs rotating — that is a self-reported per-connection flag on
+     * Sync/QueryReply, not a property of the log — so there is nowhere honest to enforce
+     * such a split, and the creator's key could author the event by hand regardless of
+     * what the shipped UI offers. Every control here is a guardrail, never a boundary.
      */
     private void onSetFee() {
         String raw = feeField.getText().trim();
@@ -1436,7 +1730,7 @@ public class MarketScreen extends Screen {
 
         showConfirm(bps == 0 ? "Remove the trading fee?" : "Set the trading fee to "
                 + formatBps(bps) + "?", body, "Set fee",
-                () -> submitPolicy(bps, market == null ? 0 : market.listingFee()));
+                () -> submitPolicy(p -> p.taxBps = bps));
     }
 
     /**
@@ -1476,44 +1770,84 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        long fee;
-        try {
-            fee = Long.parseLong(raw);
-        } catch (NumberFormatException e) {
-            status = "Listing fee must be a whole number of credits";
+        // "2" is a flat fee; "2/3" is a fee of 2 with three orders free of escalation.
+        // One field for both because they are one decision — see listingFeeFromText,
+        // which is also where this is tested, since it cannot be tested from here.
+        MarketState.ListingFeeSetting parsed = MarketState.listingFeeFromText(raw);
+        if (parsed == null) {
+            status = "Type a fee like 2, or 2/3 for a fee of 2 with 3 orders free"
+                    + " before it climbs";
             return;
         }
-        if (fee < 0) {
-            status = "A listing fee cannot be negative";
-            return;
-        }
+
+        final long fee = parsed.fee;
+        final int free = parsed.freeOrders;
+
         if (fee > MarketState.MAX_LISTING_FEE) {
             status = "The most a market may charge to list is "
                     + MarketState.MAX_LISTING_FEE;
             return;
         }
-
-        MarketState market = MarketStateHolder.get();
-        long current = market == null ? 0 : market.listingFee();
-        if (fee == current) {
-            status = "The listing fee is already " + fee;
+        if (free > MarketState.MAX_LISTING_FREE_ORDERS) {
+            status = "The largest allowance is "
+                    + MarketState.MAX_LISTING_FREE_ORDERS + " orders";
+            return;
+        }
+        // An allowance is a number of orders you escalate *past*. With no fee there is
+        // nothing to escalate, so this would set a figure that does nothing and read
+        // like it did something.
+        if (fee == 0 && free > 0) {
+            status = "An allowance needs a fee to climb from — type 0 on its own to"
+                    + " remove the listing fee";
             return;
         }
 
-        String body = fee == 0
-                ? "Placing orders will be free again from the next one onward."
-                : "Placing an order will cost " + fee + " credits, whether it is a buy"
-                        + " or a sell, and whether or not it ever trades. It is not"
-                        + " returned if the order is cancelled — that is what makes it"
-                        + " discourage flooding the book, and also what makes it cost"
-                        + " something to reprice, so keep it small. Sellers pay it too,"
-                        + " so anyone holding goods and no credits will not be able to"
-                        + " list at all.";
+        MarketState market = MarketStateHolder.get();
+        long currentFee = market == null ? 0 : market.listingFee();
+        int currentFree = market == null ? 0 : market.listingFreeOrders();
+        if (fee == currentFee && free == currentFree) {
+            status = free > 0
+                    ? "The listing fee is already " + fee + " with " + free + " free"
+                    : "The listing fee is already " + fee;
+            return;
+        }
 
-        showConfirm(fee == 0 ? "Remove the listing fee?"
-                : "Charge " + fee + " credits to place an order?",
-                body, "Set fee", () -> submitPolicy(
-                        market == null ? 0 : market.taxBps(), fee));
+        String body;
+        if (fee == 0) {
+            body = "Placing orders will be free again from the next one onward.";
+        } else {
+            body = "Placing an order will cost " + fee + " credits, whether it is a buy"
+                    + " or a sell, and whether or not it ever trades. It is not"
+                    + " returned if the order is cancelled — that is what makes it"
+                    + " discourage flooding the book, and also what makes it cost"
+                    + " something to reprice, so keep it small. Sellers pay it too,"
+                    + " so anyone holding goods and no credits will not be able to"
+                    + " list at all.";
+            body += free > 0
+                    ? " The first " + free + " orders somebody is holding open cost that"
+                            + " much each; the next costs double, the one after triple,"
+                            + " and so on. Cancelling one brings the cost back down, so"
+                            + " it prices what you are holding open rather than what you"
+                            + " have ever placed."
+                    : " The same for everyone, however many orders they are already"
+                            + " holding open. Add an allowance — 2/3 — to make it climb"
+                            + " for whoever is holding the most.";
+        }
+
+        String title;
+        if (fee == 0) {
+            title = "Remove the listing fee?";
+        } else if (free > 0) {
+            title = "Charge " + fee + " credits to place an order, after " + free
+                    + " free?";
+        } else {
+            title = "Charge " + fee + " credits to place an order?";
+        }
+
+        showConfirm(title, body, "Set fee", () -> submitPolicy(p -> {
+            p.listingFee = fee;
+            p.listingFreeOrders = free;
+        }));
     }
 
     /**
@@ -1525,7 +1859,201 @@ public class MarketScreen extends Screen {
      * would have set the welcome grant to nothing every time somebody edited a fee.
      * One place to restate them means one place to get that right.
      */
-    private void submitPolicy(int bps, long listingFee) {
+    /**
+     * Sends a policy change, carrying every field that is not being changed.
+     *
+     * A MarketPolicy event is the whole policy, not a patch — so anything this does not
+     * restate is set to zero by the event it writes. That has already cost this project
+     * once, when setting a fee would have wiped the welcome grant, and it caught me
+     * again the moment the stipend fields were added.
+     *
+     * So the policy is built from what the market currently publishes and the caller is
+     * handed it to change. Forgetting a field now means it keeps its value, which is the
+     * failure that does no harm.
+     */
+    /**
+     * Sets what a newcomer is handed on joining.
+     *
+     * There deliberately was no control for this, on the grounds that a fat-fingered
+     * grant has more consequence and less feedback than a fat-fingered fee. The first
+     * half is true and is why this is a DANGER rather than a plain confirm. The second
+     * half did not survive being looked at: hasBeenGranted means a grant only ever
+     * reaches identities that have not joined yet, so a mistake is forward-only and can
+     * be corrected before the next person arrives — the same recoverability the stipend
+     * has, and the stipend has a control.
+     *
+     * What the omission actually cost was worse. A market made in-game is created with
+     * the built-in default and nothing anywhere can change it, so every rotating market
+     * grants exactly a thousand — against items that trade for one or two. The largest
+     * lever on the money supply was the one nobody could reach.
+     */
+    private void onSetGrant() {
+        String raw = grantField.getText().trim();
+        if (raw.isEmpty()) {
+            status = "Type a welcome grant first, in credits";
+            return;
+        }
+
+        long amount;
+        try {
+            amount = Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            status = "A welcome grant must be a whole number of credits";
+            return;
+        }
+        if (amount < 0) {
+            status = "A welcome grant cannot be negative";
+            return;
+        }
+        // The figure a host will actually sequence, not the compiled backstop. Which
+        // host decides is not knowable from here — it is a host rule, like admission —
+        // so this quotes the one that applies to somebody hosting in their own game,
+        // which is who is reading it. A dedicated server allows more and says so if you
+        // ask it for more.
+        if (amount > ServerConfig.ROTATING_MAX_WELCOME_GRANT) {
+            status = "The most a market hosted from a game may grant is "
+                    + ServerConfig.ROTATING_MAX_WELCOME_GRANT
+                    + " — a grant far above what things trade for is the largest single"
+                    + " lever on what credits are worth";
+            return;
+        }
+
+        MarketState market = MarketStateHolder.get();
+        if (market == null) { status = "No market"; return; }
+        if (amount == market.welcomeGrant()) {
+            status = "The welcome grant is already " + amount;
+            return;
+        }
+
+        String body = "Anyone who joins from here on receives " + amount
+                + " instead of " + market.welcomeGrant() + ". Nobody who has already"
+                + " joined is affected — a grant is once per identity, so this reaches"
+                + " only people who are not here yet, and can be changed again before"
+                + " they arrive."
+                + (amount == 0 ? " At zero, newcomers arrive with nothing and cannot"
+                        + " place a buy order until somebody sells them something."
+                        : "")
+                + " This is the largest single lever on what credits are worth: set it"
+                + " far above what things trade for and prices stop meaning much.";
+
+        showDanger("Grant newcomers " + amount + " credits?", body, "Set grant",
+                () -> submitPolicy(p -> p.grantAmount = amount));
+    }
+
+    /** Whether this market currently owes the local player a stipend. */
+    private boolean stipendClaimable() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        MarketState market = MarketStateHolder.get();
+        if (mc.player == null || market == null) return false;
+        if (market.stipendAmount() <= 0) return false;
+
+        UUID me = MinecraftIds.userIdOf(mc.player);
+        if (!market.isRegistered(me)) return false;
+        return market.fillsEver() - market.stipendedAtFill(me) >= market.stipendEveryFills();
+    }
+
+    /**
+     * Sets what the market pays, and how often, as one decision.
+     *
+     * The interval is not offered separately. It is one of three numbers that have to
+     * agree — the third being the listing fee — and a control that lets somebody set one
+     * of them to a value the other two refuse is a control that mostly produces
+     * rejections. The default interval is deliberately long; a creator who wants a
+     * different one can author the policy directly.
+     */
+    private void onSetStipend() {
+        String raw = stipendField.getText().trim();
+        if (raw.isEmpty()) {
+            status = "Type a stipend first, in credits";
+            return;
+        }
+
+        long amount;
+        try {
+            amount = Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            status = "A stipend must be a whole number of credits";
+            return;
+        }
+        if (amount < 0) {
+            status = "A stipend cannot be negative";
+            return;
+        }
+        if (amount > MarketState.MAX_STIPEND) {
+            status = "The most a market may pay is " + MarketState.MAX_STIPEND;
+            return;
+        }
+
+        MarketState market = MarketStateHolder.get();
+        if (market == null) { status = "No market"; return; }
+        if (amount == market.stipendAmount()) {
+            status = amount == 0 ? "This market already pays no stipend"
+                    : "The stipend is already " + amount;
+            return;
+        }
+
+        long every = MarketState.DEFAULT_STIPEND_EVERY_FILLS;
+
+        // The interlock, asked here so it is explained rather than merely refused.
+        // Every replica asks it again in EventApplier — this is the courtesy, not the
+        // enforcement.
+        //
+        // Asked, not reimplemented. This had its own copy of the arithmetic, and the
+        // copy was the version from before the rule was corrected twice: it costed a
+        // fill at two listing fees and counted one claimant, so it advertised a ceiling
+        // four times the real one and passed figures the engine then refused. The head
+        // count is what a second copy can never keep up with — it moves every time
+        // somebody joins.
+        String unsafe = EventApplier.stipendOutpacesItsFees(
+                amount, every, market.listingFee(), market.registeredCount());
+        if (unsafe != null) {
+            status = unsafe;
+            return;
+        }
+
+        String body = amount == 0
+                ? "Nobody will be paid a stipend from here on. Anything already claimed"
+                        + " stays where it is."
+                : "Every registered player may claim " + amount + " credits once per "
+                        + every + " trades this market settles. It exists because the"
+                        + " welcome grant is otherwise the only way credits ever enter,"
+                        + " so goods pile up against a money supply that never grows and"
+                        + " prices sink. Paid per trade rather than per minute, so it"
+                        + " follows the market being used rather than the clock — and so"
+                        + " it cannot be farmed by somebody trading with themselves,"
+                        + " which the listing fee makes cost more than it pays.";
+
+        showConfirm(amount == 0 ? "Stop paying a stipend?"
+                        : "Pay " + amount + " credits every " + every + " trades?",
+                body, "Set stipend", () -> submitPolicy(p -> {
+                    p.stipendAmount = amount;
+                    p.stipendEveryFills = every;
+                }));
+    }
+
+    /** Claims what the market owes. No confirmation — nothing is spent or lost. */
+    private void onClaimStipend() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        MarketState market = MarketStateHolder.get();
+        if (mc.player == null || market == null) { status = "No market"; return; }
+
+        Event.Stipend claim = new Event.Stipend();
+        claim.userId = MinecraftIds.userIdOf(mc.player);
+        claim.amount = market.stipendAmount();
+        claim.timestamp = System.currentTimeMillis();
+
+        MarketStateHolder.Submission s = MarketStateHolder.submit(claim);
+        if (s.pending) {
+            status = "Stipend claim sent...";
+        } else if (s.accepted) {
+            status = "Claimed " + claim.amount + " credits";
+        } else {
+            status = "Rejected: " + s.reason;
+        }
+        refreshMarketButtons();
+    }
+
+    private void submitPolicy(java.util.function.Consumer<Event.MarketPolicy> change) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) { status = "No player"; return; }
 
@@ -1534,32 +2062,62 @@ public class MarketScreen extends Screen {
 
         Event.MarketPolicy policy = new Event.MarketPolicy();
         policy.userId = MinecraftIds.userIdOf(mc.player);
-        policy.taxBps = bps;
-        policy.listingFee = listingFee;
-        // Not editable from here at all — see onSetFee for why there is no control for
-        // it — so it is carried across untouched.
+        policy.taxBps = market.taxBps();
         policy.grantAmount = market.welcomeGrant();
+        policy.listingFee = market.listingFee();
+        policy.listingFreeOrders = market.listingFreeOrders();
+        policy.stipendAmount = market.stipendAmount();
+        policy.stipendEveryFills = market.stipendEveryFills();
         policy.timestamp = System.currentTimeMillis();
+
+        change.accept(policy);
 
         MarketStateHolder.Submission s = MarketStateHolder.submit(policy);
         if (s.pending) {
             status = "Policy change sent...";
         } else if (s.accepted) {
-            status = "Trading fee " + formatBps(bps) + ", listing fee " + listingFee;
+            status = "Trading fee " + formatBps(policy.taxBps)
+                    + ", listing fee " + policy.listingFee
+                    + (policy.listingFreeOrders > 0
+                            ? " after " + policy.listingFreeOrders + " free" : "")
+                    + (policy.stipendAmount > 0
+                            ? ", stipend " + policy.stipendAmount + " every "
+                                    + policy.stipendEveryFills + " trades"
+                            : "");
             feeField.setText("");
             listingFeeField.setText("");
+            stipendField.setText("");
+            grantField.setText("");
         } else {
             status = "Rejected: " + s.reason;
         }
     }
 
+    /**
+     * Puts a button on the next row, or hides it if that row is off the panel.
+     *
+     * This used to stack without a bottom, which is how the Market column came to draw
+     * its last controls below the frame they belong to. Hiding an out-of-view row rather
+     * than drawing it means the panel can be scrolled instead: the cursor still advances
+     * for hidden rows, so what is on screen depends only on the offset.
+     */
     private int place(ButtonWidget button, boolean shown, int y) {
         if (button == null) return y;
-        button.visible = shown;
-        button.active = shown;
+        boolean inView = y >= panelTop() && y + FIELD_HEIGHT <= panelBottom();
+        button.visible = shown && inView;
+        button.active = button.visible;
         if (!shown) return y;
         button.y = y;
         return y + ROW_STEP;
+    }
+
+    /** The same for a text field, which is positioned rather than placed. */
+    private void placeField(TextFieldWidget field, boolean shown, int y) {
+        if (field == null) return;
+        boolean inView = y >= panelTop() && y + FIELD_HEIGHT <= panelBottom();
+        field.visible = shown && inView;
+        field.active = field.visible;
+        if (shown) field.y = y;
     }
 
     /** What is going on, in words, beside the actions that answer it. */
@@ -1615,27 +2173,79 @@ public class MarketScreen extends Screen {
                 break;
         }
 
-        label(m, heading, x, panelTop(), 0xFFAA00);
+        // Scrolls, for the reason the controls column does: this panel stacks a heading,
+        // a paragraph, sometimes a second paragraph about a host on the network, the
+        // market's own facts, and the switcher for the other markets in this world —
+        // and it had no bottom. What did not fit was silently dropped, and the first
+        // thing to go was the switcher, which is the only *control* in the column. A
+        // longer paragraph about dedicated servers was enough to make it disappear.
+        //
+        // Everything below measures from `top` and clips through guideLine(), so the
+        // offset is applied in one place and no drawing can escape the panel.
+        int top = panelTop() - scrollOf("marketguide");
 
-        int y = panelTop() + 14;
+        guideLabel(m, heading, x, top, 0xFFAA00);
+
+        int y = top + 14;
         for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW - 12)) {
-            this.textRenderer.drawWithShadow(m, line, x, y, 0xC0C0C0);
+            guideLine(m, line, x, y, 0xC0C0C0);
             y += 10;
         }
 
         if (foreign != null && situation != MS_NO_MARKET && situation != MS_FORKED) {
             y += 6;
-            for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(
-                    foreign.reply.hostName + " is running a separate market ('"
+            // Two different pieces of advice, because a dedicated server is a different
+            // proposition. Migration suits people who know each other; a public box does
+            // not take them by default, and saying only "you cannot migrate" would leave
+            // somebody thinking they cannot join at all. The route that costs nothing is
+            // the one worth naming — slots are separate logs, so joining from a new one
+            // leaves the market they already have exactly where it is.
+            String advice = foreignIsDedicated()
+                    ? foreign.reply.hostName + " is a dedicated server running a separate"
+                            + " market ('" + foreign.reply.marketName + "'). It does not"
+                            + " take migrations. To join it, use Add another market and"
+                            + " connect from that one — this market stays as it is, and"
+                            + " you arrive there on their welcome grant like anyone else."
+                    : foreign.reply.hostName + " is running a separate market ('"
                             + foreign.reply.marketName + "'). Migrating carries your"
-                            + " whole position there and abandons this one."), listW)) {
-                this.textRenderer.drawWithShadow(m, line, x, y, 0x88CCFF);
+                            + " whole position there and abandons this one. Add another"
+                            + " market instead to join without giving this one up.";
+            for (OrderedText line : this.textRenderer.wrapLines(
+                    new LiteralText(advice), listW)) {
+                guideLine(m, line, x, y, 0x88CCFF);
                 y += 10;
             }
         }
 
         y = renderMarketFacts(m, x, y + 10);
-        renderMarketSlots(m, x, y + 10);
+        y = renderMarketSlots(m, x, y + 10);
+
+        // What the column would need if nothing were clipped, measured from where it
+        // started — read by render next frame to size the scroll. Same arrangement as
+        // marketColumnHeight, including the one-frame lag, which nobody can see.
+        marketGuideHeight = (y + scrollOf("marketguide")) - panelTop();
+    }
+
+    /** Set by renderMarketGuidance, read by render to size its scrollable region. */
+    private int marketGuideHeight;
+
+    /**
+     * Draws one line of the guidance column, or skips it if it falls outside the panel.
+     *
+     * The single clip for everything in this column. Vanilla's text renderer has no
+     * scissor here, so "scrolled out of view" has to mean "not drawn" — and having one
+     * function decide that is what stops the panel growing another way to lose things
+     * quietly, which is what it did before it scrolled at all.
+     */
+    private void guideLine(MatrixStack m, OrderedText line, int x, int y, int colour) {
+        if (y < panelTop() || y + 9 > panelBottom()) return;
+        this.textRenderer.drawWithShadow(m, line, x, y, colour);
+    }
+
+    /** The same for a plain string. */
+    private void guideLabel(MatrixStack m, String text, int x, int y, int colour) {
+        if (y < panelTop() || y + 9 > panelBottom()) return;
+        label(m, text, x, y, colour);
     }
 
     /**
@@ -1649,9 +2259,11 @@ public class MarketScreen extends Screen {
     private int renderMarketFacts(MatrixStack m, int x, int y) {
         MarketState market = MarketStateHolder.get();
         if (market == null || market.marketId() == null) return y;
-        if (y > panelBottom() - 40) return y;    // no room; guidance took the panel
+        // No "no room" bail any more. The column scrolls, so running out of panel is a
+        // reason to be scrolled to rather than a reason to vanish — and this block
+        // vanishing took the switcher below it with it, since y never advanced past here.
 
-        label(m, "About this market", x, y, 0xFFDD66);
+        guideLabel(m, "About this market", x, y, 0xFFDD66);
         y += 12;
 
         y = wrapped(m, "Name: " + market.marketName(), x, y, 0xAAAAAA);
@@ -1681,8 +2293,47 @@ public class MarketScreen extends Screen {
 
         long listing = market.listingFee();
         if (listing > 0) {
+            int freeOrders = market.listingFreeOrders();
             y = wrapped(m, "Listing fee: " + listing + " credits to place any order,"
                     + " kept even if you cancel", x, y, 0xFFAA55);
+            // Only when it is on. A market with no allowance charges the flat fee and
+            // has nothing extra to explain.
+            if (freeOrders > 0) {
+                MinecraftClient mc = MinecraftClient.getInstance();
+                String mine = "";
+                if (mc.player != null) {
+                    // What the next order would actually cost this player, which is the
+                    // question anybody reads this line to answer.
+                    long next = market.listingFeeFor(MinecraftIds.userIdOf(mc.player));
+                    if (next > listing) mine = " Yours would be " + next + ".";
+                }
+                y = wrapped(m, "Climbs above " + freeOrders + " orders held open: the"
+                        + " next costs double, the one after triple. Cancel one and it"
+                        + " falls again." + mine, x, y, 0x909090);
+            }
+        }
+
+        long stipend = market.stipendAmount();
+        if (stipend > 0) {
+            MinecraftClient mc = MinecraftClient.getInstance();
+            // Only speak of "yours" to somebody who has one. An unregistered viewer has
+            // no last claim on record, which reads as fill zero — so in any market that
+            // had traded at all the countdown came out negative and the line announced a
+            // payment waiting, next to a Claim button stipendClaimable() will never show
+            // them. Registration is the same test the button uses.
+            String when = "";
+            if (mc.player != null) {
+                UUID me = MinecraftIds.userIdOf(mc.player);
+                if (market.isRegistered(me)) {
+                    long owedIn = market.stipendEveryFills()
+                            - (market.fillsEver() - market.stipendedAtFill(me));
+                    when = owedIn <= 0 ? " — yours is waiting"
+                            : ", yours in " + owedIn + " more";
+                }
+            }
+            y = wrapped(m, "Stipend: " + stipend + " credits every "
+                    + market.stipendEveryFills() + " trades this market settles" + when,
+                    x, y, 0x88FF88);
         }
 
         // Says who can change it, to whoever cannot. Without this the fee reads as a
@@ -1768,18 +2419,20 @@ public class MarketScreen extends Screen {
      * its own high-water mark and its own everything — which is the point of the
      * feature: leaving a market no longer has to mean destroying it.
      */
-    private void renderMarketSlots(MatrixStack m, int x, int y) {
+    private int renderMarketSlots(MatrixStack m, int x, int y) {
         List<String> slots = MarketStateHolder.availableSlots();
-        if (slots.size() < 2) { slotListTop = -1; return; }
-        if (y > panelBottom() - 24) { slotListTop = -1; return; }
+        if (slots.size() < 2) { slotListTop = -1; return y; }
+        // The "no room, give up" guard that used to be here is gone. It was the reason
+        // the switcher disappeared whenever the prose above it grew — and this is the
+        // only control in the column, so it was the one thing that had to survive. The
+        // column scrolls now; being below the fold means being scrolled to.
 
         slotListTop = y;
-        label(m, "Markets in this world — click to switch", x, y, 0xFFDD66);
+        guideLabel(m, "Markets in this world — click to switch", x, y, 0xFFDD66);
 
         String active = MarketStateHolder.activeSlot();
         for (int i = 0; i < slots.size(); i++) {
             int rowY = slotRowY(i, y);
-            if (rowY + SLOT_ROW_H > panelBottom()) break;
 
             String slot = slots.get(i);
             boolean here = slot.equalsIgnoreCase(active);
@@ -1789,9 +2442,29 @@ public class MarketScreen extends Screen {
             String name = MarketStateHolder.slotMarketName(slot);
             String shown = name != null ? name : slot + " (empty)";
 
+            if (!slotRowVisible(rowY)) continue;
             label(m, trim((here ? "> " : "  ") + shown, listW - 12), x, rowY,
                     here ? 0xFFFFFF : 0x88CCFF);
         }
+
+        // The bottom of the last row, so the column's height includes this list. Left
+        // out, the scroll would stop at the heading above it and the rows below could
+        // never be reached — which is the fault this whole change is about, moved down
+        // by one element.
+        return slotRowY(slots.size() - 1, y) + SLOT_ROW_H;
+    }
+
+    /**
+     * Whether a market row is actually on screen.
+     *
+     * Asked by the drawing and by the hit test, which is the whole point of it existing.
+     * Now that the column scrolls, a row can sit above or below the panel while its
+     * position is still perfectly computable — and a row you cannot see that still
+     * switches your market when clicked is the exact defect this project keeps finding.
+     * One question, one answer, two callers.
+     */
+    private boolean slotRowVisible(int rowY) {
+        return rowY >= panelTop() && rowY + SLOT_ROW_H <= panelBottom();
     }
 
     /** True when the click landed on a market row and was acted on. */
@@ -1803,6 +2476,7 @@ public class MarketScreen extends Screen {
 
         for (int i = 0; i < slots.size(); i++) {
             int rowY = slotRowY(i, slotListTop);
+            if (!slotRowVisible(rowY)) continue;      // scrolled away is not clickable
             if (mouseX >= listX && mouseX < listX + listW
                     && mouseY >= rowY && mouseY < rowY + SLOT_ROW_H) {
                 String slot = slots.get(i);
@@ -1828,8 +2502,11 @@ public class MarketScreen extends Screen {
     private int wrapped(MatrixStack m, String text, int x, int y, int colour) {
         for (OrderedText line : this.textRenderer.wrapLines(
                 new LiteralText(text), listW - 12)) {
-            if (y > panelBottom() - 10) return y;    // ran out of panel
-            this.textRenderer.drawWithShadow(m, line, x, y, colour);
+            // Advances whether or not it draws. Returning early here stopped y where the
+            // panel ended, so the column's measured height was the height of the visible
+            // part — which is a scroll extent that can never reach what it is hiding.
+            // guideLine decides what is on screen; this only decides where things go.
+            guideLine(m, line, x, y, colour);
             y += 10;
         }
         return y;
@@ -1866,14 +2543,34 @@ public class MarketScreen extends Screen {
     /**
      * The third column when there is one, the left panel when there is not.
      *
-     * Every destination but Trading leaves that column empty, and the list is at its
-     * most relevant right after a migration — which lands you on Market, where it was
-     * covering the guidance explaining what just happened. Trading is the one screen
-     * whose third column is occupied, and there the inventory is the thing you would
-     * be reading while re-placing, so it keeps it and the list falls back to the left.
+     * Deliberately not a function of the active tab. It used to fall back to the left
+     * panel on Trading, on the reasoning that Trading is the one screen whose third
+     * column is already occupied. What that produced was a box that jumped across the
+     * screen on every tab change while it existed, which reads as a rendering fault
+     * rather than as a considered layout — and the list outlives any one tab, so it is
+     * the thing that has to stay still.
+     *
+     * It draws after every panel, so on Trading it covers the inventory rather than
+     * fighting it. That is the right one to cover: re-placing an order needs its price
+     * and volume, both of which are on the row itself.
+     *
+     * Still switches on width, because a window too narrow for a third column has no
+     * third column to sit in — but that is a resize, where things are expected to move.
      */
     private boolean replaceInSideColumn() {
-        return invX >= 0 && activeScreen != SCREEN_TRADING;
+        return invX >= 0;
+    }
+
+    /**
+     * Whether the re-place box is sitting on the left panel and hiding what is there.
+     *
+     * The one place that decides it, because rendering and hit-testing have to agree.
+     * They did not: discovery stopped drawing whenever any orders were waiting, while
+     * its click handler went on testing rows regardless, so the host list vanished and
+     * stayed clickable. Only ever true on a window too narrow for a third column.
+     */
+    private boolean replaceCoversLeftPanel() {
+        return !MarketStateHolder.pendingReplace().isEmpty() && !replaceInSideColumn();
     }
 
     private int replaceBoxX() { return replaceInSideColumn() ? invX : listX; }
@@ -1940,11 +2637,16 @@ public class MarketScreen extends Screen {
 
             // What the same order would meet here, so re-placing at the old price is a
             // decision rather than a guess.
+            // peekBook, not bookFor. bookFor creates the book it fails to find, so
+            // asking it from render quietly filled the map with empty books for items
+            // nobody has traded — and did it from the render thread, writing to a map
+            // the applier thread was also writing to. Its own javadoc says as much.
             String here = "";
-            if (s != null) {
+            OrderBook peeked = s == null ? null : s.peekBook(o.itemId);
+            if (peeked != null) {
                 List<Order> book = o.isBid
-                        ? s.bookFor(o.itemId).restingAsks()
-                        : s.bookFor(o.itemId).restingBids();
+                        ? peeked.restingAsks()
+                        : peeked.restingBids();
                 if (!book.isEmpty()) {
                     here = (o.isBid ? "best ask " : "best bid ") + book.get(0).value();
                 }
@@ -2007,10 +2709,12 @@ public class MarketScreen extends Screen {
     private void renderDiscovery(MatrixStack matrices, int px,
                                  double mouseX, double mouseY) {
         int py = discoveryStartY();
-        // The re-place list takes this space while it exists — it's transient and
-        // actionable, discovery is neither. render() draws it directly now, on
-        // whichever tab you are on, so this only has to stand aside.
-        if (!MarketStateHolder.pendingReplace().isEmpty()) return;
+        // Only when the re-place box is genuinely on top of this. It used to stand
+        // aside whenever the box existed at all, from when the box lived in the left
+        // panel — but it sits in the third column wherever there is one, so the host
+        // list was being hidden by something that was not covering it. The clicks kept
+        // landing, which made the rows invisible and still joinable.
+        if (replaceCoversLeftPanel()) return;
 
         int x = px;
         int y = py;
@@ -2022,6 +2726,24 @@ public class MarketScreen extends Screen {
         label(matrices, stale ? "Hosts: (out of date)" : "Hosts:",
                 x, y, stale ? 0xAA8844 : 0xFFFFFF);
         y += DISCOVERY_ROW_HEIGHT + 2;
+
+        // Says why Host is dead, next to the list that explains it. A greyed control
+        // with no reason beside it teaches nothing — it reads as broken, and somebody
+        // who wants to host goes looking for a way around it rather than understanding
+        // that there is nothing to work around.
+        if (dedicatedServesThisMarket()) {
+            // Trimmed with the rest on hover, the same as the host rows below it, and
+            // for the same reason: this panel's width follows the window, so any fixed
+            // string is one small window away from running off the edge — which is what
+            // this line did on its first outing, stopping mid-word at "conn". Short
+            // enough to survive the trim at a usable width, and complete on hover.
+            String note = "a dedicated server has this market — connect, don't host";
+            String shown = trim("  " + note, listW - 12);
+            label(matrices, shown, x, y, 0xFFAA55);
+            tipIfHovered(note, shown, x, y, listW - 8, DISCOVERY_ROW_HEIGHT,
+                    (int) mouseX, (int) mouseY);
+            y += DISCOVERY_ROW_HEIGHT + 2;
+        }
 
         if (polling) {
             label(matrices, "  searching...", x, y, 0x808080);
@@ -2042,7 +2764,11 @@ public class MarketScreen extends Screen {
         String myMarket = mine != null && mine.marketId() != null
                 ? mine.marketId().toString() : null;
 
-        for (PeerPoll.HostInfo h : hosts) {
+        for (int i = 0; i < hosts.size(); i++) {
+            PeerPoll.HostInfo h = hosts.get(i);
+            // From discoveryRowY, not from a cursor walked down alongside the click
+            // test's own copy of the same walk.
+            y = discoveryRowY(i);
             boolean isSelf = h.reply.userId != null && h.reply.userId.equals(myUuid);
             // Whether this host serves the market we hold decides whether clicking it
             // will work at all, so it belongs on the row rather than in a failure later.
@@ -2070,7 +2796,6 @@ public class MarketScreen extends Screen {
             label(matrices, shown, x, y, colour);
             tipIfHovered(line.trim(), shown, x, y, listW - 8, DISCOVERY_ROW_HEIGHT,
                     (int) mouseX, (int) mouseY);
-            y += DISCOVERY_ROW_HEIGHT;
         }
     }
 
@@ -2150,24 +2875,27 @@ public class MarketScreen extends Screen {
         // in the left panel and only one of them is ever drawn.
         if (button == 0 && slotClicked(mouseX, mouseY)) return true;
 
-        // Only where the host list is actually drawn. Hit-testing it from another tab
-        // would join a host from a row nobody can see.
-        if (button == 0 && !polling && activeScreen == SCREEN_NETWORK) {
+        // Only where the host list is actually drawn — same condition renderDiscovery
+        // uses, including the re-place box covering it. Hit-testing a row nobody can
+        // see joins a host by accident, which is what happened here.
+        if (button == 0 && !polling && activeScreen == SCREEN_NETWORK
+                && !replaceCoversLeftPanel()) {
             MinecraftClient mc = MinecraftClient.getInstance();
             String myUuid = mc.player != null
                     ? MinecraftIds.userIdOf(mc.player).toString() : null;
 
             int x = listX + 4;
-            int y = discoveryStartY() + DISCOVERY_ROW_HEIGHT + 2;
+            List<PeerPoll.HostInfo> hosts = discovered;
 
-            for (PeerPoll.HostInfo h : discovered) {
+            for (int i = 0; i < hosts.size(); i++) {
+                PeerPoll.HostInfo h = hosts.get(i);
+                int y = discoveryRowY(i);      // the same function the drawing uses
                 boolean isSelf = h.reply.userId != null && h.reply.userId.equals(myUuid);
                 if (!isSelf && mouseX >= x && mouseX <= x + listW - 8
                         && mouseY >= y && mouseY < y + DISCOVERY_ROW_HEIGHT) {
                     joinHost(h);
                     return true;
                 }
-                y += DISCOVERY_ROW_HEIGHT;
             }
         }
         return super.mouseClicked(mouseX, mouseY, button);
@@ -2231,6 +2959,21 @@ public class MarketScreen extends Screen {
         if (req == null) return;
 
         MinecraftClient mc = MinecraftClient.getInstance();
+
+        // Asked before the items leave the inventory, and asked of the same function the
+        // host will ask. A seller who cannot afford the listing fee used to find out
+        // only after their goods had been taken and proposed — the refusal came back,
+        // the items came back with it, and the round trip existed for no reason. The
+        // host still decides; this only saves taking something it is going to refuse.
+        MarketState here = MarketStateHolder.get();
+        if (here != null) {
+            MarketState.SubmitResult listable =
+                    here.canDepositAndList(req.userId, req.itemId, req.qty, req.price);
+            if (!listable.accepted) {
+                status = "Cannot list: " + listable.reason;
+                return;
+            }
+        }
 
         // Journal the operation BEFORE the items leave, keyed by the id the event will
         // carry. Removing first and proposing second is deliberate — never credit before
@@ -2345,8 +3088,11 @@ public class MarketScreen extends Screen {
         if (item == Items.AIR) { status = "Unknown item"; return; }
 
         // The event needs the side; find the order to work out which book it's in.
+        // peekBook: an item with no book has no order to cancel, and creating one to
+        // discover that writes to the market from a keypress.
         String itemId = MinecraftIds.itemToId(item);
-        OrderBook book = MarketStateHolder.get().bookFor(itemId);
+        OrderBook book = MarketStateHolder.get().peekBook(itemId);
+        if (book == null) { status = "No such order in this item's book"; return; }
         Order o = book.find(orderId, true);
         boolean isBid = o != null;
         if (o == null) o = book.find(orderId, false);
@@ -2479,6 +3225,27 @@ public class MarketScreen extends Screen {
             renderDiscovery(matrices, listX + 4, mouseX, mouseY);
         } else if (activeScreen == SCREEN_MARKET) {
             renderMarketGuidance(matrices, listX + 4);
+            // The guidance column, which stacks a heading, a paragraph, sometimes a
+            // second one about a host on the network, this market's facts, and the
+            // switcher for the other markets in this world. It used to drop whatever
+            // did not fit — the switcher first, being last — so it scrolls now, on the
+            // same terms as the controls column beside it: wheel caught over the frame,
+            // extent measured against the panel's interior, because that is what the
+            // drawing is clipped to.
+            noteScrollable("marketguide", listX, frameTop(), listW, frameH(),
+                    panelBottom() - panelTop(), marketGuideHeight, mouseX, mouseY);
+            // The controls column, not the panel beside it. It holds more rows than the
+            // frame can show once a creator has policy controls and there are markets to
+            // switch between, and place() now hides what falls outside rather than
+            // drawing past the bottom — so without this the hidden rows would be
+            // unreachable rather than merely off screen.
+            //
+            // The wheel is caught over the whole frame; the extent is measured against
+            // the panel's interior, because that is what place() clips a row to. The
+            // two are not the same rectangle and saying so is the fix.
+            noteScrollable("marketcol", rowX - PAD, frameTop(), controlsW + PAD * 2,
+                    frameH(), panelBottom() - panelTop(), marketColumnHeight,
+                    mouseX, mouseY);
         } else if (activeScreen == SCREEN_HOME) {
             renderHome(matrices);
         } else {
@@ -3287,7 +4054,25 @@ public class MarketScreen extends Screen {
 
     private void noteScrollable(String key, int x, int y, int w, int h,
                                 int contentHeight, double mouseX, double mouseY) {
-        int max = Math.max(0, contentHeight - h);
+        noteScrollable(key, x, y, w, h, h, contentHeight, mouseX, mouseY);
+    }
+
+    /**
+     * The same, where the rectangle that catches the wheel is not the rectangle the
+     * content is clipped to.
+     *
+     * They were assumed to be one thing, and for most panels they are. The Market
+     * column is the exception: place() clips a row against panelTop/panelBottom, which
+     * is the frame inset by five pixels at each end, while the wheel is worth catching
+     * anywhere over the frame. Measuring the scroll extent against the frame made it
+     * nine pixels short of what the clip needs — enough to leave the bottom row
+     * permanently unreachable, which is the whole failure the scroll was added to fix.
+     *
+     * So the caller says both, and this stops guessing that one implies the other.
+     */
+    private void noteScrollable(String key, int x, int y, int w, int h, int viewH,
+                                int contentHeight, double mouseX, double mouseY) {
+        int max = Math.max(0, contentHeight - viewH);
         // Clamp every frame: the content can shrink under a scrolled view — an order
         // fills, a host stops — and a stale offset would leave the panel looking empty.
         if (scrollOf(key) > max) scrollOffsets.put(key, max);
@@ -3647,8 +4432,26 @@ public class MarketScreen extends Screen {
     private static final int OVERLAY_BTN_H = 20;
     private static final int OVERLAY_BTN_W = 90;
 
+    /**
+     * The body, wrapped, with paragraph breaks honoured.
+     *
+     * Split here rather than handed to wrapLines whole. Vanilla's wrapper is a wrapper —
+     * what it does with a newline is its business and has changed between versions, and
+     * the reset confirmation now depends on its paragraphs surviving, because separating
+     * "comes back", "comes back if you act" and "is gone" is the entire point of that
+     * rewrite. A blank line between them is cheap to guarantee and not worth trusting
+     * somebody else's code for.
+     */
     private List<OrderedText> overlayLines(Overlay o) {
-        return this.textRenderer.wrapLines(new LiteralText(o.body), OVERLAY_W - OVERLAY_PAD * 2);
+        List<OrderedText> out = new ArrayList<>();
+        String[] paragraphs = o.body.split("\n\n");
+        for (int i = 0; i < paragraphs.length; i++) {
+            if (i > 0) out.add(OrderedText.EMPTY);
+            out.addAll(this.textRenderer.wrapLines(
+                    new LiteralText(paragraphs[i].replace("\n", " ")),
+                    OVERLAY_W - OVERLAY_PAD * 2));
+        }
+        return out;
     }
 
     /**
@@ -3657,6 +4460,15 @@ public class MarketScreen extends Screen {
      * A pure function of the window and the message, so render and hit-testing derive
      * the same rectangles from the same inputs rather than one trusting coordinates
      * the other happened to leave in a field.
+     *
+     * top was Math.max(20, centred), which centres a box that fits and pins a taller one
+     * to y=20 — where it keeps growing downwards and takes its own buttons off the
+     * bottom of the screen with it. Nothing anchored the bottom, and the reset
+     * confirmation had just been given room to grow with a list of items. That is the
+     * failure this file has now had three times: content stacked downwards with no
+     * bound, hiding the one control that had to survive. Clamped so the bottom stays on
+     * screen whenever the box fits at all, and the body itself is capped at its source —
+     * describeRefunds names three kinds and counts the rest.
      */
     private int[] overlayBox(Overlay o) {
         int lines = overlayLines(o).size();
@@ -3664,7 +4476,8 @@ public class MarketScreen extends Screen {
                 + lines * 10 + OVERLAY_PAD             // body
                 + OVERLAY_BTN_H + OVERLAY_PAD;         // buttons
         int left = (this.width - OVERLAY_W) / 2;
-        int top = Math.max(20, (this.height - h) / 2);
+        int centred = (this.height - h) / 2;
+        int top = Math.max(4, Math.min(centred, this.height - h - 4));
         return new int[]{left, top, OVERLAY_W, h};
     }
 

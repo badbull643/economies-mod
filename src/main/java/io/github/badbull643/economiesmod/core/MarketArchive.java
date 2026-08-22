@@ -184,6 +184,25 @@ public class MarketArchive {
                         + " — this history has been tampered with");
             }
 
+            // Validate, then apply — both, and in that order, exactly as the host does
+            // when it sequences a live proposal. This used to call apply alone, and
+            // apply enforces none of the money rules: they live in validate, because
+            // that is where the host asks them. So a hand-built history could hold a
+            // welcome grant for any sum, repeated, or a stipend in a market that pays
+            // none, and every one of them applied. The balance that came out of it is
+            // what a migration then carries in, and migrationObjection weighs items
+            // against the depositor's statistics but never credits — nothing else was
+            // ever going to catch it.
+            //
+            // An honest log passes: every event in one was validated against this same
+            // state by whoever sequenced it, and validate is a pure function of the
+            // history before the event.
+            EventApplier.Result check = EventApplier.validate(state, se);
+            if (!check.accepted) {
+                throw new InvalidArchive("event " + se.seq + " breaks this market's own"
+                        + " rules: " + check.reason);
+            }
+
             EventApplier.Result r = EventApplier.apply(state, se);
             if (!r.accepted) {
                 throw new InvalidArchive("event " + se.seq + " is not valid against the"

@@ -190,9 +190,14 @@ public class WorldAttestation {
             double hours = claimedHours();
             long plausible = (long) Math.floor(hours * config.maxDepositUnitsPerPlayHour);
             if (depositedUnits > plausible) {
+                // Two decimals and the rate spelled out, so the figure can be checked.
+                // At one decimal the message contradicted itself: a world of 1.56 hours
+                // printed as "1.6 hours" next to a ceiling of 156, and anyone
+                // multiplying got 160 and concluded the server had it wrong.
                 out.add("deposited " + depositedUnits + " items from a world claiming "
-                        + String.format("%.1f", hours) + " hours of play, where "
-                        + plausible + " would be the most this server finds plausible");
+                        + String.format("%.2f", hours) + " hours of play — at "
+                        + config.maxDepositUnitsPerPlayHour + " per claimed hour, "
+                        + plausible + " is the most this server finds plausible");
             }
         }
 

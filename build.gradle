@@ -135,6 +135,20 @@ tasks.register('replayGuardTest', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
 }
 
+tasks.register('splitPointTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks two branches of one market can be told where they parted.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.SplitPointTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
+tasks.register('hostTrustTest', JavaExec) {
+    group = 'verification'
+    description = 'Checks a host is trusted to order events and for nothing else.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.HostTrustTest'
+    classpath = sourceSets.main.runtimeClasspath
+}
+
 tasks.register('gapRecoveryTest', JavaExec) {
     group = 'verification'
     description = 'Checks a missed broadcast is noticed and can be recovered from.'
