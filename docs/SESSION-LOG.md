@@ -44,10 +44,10 @@ nothing depends on that.
 4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was §0.19, which
-`E17` turned up the moment §0.18 gave somebody a way to run it: lowering the grant
-ceiling in a world switched off every other host rule in the file. **The rest of `E17`
-and `E17b` have not been run past that point** — see `docs/testing/group-e.md`.
+**What is being worked on right now:** nothing. The last thing finished was §0.20 — the
+reset confirmation, rewritten after `E18` and `E19` both passed exactly and the dialog
+turned out to be the only thing wrong. **`E17`, `E17b`, `E19b` and the `E13`/`E14`
+re-checks are still unrun**, and backlog item 7 is open from the same sitting.
 
 ---
 
@@ -55,7 +55,7 @@ and `E17b` have not been run past that point** — see `docs/testing/group-e.md`
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found nineteen defects in code that had 437 passing checks behind it — one a whole
+and it found twenty defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
@@ -420,6 +420,68 @@ And a nineteenth, found by running `E17` against the command §0.18 had just add
     reporting a file as unusable. The command worked exactly as designed and the design
     was right — it was the rule underneath that was wrong, and nothing but running the
     thing would have separated those two.
+
+And a twentieth, from running `E18` and `E19` — **both of which passed, exactly**:
+
+20. **The reset confirmation read as though nothing came back, on a screen about to hand
+    back 61 items.** Reported from play in those words. The arithmetic underneath was
+    right: Alice's branch reached 71 events and Bob's 54, the split search returned
+    `parted after event 22, 32 of ours since`, and comparing the two logs on disk
+    afterwards put the last common sequence at 22 with the first disagreement at 23. Bob's
+    only post-split deposits were seq 53 (60 cobblestone) and seq 54 (1 crafting table);
+    those two came back and his four pre-split ones did not. Nothing to fix in either.
+
+    What was wrong was the sentence. One paragraph, opening with what you lose and
+    burying the recovery in a subordinate clause — *"if you are rejoining a market you
+    diverged from"* — which is a condition the reader cannot evaluate about themselves at
+    the moment they are deciding. Three kinds of outcome were three clauses of one
+    sentence: what comes back by itself, what comes back if you act, and what is gone.
+
+    And the third was missing entirely. **The old text listed three kinds of recovery and
+    never once said what a reset destroys for good** — credits earned since the split, and
+    the trades themselves, which have no existence outside this branch's ledger. The
+    backlog has said so since item 1 was written; the dialog never did.
+
+    Now built from `ResetCost`, which `resetLog` also acts on, so the dialog names the
+    real items and counts rather than describing the shape of them. *"60 cobblestone, 1
+    crafting table"* is the same sentence as *"items you deposited after the split"* with
+    the doubt removed, and the doubt is the whole problem with a button that cannot be
+    undone. **One computation on purpose:** a confirmation promising something the action
+    does not do is worse than no confirmation, because it was believed.
+
+    Two things fell out of making the message longer, both this file's oldest disease:
+
+    - `overlayLines` handed the whole body to vanilla's `wrapLines` and hoped. Paragraph
+      breaks are now made here, because separating the three categories is the entire
+      point of the rewrite and is not worth trusting somebody else's line-breaking for.
+    - `overlayBox` computed `top = Math.max(20, centred)`, which centres a box that fits
+      and pins a taller one to `y=20` — where it grows downwards and takes its own buttons
+      off the bottom of the screen. Nothing anchored the bottom. **That is the third time
+      in this file:** §0.4 was the Market column, §0.16 the market switcher, and both were
+      content stacked downwards with no bound, hiding the one control that had to survive.
+      Clamped, and the list is capped at three item kinds with a count for the rest so the
+      body cannot grow with somebody's inventory. `E19b`.
+
+    **The other finding is not fixed, and is the more interesting one.** `Divergence` is
+    built in three places and only one supplies `splitAt` — the FORK refusal. The
+    discovery poll and the AHEAD path both pass `-1`, so the banner you get without
+    pressing Connect is still *"differs at event N"*, naming the other side's head. Two
+    clients polling each other show two different numbers, which is what prompted the
+    question: **52 on one and 47 on the other, neither a split point, both correct for
+    what that message actually says.**
+
+    It reaches further than the banner. `depositsLostToReset` falls back to
+    `divergence.seq - 1` when the split is unknown, which is a true upper bound and a very
+    loose one: against a poll-sourced divergence at 52 it would have looked for deposits
+    after event 51 on a chain that parted at 22, and refunded almost nothing while the
+    dialog promised otherwise. It errs the safe way — under-refunding cannot create
+    items — but "safe" there means silently returning nothing. Backlog item 7.
+
+    §3 said nearly every bug that session came from playing rather than reading, and §0's
+    closing note argued that did not generalise to the engine. This is the cleanest case
+    for §3 yet: the engine was right, the tests were right, the numbers were right, and
+    the thing that was wrong was a paragraph — which no test can fail on and only a person
+    can notice.
 
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
