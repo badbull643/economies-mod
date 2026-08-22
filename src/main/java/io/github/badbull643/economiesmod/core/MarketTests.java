@@ -924,6 +924,47 @@ public class MarketTests {
                     String.valueOf(cfg.problem()).contains("use 0") ? 1 : 0, 1);
         }
 
+        section("M6d: a dedicated server does not take migrations unless told to");
+        {
+            // Migration solves bootstrapping among people who know each other. The
+            // balance it carries was set by a welcome grant the migrant chose, in a
+            // world they control, up to MAX_WELCOME_GRANT — which is fine between
+            // friends and is "name your opening balance" on a public box.
+            //
+            // So the default follows the kind of host rather than a flag nobody sets.
+            // Boxed so that unset and explicitly-false are different answers, which is
+            // the whole mechanism and the part that would fail silently if it were a
+            // plain boolean defaulting to false.
+            ServerConfig inGame = new ServerConfig();
+            check("somebody's own game takes them", inGame.acceptsMigration() ? 1 : 0, 1);
+
+            ServerConfig box = new ServerConfig();
+            box.dedicated = true;
+            check("a dedicated server does not", box.acceptsMigration() ? 1 : 0, 0);
+
+            // Both overrides have to work, or the default is a rule rather than a default.
+            box.acceptsMigration = Boolean.TRUE;
+            check("an operator can turn them on", box.acceptsMigration() ? 1 : 0, 1);
+
+            inGame.acceptsMigration = Boolean.FALSE;
+            check("and off", inGame.acceptsMigration() ? 1 : 0, 0);
+
+            // Unset is not false. If this ever reads as false, every in-game host stops
+            // accepting migrations and the failure looks like a network fault.
+            box.acceptsMigration = null;
+            check("clearing it goes back to the host's own default",
+                    box.acceptsMigration() ? 1 : 0, 0);
+            inGame.acceptsMigration = null;
+            check("in both directions", inGame.acceptsMigration() ? 1 : 0, 1);
+
+            // Survives the round trip, since --write-config rewrites the whole file and
+            // a dropped field would silently re-enable migrations on a box that had
+            // turned them off.
+            check("an explicit false is still valid config",
+                    new ServerConfig() {{ dedicated = true; acceptsMigration = false; }}
+                            .problem() == null ? 1 : 0, 1);
+        }
+
         section("M5: a fast-forward is distinguishable from a fork");
         {
             // The test the host cannot perform for itself: given only "you are ahead of
