@@ -2046,6 +2046,55 @@ public class MarketTests {
             check("credits are conserved at the end", ended, TOTAL);
         }
 
+        section("X2: settling an order re-enters the state's own lock");
+        {
+            // apply() holds the write lock for a whole event. Settling a PlaceOrder goes
+            // submitOrder -> canSubmit -> listingFeeFor -> openOrderCount, and that last
+            // one takes the *read* lock. A thread holding the write lock re-entering for
+            // read is allowed by ReentrantReadWriteLock — but "allowed" was reasoning,
+            // and a deadlock on the sequencer thread is not a thing to reason about.
+            //
+            // Nothing reached it before this. listingFeeFor returns early unless BOTH a
+            // fee and an allowance are set, and every test that set an allowance called
+            // submitOrder directly, so no test had ever held the write lock while asking
+            // for the read one. The allowance is also a control that shipped days ago,
+            // which is the combination worth being careful about: brand new, and on the
+            // one path that would hang the host rather than fail it.
+            MarketState m = new MarketState();
+            UUID id = UUID.randomUUID();
+            m.setMarketIdentity(id, "lock market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.wallets().setBalance(ALICE, 10_000L);
+            m.deposit(ALICE, IRON, 100);
+            m.setListingFee(2);
+            m.setListingFreeOrders(3);
+
+            final java.util.concurrent.atomic.AtomicInteger placed =
+                    new java.util.concurrent.atomic.AtomicInteger();
+            Thread applier = new Thread(() -> {
+                for (int i = 0; i < 6; i++) {
+                    Event.PlaceOrder p = placeOrder(ALICE, IRON, 100 + i, 1, false);
+                    p.marketId = id;
+                    if (!applyAt(m, 10 + i, p).accepted) return;
+                    placed.incrementAndGet();
+                }
+            }, "market-applier");
+            applier.setDaemon(true);
+            applier.start();
+            applier.join(10_000);
+
+            // The assertion is that it finished at all. A hung applier leaves this at
+            // fewer than six and the thread still alive, which is what a deadlock looks
+            // like from outside.
+            check("six orders settled without hanging", placed.get(), 6);
+            check("and the thread is done", applier.isAlive() ? 1 : 0, 0);
+
+            // And the arithmetic held while the locks were being taken and retaken:
+            // three at the base fee, then double, triple, quadruple.
+            check("charging the escalating fee throughout",
+                    m.wallets().getBalance(ALICE), 10_000L - (2 + 2 + 2 + 4 + 6 + 8));
+        }
+
         section("T1f: a listing nobody can pay for is refused before anything is deposited");
         {
             // The two halves of DepositAndList used to be checked in two places that did
