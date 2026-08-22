@@ -892,12 +892,21 @@ grant finally has a control — see §7.
   and backlog item 4. What CI does not do is launch Minecraft, so every live item in
   `docs/testing/group-e.md` still rests on somebody running it, and four of §0's defects
   were geometry no suite would have caught.
-- **Host rules do not travel.** Deposit caps, admission, attestation and now
+- **Host rules do not travel, and should not.** Deposit caps, admission, attestation and
   `maxMigratedCredits` are per-host, read from that host's own `host-config.json`, so they
-  change when hosting rotates and a group cannot agree them once. Market rules — fees,
-  grant, stipend — live in the log and are uniform for everyone. §0.12 is the sharpest
-  case of this: the migration cap protects whoever happens to be hosting when somebody
-  arrives, and rotating to a host that has not set it opens the door again.
+  change when hosting rotates. Market rules — fees, grant, stipend — live in the log and
+  are uniform for everyone. §0.12 is the sharpest case: the migration cap protects whoever
+  happens to be hosting when somebody arrives, and rotating to a host that has not set it
+  opens the door again.
+
+  **Asked properly on 2026-08-23 and decided.** They cannot travel — a time-windowed rule
+  would be enforced against a client-set timestamp, the world checks judge evidence that
+  is not in the log, and item 3 already showed a deployment-dependent default forks the
+  market when hosting rotates. And they need not: host rules are a host's defence against
+  its clients, not the market's defence against its host, so travelling would add
+  consistency rather than security. What is worth building is making them **agreeable
+  once** — published as defaults each host adopts, never as replicated enforcement. That
+  is backlog item 8, and this bullet is a decision now rather than an oversight.
 - **The play-hour rule is kept but off**, with the reasoning on the config field. It
   weighs a rolling window against a lifetime, and is a rate limit applied to a stock.
 
@@ -942,6 +951,13 @@ of the same items is §4 again, in prose.*
   this treated the symptom; and no real market has been seen pressing against the price
   floor. See the Dropped section there for the one constraint worth keeping.
 - Whether `MarketScreen` gets split — backlog item 5.
+- ~~Whether host rules should travel with the market.~~ **Decided 2026-08-23: no.** They
+  cannot — a time-windowed cap would judge a client-set timestamp, the world checks weigh
+  evidence no replica receives, and a deployment-dependent default forks the market when
+  hosting rotates (item 3). And they need not, because a host rule is a host's defence
+  against its clients rather than the market's against its host, so replicating one buys
+  consistency and not safety. Making them **agreeable once** is worth building and is
+  backlog item 8; making them travel is refused, not deferred.
 
 ## 9. Loose ends in the tree
 
