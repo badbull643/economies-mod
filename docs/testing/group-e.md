@@ -1,8 +1,42 @@
 # Group E — everything built after the roadmap closed
 
+## DONE — run 2026-08-22
+
+*Every item on this list has been run in game. E9 and E12 were not run deliberately and
+were covered incidentally by the migration sitting, which is the honest way to record
+them: exercised, not stepped through.*
+
+**What the sitting turned up, all fixed:** the market switcher deleting itself when the
+guidance above it grew (`E15`); Host still live on a market a dedicated server was
+already serving (`E16`); the dedicated-server warning running off the panel edge; and a
+regression in the migration guard that stopped the second person leaving a shared market
+from arriving at all (`E11b`). Three of those four were introduced by fixes made earlier
+in the same session, which is the thing to remember about this list rather than any
+individual item on it.
+
+`E11` also had to be rewritten: it pointed at the migrant's own credit counter, which is
+the one number migration guarantees will not change. It looked like a failure and was not.
+
+### Two items want a five-minute re-check
+
+Everything was tested against the code as it stood, **except** two runtime changes that
+landed at 13:58, after the session ended (`59eb94f`). Both are in `MarketScreen`:
+
+- **`E13`** — `Disconnect` is now keyed to the mode rather than the live socket. The new
+  case is the only one worth re-running: **let the host drop you, then confirm Disconnect
+  is still live.** Keyed to the socket it went grey, stranding you in a market you could
+  neither trade in nor leave
+- **`E14`** — `foreignHost()` now prefers a host you could actually migrate to. This only
+  differs when **two or more** foreign markets are visible at once, one of them a
+  dedicated server: Migrate should be offered, targeting the non-dedicated one. With only
+  the server visible, nothing changed
+
+Nothing else on this list has moved since it was run.
+
+---
+
 *The stipend, the escalating listing fee, the welcome grant control, and a Market column
-that now scrolls. All of it has automated coverage and none of it has been run in game.
-The UI half matters most, because nobody has looked at it.*
+that now scrolls. The UI half mattered most, because nobody had looked at it.*
 
 Run the suites first. Expect `508 / 6 / 5 / 16 / 21 / 6 / 12 / 16`:
 

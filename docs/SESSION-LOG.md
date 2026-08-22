@@ -334,6 +334,23 @@ commits of engine and UI work with 437 automated checks behind them and zero liv
 minutes. The UI half needs eyes most. The Market column now scrolls and hides rows that
 fall outside the frame, and nobody has seen it.
 
+*[2026-08-22] **Group E is done** — every item run in game, E9 and E12 covered
+incidentally by the migration sitting rather than stepped through. What it turned up is
+§0.13 through §0.17, plus the correction inside §0.11: the switcher deleting itself, Host
+live on a market a dedicated server already served, a warning running off the panel edge,
+Disconnect not stopping hosting, and a migration guard that turned away the second person
+to leave a shared market. **Most of those were introduced by fixes made earlier the same
+day**, which is the thing to carry forward from this list rather than any item on it.*
+
+*Two items want a five-minute re-check, because their code moved at 13:58 after the
+sitting ended — `docs/testing/group-e.md` names exactly which and why. Nothing else has
+changed since it was run.*
+
+*The paragraph above is what this looked like beforehand. Worth leaving: "zero live
+minutes" was the right thing to have been worried about, and the ratio held — a day of
+reading found seventeen defects, and an evening of playing found six more that the
+reading had just created.*
+
 ## 3. What running it turned up
 
 Nearly every bug this session came from playing, not from reading. Worth remembering
@@ -401,7 +418,11 @@ grant finally has a control — see §7.
 
 ## 6. Known gaps
 
-- **Group E is untested.** See §2.
+- **Group E is tested**, as of 2026-08-22 — see §2 and `docs/testing/group-e.md`. Two
+  items want a short re-check, named there, because their code changed after the sitting.
+  The live gap is no longer Group E; it is that nothing has been played for long enough
+  for a market to get big, which is what the log-compaction and price-floor entries in the
+  backlog are both waiting on.
 - **Everything deliberately unbuilt now lives in `docs/BACKLOG.md`**, in the order it is
   worth doing, with what it costs to keep not doing it. Added because the roadmap is
   finished, so nothing else says "this is known about and not done" — and without such a
