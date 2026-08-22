@@ -37,8 +37,12 @@ down is newer than the sitting:
   it falls back and hosts anyway
 - **`E17b`** is newer still: `/trade hostconfig` and `/trade hostconfig write`, which are
   the first way to reach a host rule without knowing the file exists
-- **`E18`** is also new: the FORK banner now says where two branches parted
-- **`E19`** is also new: a reset now hands back items deposited since the split
+- ~~**`E18`**~~ **run 2026-08-22 and exact** — parted after event 22, confirmed against
+  both logs on disk. It also turned up that the discovery poll never asks for a split
+  point, so the banner you get without pressing Connect is still the old one
+- ~~**`E19`**~~ **run 2026-08-22 and correct** — the two post-split deposits came back and
+  the four pre-split ones did not. `E19b` is new: the confirmation was rewritten around
+  what it found, and has not been run
 
 Nothing else on this list has moved since it was run.
 
@@ -623,10 +627,26 @@ had the file.
 
 ## E18. Where two branches parted
 
-New, never run. Until now the protocol could say *that* your chain disagreed with a
-host's and never *where*: the FORK refusal compares one hash at one point, and the split
-is somewhere at or below it. So "differs at event 400" might have meant four events of
-divergence or four hundred, and nothing could tell them apart.
+*Run 2026-08-22 and exact.* Alice's branch reached 71 events and Bob's 54; the console
+reported `parted after event 22, 32 of ours since`, and comparing the two logs on disk
+afterwards put the last common sequence at 22 with the first disagreement at 23. The
+"32 of ours" follows from 54 − 22.
+
+**One thing to know before running it, which cost an evening the first time.** The number
+only appears on the path that asks for it: `noteForkFromRefusal`, which fires on a
+**Connect that comes back FORK**. The discovery poll sets a divergence too, and its
+`splitAt` is `-1`, so the banner falls back to *"differs at event N"* — where N is the
+other side's head. Two clients polling each other therefore show two different numbers
+(52 and 47, in the sitting), neither of which is a split point and both of which are
+correct for what that message says. If you are looking at numbers that disagree, you are
+looking at the poll. Press Connect.
+
+That gap is real and still open — see the session log's §0.20 and backlog item 7.
+
+Until now the protocol could say *that* your chain disagreed with a host's and never
+*where*: the FORK refusal compares one hash at one point, and the split is somewhere at
+or below it. So "differs at event 400" might have meant four events of divergence or four
+hundred, and nothing could tell them apart.
 
 Build a fork the way `B2` does — Alice hosts, Bob syncs, Bob disconnects, **both** trade,
 Bob reconnects.
@@ -652,10 +672,21 @@ deposits were only ever on the losing branch.
 
 ## E19. Items handed back when a fork is discarded
 
-New, never run. Discarding a forked branch used to destroy items outright: anything
-deposited after the split physically left your inventory, and the branch holding the only
-record of it was deleted. Balances from before the split come back when the shared
-history is adopted; orders come back as a checklist; those items were simply gone.
+*Run 2026-08-22 and correct.* Alice and Bob forked a 'newQ' market; the split search
+found event 22 and Bob's branch ran to 54. His only deposits after the split were seq 53
+(60 cobblestone) and seq 54 (1 crafting table), and those two were exactly what came
+back. His four pre-split deposits — seqs 7, 8, 17 and 18 — stayed where they were and
+returned with the shared history when he re-synced Alice's 71 events. The `insufficient
+item balance` refusal that follows a re-place attempt is the correct sequel, not a fault:
+the goods are in his inventory now, not the market's.
+
+**What the sitting changed is the wording, not the arithmetic** — see below, and the
+session log's §0.20.
+
+Discarding a forked branch used to destroy items outright: anything deposited after the
+split physically left your inventory, and the branch holding the only record of it was
+deleted. Balances from before the split come back when the shared history is adopted;
+orders come back as a checklist; those items were simply gone.
 
 They are returned now. The split point — `E18` — is what made it possible to tell which
 deposits were only ever on the losing branch.
@@ -682,3 +713,24 @@ must return nothing:
 
 Then the boring one that matters: reset a market you never forked from, with no
 divergence at all → nothing is returned, and nothing is lost.
+
+### E19b. What the confirmation says
+
+The dialog is now built from the same `ResetCost` the reset acts on, so it names the real
+items rather than describing the shape of them. Reported from the first sitting as reading
+like everything was gone, on a screen that was about to hand 61 items back.
+
+- With a fork, the overlay must name **the split point**, **the items by name and
+  count**, **the number of orders**, and — this is the part the old wording never said at
+  all — that credits earned since the split and the trades themselves are gone for good
+- **The numbers must match what the console then reports.** They come from one call now;
+  a dialog that promised different items than the action returns would be believed, which
+  is worse than no dialog
+- With **no** fork, none of the recovery sentences appear. There is nothing to rejoin, so
+  every one of them would be false
+- Deposit **four or more different kinds** of item after the split, then open the dialog →
+  three are named and the rest are counted. The overlay stacks a line at a time and has no
+  scroll; an uncapped list grows it with your inventory
+- **Check the buttons are on screen** at 1920×1080 and at the smallest window Minecraft
+  allows, with the longest version of the message — four item kinds, orders, and a fork.
+  The box used to pin to `y=20` and grow downwards off the bottom

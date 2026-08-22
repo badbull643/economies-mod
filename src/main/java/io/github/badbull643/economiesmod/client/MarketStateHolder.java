@@ -1606,7 +1606,65 @@ public class MarketStateHolder {
         return true;
     }
 
-    /** Discards the local history entirely. Only for resolving a fork — destructive. */
+    /**
+     * What a reset would cost, worked out before one happens.
+     *
+     * Exists so the confirmation can say the actual numbers rather than describe the
+     * shape of them. "Items you deposited after the split are handed back" is a promise
+     * a reader has to take on trust and cannot check; "60 cobblestone and 1 crafting
+     * table are handed back" is the same sentence with the doubt removed — and the doubt
+     * is the whole problem with a button that cannot be undone.
+     *
+     * Asked by resetLog as well, so what is shown and what is done are one computation.
+     * Two would be §4 in its most expensive form: a confirmation that promises something
+     * the action does not do is worse than no confirmation, because it was believed.
+     */
+    public static final class ResetCost {
+        /** The last event both branches hold, or -1 when there is no fork or it is unknown. */
+        public final long splitAt;
+        /** Events on this branch alone, or -1 when that cannot be worked out. */
+        public final long oursSince;
+        /** Items handed back, because discarding this branch destroys the only record. */
+        public final List<Refund> refunds;
+        /** Orders listed afterwards so they can be put back by hand. */
+        public final List<OldOrder> orders;
+
+        ResetCost(long splitAt, long oursSince, List<Refund> refunds, List<OldOrder> orders) {
+            this.splitAt = splitAt;
+            this.oursSince = oursSince;
+            this.refunds = refunds;
+            this.orders = orders;
+        }
+
+        /**
+         * Whether anything here is held by somebody else.
+         *
+         * The two cases the confirmation must not confuse. After a fork there is a host
+         * with the shared history, so most of what a reset destroys comes back on
+         * reconnecting. Without one there is nothing to rejoin, and every word about
+         * recovery would be false.
+         */
+        public boolean rejoinable() { return splitAt >= 0; }
+    }
+
+    /** @see ResetCost */
+    public static ResetCost resetCost() {
+        long splitAt = -1;
+        long oursSince = -1;
+
+        Divergence d = divergence;
+        if (d != null && currentWorldDir != null) {
+            splitAt = d.splitAt;
+            try {
+                oursSince = d.oursSinceSplit(new EventLog(logPathFor(currentWorldDir)).lastSeq());
+            } catch (IOException e) {
+                // The count is decoration; the lists below are the substance.
+                oursSince = -1;
+            }
+        }
+        return new ResetCost(splitAt, oursSince, depositsLostToReset(), ordersLostToReset());
+    }
+
     /** Discards the local history entirely. Only for resolving a fork — destructive. */
     public static void resetLog() {
         // Stop hosting first — otherwise the running HostServer keeps its in-memory
@@ -1621,9 +1679,14 @@ public class MarketStateHolder {
         if (currentWorldDir == null) return;
 
         // Before anything is deleted, and before divergence is cleared below — both are
-        // needed to work out what this reset actually costs.
-        List<OldOrder> lost = ordersLostToReset();
-        List<Refund> owed = depositsLostToReset();
+        // needed to work out what this reset actually costs. Through resetCost rather
+        // than the two methods directly, because the confirmation the player just read
+        // came from there: a dialog that promised items back and an action that returned
+        // different ones would be believed, which is what makes that pair worse than no
+        // dialog at all.
+        ResetCost cost = resetCost();
+        List<OldOrder> lost = cost.orders;
+        List<Refund> owed = cost.refunds;
 
         try {
             Path log = logPathFor(currentWorldDir);

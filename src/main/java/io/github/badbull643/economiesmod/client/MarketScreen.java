@@ -526,20 +526,72 @@ public class MarketScreen extends Screen {
         return false;
     }
 
+    /**
+     * The reset confirmation, written as three lists rather than a paragraph.
+     *
+     * It used to be one block of prose that opened with what you lose and buried the
+     * recovery in a subordinate clause — "if you are rejoining a market you diverged
+     * from" — which is a condition the reader cannot evaluate about themselves. Reported
+     * from play as reading like everything was gone, on a screen that was about to hand
+     * 61 items back.
+     *
+     * Three changes. The categories are separated, because "comes back by itself",
+     * "comes back if you do something" and "is gone" are three different decisions and
+     * were three clauses of one sentence. The numbers are real — resetCost has already
+     * worked out exactly which items and how many orders, and naming them removes the
+     * doubt that a paragraph about what generally happens cannot. And what is
+     * permanently lost is finally stated: credits earned since the split and the trades
+     * themselves have no existence outside this branch's ledger, which the old wording
+     * never said at all while listing three kinds of recovery.
+     *
+     * The no-fork case says none of it. Without a host holding the shared history there
+     * is nothing to rejoin and every sentence about recovery would be false.
+     */
     private void onReset() {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
         UUID me = MinecraftIds.userIdOf(mc.player);
 
-        showDanger("Discard this world's market?",
-                "You would lose " + MarketStateHolder.describeLoss(me) + "."
-                        + " This cannot be undone. If you are rejoining a market you"
-                        + " diverged from, everything you did before the split is in"
-                        + " their copy too and comes back when you reconnect, and any"
-                        + " orders you placed after it are listed afterwards so you can"
-                        + " put them back. Items you deposited after the split are handed"
-                        + " back to your inventory — they came out of it, and discarding"
-                        + " this branch destroys the only record that they exist.",
+        MarketStateHolder.ResetCost cost = MarketStateHolder.resetCost();
+        StringBuilder body = new StringBuilder();
+
+        if (cost.rejoinable()) {
+            body.append("You parted from the other copy after event ").append(cost.splitAt)
+                    .append(cost.oursSince > 0
+                            ? ". The " + cost.oursSince + " events since are yours alone."
+                            : ".");
+            body.append("\n\nComes back when you reconnect: everything up to event ")
+                    .append(cost.splitAt)
+                    .append(" — your credits, holdings and trades are in their copy too.");
+        } else {
+            // No fork, or one whose split point could not be found. Either way there is
+            // no known shared history, so nothing is promised.
+            body.append("You would lose ").append(MarketStateHolder.describeLoss(me))
+                    .append(". Nothing here is held anywhere else unless somebody is"
+                            + " still hosting this market.");
+        }
+
+        if (!cost.refunds.isEmpty()) {
+            body.append("\n\nHanded to your inventory: ").append(describeRefunds(cost))
+                    .append(". They left your inventory after the split, and this is the"
+                            + " only record that they exist.");
+        }
+
+        if (!cost.orders.isEmpty()) {
+            body.append("\n\nListed afterwards to put back by hand: ")
+                    .append(cost.orders.size())
+                    .append(cost.orders.size() == 1 ? " order." : " orders.");
+        }
+
+        if (cost.rejoinable()) {
+            // The one category with no remedy, and the one the old wording omitted.
+            body.append("\n\nGone for good: credits you earned since the split, and the"
+                    + " trades themselves. Those exist only in this branch's ledger.");
+        }
+
+        body.append("\n\nThis cannot be undone.");
+
+        showDanger("Discard this world's market?", body.toString(),
                 "Discard", () -> {
                     MarketStateHolder.resetLog();
                     // Only claims the list exists when it does — a reset with no fork
@@ -549,6 +601,31 @@ public class MarketScreen extends Screen {
                             : "Local history discarded — orders from after the split are"
                                     + " listed to re-place";
                 });
+    }
+
+    /**
+     * The returned items, named the way a player would recognise them.
+     *
+     * Capped at three kinds, because this goes into an overlay that grows a line at a
+     * time and has no scroll — the same unbounded stacking that hid the market switcher
+     * and ran the dedicated-server warning off the panel. A count for the rest keeps the
+     * total honest without letting the box grow with somebody's inventory.
+     */
+    private static String describeRefunds(MarketStateHolder.ResetCost cost) {
+        StringBuilder s = new StringBuilder();
+        int shown = 0;
+        for (MarketStateHolder.Refund r : cost.refunds) {
+            if (shown == 3) {
+                s.append(" and ").append(cost.refunds.size() - 3).append(" more");
+                break;
+            }
+            if (shown > 0) s.append(", ");
+            Item item = MinecraftIds.idToItem(r.itemId);
+            s.append(r.quantity).append(" ")
+                    .append(item == Items.AIR ? r.itemId : item.getName().getString());
+            shown++;
+        }
+        return s.toString();
     }
 
     // ─────────── connection ───────────
@@ -4355,8 +4432,26 @@ public class MarketScreen extends Screen {
     private static final int OVERLAY_BTN_H = 20;
     private static final int OVERLAY_BTN_W = 90;
 
+    /**
+     * The body, wrapped, with paragraph breaks honoured.
+     *
+     * Split here rather than handed to wrapLines whole. Vanilla's wrapper is a wrapper —
+     * what it does with a newline is its business and has changed between versions, and
+     * the reset confirmation now depends on its paragraphs surviving, because separating
+     * "comes back", "comes back if you act" and "is gone" is the entire point of that
+     * rewrite. A blank line between them is cheap to guarantee and not worth trusting
+     * somebody else's code for.
+     */
     private List<OrderedText> overlayLines(Overlay o) {
-        return this.textRenderer.wrapLines(new LiteralText(o.body), OVERLAY_W - OVERLAY_PAD * 2);
+        List<OrderedText> out = new ArrayList<>();
+        String[] paragraphs = o.body.split("\n\n");
+        for (int i = 0; i < paragraphs.length; i++) {
+            if (i > 0) out.add(OrderedText.EMPTY);
+            out.addAll(this.textRenderer.wrapLines(
+                    new LiteralText(paragraphs[i].replace("\n", " ")),
+                    OVERLAY_W - OVERLAY_PAD * 2));
+        }
+        return out;
     }
 
     /**
@@ -4365,6 +4460,15 @@ public class MarketScreen extends Screen {
      * A pure function of the window and the message, so render and hit-testing derive
      * the same rectangles from the same inputs rather than one trusting coordinates
      * the other happened to leave in a field.
+     *
+     * top was Math.max(20, centred), which centres a box that fits and pins a taller one
+     * to y=20 — where it keeps growing downwards and takes its own buttons off the
+     * bottom of the screen with it. Nothing anchored the bottom, and the reset
+     * confirmation had just been given room to grow with a list of items. That is the
+     * failure this file has now had three times: content stacked downwards with no
+     * bound, hiding the one control that had to survive. Clamped so the bottom stays on
+     * screen whenever the box fits at all, and the body itself is capped at its source —
+     * describeRefunds names three kinds and counts the rest.
      */
     private int[] overlayBox(Overlay o) {
         int lines = overlayLines(o).size();
@@ -4372,7 +4476,8 @@ public class MarketScreen extends Screen {
                 + lines * 10 + OVERLAY_PAD             // body
                 + OVERLAY_BTN_H + OVERLAY_PAD;         // buttons
         int left = (this.width - OVERLAY_W) / 2;
-        int top = Math.max(20, (this.height - h) / 2);
+        int centred = (this.height - h) / 2;
+        int top = Math.max(4, Math.min(centred, this.height - h - 4));
         return new int[]{left, top, OVERLAY_W, h};
     }
 

@@ -171,6 +171,40 @@ who thinks to check. It does not cover somebody who does not.
 
 ---
 
+## 7. The split point is only found on one of the three paths that need it
+
+**From §0.20 in the session log. `MarketClient.findSplitPoint` exists and works.**
+
+`Divergence` is constructed in three places and only one supplies `splitAt`: the FORK
+refusal in `noteForkFromRefusal`. The discovery poll and the AHEAD path both pass `-1`.
+So the banner somebody sees without pressing Connect is still the pre-`E18` one — *"differs
+at event N"*, where N is the other side's head — and two clients polling each other show
+two different numbers, neither of which is a split point.
+
+It reaches past the banner. `depositsLostToReset` falls back to `divergence.seq - 1` when
+the split is unknown. That is a true upper bound and a very loose one: against a
+poll-sourced divergence at 52, on a pair of chains that parted at 22, it looks for
+deposits after event 51 and finds nearly none.
+
+**Cost of not doing it:** a reset started from the poll's banner refunds almost nothing
+while the confirmation names what it will hand back. It errs the safe way — under-refunding
+cannot create items, and that bound is deliberate — so this is wrong quietly rather than
+dangerously. Bounded, silent, and financial in the way that matters to whoever loses the
+items.
+
+**Why it was built this way, which is worth keeping.** The search is a second round trip
+to a host that has just refused you, on purpose: a failure costs the detail and not the
+refusal. The poll runs on a timer against every host it can see, so making it search every
+cycle would turn one background poll into several.
+
+The shape that fits both: find the split once per host and head, cache it against that
+pair, and let the poll and the reset read the cache. A new head invalidates it, which is
+the same rule the chain hash already uses everywhere else. Collapsing all three
+constructions onto one path that knows the answer is the §4 move, and this is the fourth
+entry in this file whose root is a fact known in one place and needed in three.
+
+---
+
 ---
 
 ## Dropped
