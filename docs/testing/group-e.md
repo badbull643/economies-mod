@@ -291,3 +291,40 @@ market whose founder held 50, without ever registering.
   in too → refused: *"you already hold a position in this market"*
 - A player who has genuinely never been there still migrates in fine. That is the half
   that matters — the fix must bound migration, not close it
+
+## E13. Disconnect, while hosting
+
+Reported from play: disconnected, and the host list still showed the market being
+hosted — and the other client could still connect to it.
+
+Both buttons on the Network tab were always live, side by side, whatever mode you were
+in. While hosting, the obvious one to reach for is **Disconnect** — it is the left one
+and it is the word people use — and it only dropped the self-connection. The server
+stayed bound, kept serving whoever was already on it, and kept answering the discovery
+poll. The button said Disconnect and nothing disconnected.
+
+The quiet half was worse and nobody would have seen it. `stopHosting` is the only thing
+that releases the HostServer's `EventLog`, so disconnecting fell through to `loadLocal`
+and opened a **second** `EventLog` on the file the running host still owned. Two writers
+on one log is duplicate sequence numbers and a broken chain — the exact failure
+`connect()` has guarded against since it was written, with a comment saying so. The guard
+was never carried across to `disconnect()`.
+
+Now: `disconnect()` stops the host if there is one, and the two buttons grey by mode so
+only the one that applies is live.
+
+**Start hosting, have the second client connect, then press Disconnect.**
+
+- The second client is dropped, and says so
+- It **cannot reconnect** — the port is closed, not merely unadvertised
+- Your own Network tab no longer lists you as hosting, and neither does theirs after a
+  **Refresh hosts**
+- **Stop hosting** is greyed while you are not hosting; **Disconnect** is greyed while
+  you are. Only one of the pair is ever live
+- Now trade or change a policy → your log is still healthy. No *"your log is damaged"*
+  banner, no duplicate sequence numbers. This is the half that was silent
+- Repeat with **Stop hosting** instead of Disconnect; both should do the same thing now
+
+Then the same from the other side: connect out to somebody else's host and press
+Disconnect. That path was always correct and must stay correct — it is the one the
+greying could plausibly break.

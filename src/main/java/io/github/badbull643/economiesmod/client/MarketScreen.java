@@ -41,6 +41,8 @@ public class MarketScreen extends Screen {
     private TextFieldWidget hostPortField;
     private TextFieldWidget marketNameField;
     private ButtonWidget hostButton;
+    private ButtonWidget disconnectButton;
+    private ButtonWidget stopHostButton;
     private ButtonWidget createButton;
     private ButtonWidget importButton;
     private ButtonWidget migrateButton;
@@ -386,10 +388,17 @@ public class MarketScreen extends Screen {
                 new LiteralText("Host"), b -> onHost());
         onScreen(SCREEN_NETWORK, this.hostButton);
 
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 2, halfW, FIELD_HEIGHT,
-                new LiteralText("Disconnect"), b -> onDisconnect()));
-        onScreen(SCREEN_NETWORK, new ButtonWidget(rowX + halfW + PAD, rowY + ROW_STEP * 2, halfW,
-                FIELD_HEIGHT, new LiteralText("Stop hosting"), b -> onStopHosting()));
+        // Both were always live, side by side, whatever mode you were in — so while
+        // hosting the obvious-looking one was Disconnect, which dropped the
+        // self-connection and left the server running. Greyed by mode now, so the pair
+        // says which of the two things you are actually doing.
+        this.disconnectButton = new ButtonWidget(rowX, rowY + ROW_STEP * 2, halfW,
+                FIELD_HEIGHT, new LiteralText("Disconnect"), b -> onDisconnect());
+        onScreen(SCREEN_NETWORK, this.disconnectButton);
+
+        this.stopHostButton = new ButtonWidget(rowX + halfW + PAD, rowY + ROW_STEP * 2, halfW,
+                FIELD_HEIGHT, new LiteralText("Stop hosting"), b -> onStopHosting());
+        onScreen(SCREEN_NETWORK, this.stopHostButton);
 
         onScreen(SCREEN_NETWORK, new ButtonWidget(rowX, rowY + ROW_STEP * 3, halfW, FIELD_HEIGHT,
                 new LiteralText("Refresh hosts"), b -> startPoll()));
@@ -692,7 +701,20 @@ public class MarketScreen extends Screen {
         }
 
         boolean has = MarketStateHolder.hasMarket();
-        if (hostButton != null) hostButton.active = hostButton.visible && has;
+        boolean hosting = MarketStateHolder.isHosting();
+        if (hostButton != null) hostButton.active = hostButton.visible && has && !hosting;
+
+        // Only one of these can ever be the right thing to press: connect() stops
+        // hosting before it dials out, so the two modes are exclusive. Leaving both live
+        // meant somebody hosting reached for Disconnect — the left one, and the word
+        // people use — and stopped only their own self-connection.
+        if (disconnectButton != null) {
+            disconnectButton.active = disconnectButton.visible
+                    && MarketStateHolder.isConnected() && !hosting;
+        }
+        if (stopHostButton != null) {
+            stopHostButton.active = stopHostButton.visible && hosting;
+        }
 
         // Create and Import are governed by the Market screen's situation now, which
         // already only offers them where there is no market to displace.
