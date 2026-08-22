@@ -14,9 +14,19 @@ Stop the server, change the `--config`, start it again. That is the whole loop.
 
 ## Before the first run
 
-`./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest depositCapTest attestationTest`
+```
+./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
+    depositCapTest attestationTest hostTrustTest splitPointTest
+```
 
-Last run: all seven green, 394 / 6 / 5 / 16 / 16 / 6 / 12.
+Nine suites now: `531 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22` as of 2026-08-22.
+`hostTrustTest` and `splitPointTest` are newer than this runbook.
+
+**Two settings on this page have moved since it was written.** A dedicated server now
+declines migrations unless `acceptsMigration: true`, and caps a market's welcome grant at
+whatever `maxWelcomeGrant` says — unset means the compiled ceiling on a dedicated box and
+10,000 in somebody's game. Neither changes a Group C fixture, but a migration refused
+here is now a setting rather than a fault.
 
 ## Three things that will waste an hour if you don't know them
 

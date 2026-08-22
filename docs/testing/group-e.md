@@ -75,7 +75,7 @@ second market in the world (Add another market) and a foreign host visible on Ne
   spend time on. The scroll extent was measured against the frame while `place()` clipped
   rows to the panel's interior — five pixels in at each end — so the extent came up nine
   pixels short and the bottom row could never be scrolled into view at all. In this
-  setup that row is **Remove this market**. Fixed, and untested by eye
+  setup that row is **Remove this market**. Fixed, and confirmed in the sitting
 - Scrolled-off rows must not be clickable. Scroll a button half out of view and click
   where it was
 - Shrink the window to its smallest and confirm the column still scrolls rather than
@@ -348,6 +348,11 @@ by default** so nothing changes until a host sets it:
 
 It bounds one migration, not a career of them. Somebody arriving repeatedly under the cap
 still adds up — but they cannot, because of E12.
+
+**See also `E11b`**, which is further down the page rather than here: two people leaving
+one market together, which is a different guard and regressed once already. The numbering
+is out of order because the items are cited from commit messages and renumbering them
+would break those.
 
 ## E12. Migrating twice, which used to be unbounded
 
