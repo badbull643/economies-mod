@@ -326,6 +326,68 @@ public class MarketState {
      */
     public static final long MAX_LISTING_FEE = 1_000L;
 
+    /**
+     * The most orders a market may let someone hold open before the fee climbs.
+     *
+     * Not a safety bound — a large allowance is harmless, because the base fee is still
+     * charged on every order and that floor is what the stipend interlock rests on. It
+     * is a bound on nonsense: an allowance bigger than anyone's book is escalation
+     * switched off in a way that reads as though it were switched on.
+     */
+    public static final int MAX_LISTING_FREE_ORDERS = 1_000;
+
+    /** A listing fee and the allowance that goes with it, read off one field. */
+    public static final class ListingFeeSetting {
+        public final long fee;
+        public final int freeOrders;
+
+        public ListingFeeSetting(long fee, int freeOrders) {
+            this.fee = fee;
+            this.freeOrders = freeOrders;
+        }
+    }
+
+    /**
+     * Reads a listing fee written as "2", or "2/3" for a fee with an allowance, or null
+     * if it is neither.
+     *
+     * Lives here rather than beside the text field that calls it for the same reason
+     * bpsFromPercent does: it can then be tested without Minecraft, and this one needs
+     * it — a two-number field has more ways to be typed wrongly than a one-number field.
+     *
+     * One control for both because they are one decision. A fee and the allowance it
+     * escalates past are meaningless apart, and this project has had the same bug four
+     * times from keeping two things that must agree in two places. The stipend control
+     * already works this way, setting amount and interval together.
+     *
+     * Syntax only. Whether the numbers make sense together — an allowance on a fee of
+     * zero, a fee above the ceiling — is the caller's, so it can say which one is wrong
+     * instead of refusing the whole field with one message.
+     */
+    public static ListingFeeSetting listingFeeFromText(String text) {
+        if (text == null) return null;
+        String t = text.trim();
+        if (t.isEmpty()) return null;
+
+        int slash = t.indexOf('/');
+        if (slash != t.lastIndexOf('/')) return null;      // "2/3/4"
+
+        String feePart = slash < 0 ? t : t.substring(0, slash);
+        String freePart = slash < 0 ? "0" : t.substring(slash + 1);
+        // "2/" is a half-finished thought, not an allowance of zero. Saying so beats
+        // quietly setting a flat fee the typist did not ask for.
+        if (feePart.trim().isEmpty() || freePart.trim().isEmpty()) return null;
+
+        try {
+            long fee = Long.parseLong(feePart.trim());
+            int free = Integer.parseInt(freePart.trim());
+            if (fee < 0 || free < 0) return null;
+            return new ListingFeeSetting(fee, free);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     /** Basis points are per ten thousand. Named so the 10000 is never a loose literal. */
     public static final int BPS_DIVISOR = 10_000;
 

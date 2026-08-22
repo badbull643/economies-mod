@@ -441,8 +441,10 @@ public class MarketScreen extends Screen {
 
         this.listingFeeField = new TextFieldWidget(this.textRenderer,
                 rowX, rowY, halfW, FIELD_HEIGHT, new LiteralText("Listing fee"));
-        this.listingFeeField.setMaxLength(6);
-        hint(this.listingFeeField, "credits");
+        // Long enough for "1000/1000" — the field takes a fee, optionally followed by
+        // the allowance that goes with it.
+        this.listingFeeField.setMaxLength(9);
+        hint(this.listingFeeField, "2 or 2/3");
         onScreen(SCREEN_MARKET, this.listingFeeField);
 
         this.listingFeeButton = onScreen(SCREEN_MARKET,
@@ -1546,43 +1548,84 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        long fee;
-        try {
-            fee = Long.parseLong(raw);
-        } catch (NumberFormatException e) {
-            status = "Listing fee must be a whole number of credits";
+        // "2" is a flat fee; "2/3" is a fee of 2 with three orders free of escalation.
+        // One field for both because they are one decision — see listingFeeFromText,
+        // which is also where this is tested, since it cannot be tested from here.
+        MarketState.ListingFeeSetting parsed = MarketState.listingFeeFromText(raw);
+        if (parsed == null) {
+            status = "Type a fee like 2, or 2/3 for a fee of 2 with 3 orders free"
+                    + " before it climbs";
             return;
         }
-        if (fee < 0) {
-            status = "A listing fee cannot be negative";
-            return;
-        }
+
+        final long fee = parsed.fee;
+        final int free = parsed.freeOrders;
+
         if (fee > MarketState.MAX_LISTING_FEE) {
             status = "The most a market may charge to list is "
                     + MarketState.MAX_LISTING_FEE;
             return;
         }
-
-        MarketState market = MarketStateHolder.get();
-        long current = market == null ? 0 : market.listingFee();
-        if (fee == current) {
-            status = "The listing fee is already " + fee;
+        if (free > MarketState.MAX_LISTING_FREE_ORDERS) {
+            status = "The largest allowance is "
+                    + MarketState.MAX_LISTING_FREE_ORDERS + " orders";
+            return;
+        }
+        // An allowance is a number of orders you escalate *past*. With no fee there is
+        // nothing to escalate, so this would set a figure that does nothing and read
+        // like it did something.
+        if (fee == 0 && free > 0) {
+            status = "An allowance needs a fee to climb from — type 0 on its own to"
+                    + " remove the listing fee";
             return;
         }
 
-        String body = fee == 0
-                ? "Placing orders will be free again from the next one onward."
-                : "Placing an order will cost " + fee + " credits, whether it is a buy"
-                        + " or a sell, and whether or not it ever trades. It is not"
-                        + " returned if the order is cancelled — that is what makes it"
-                        + " discourage flooding the book, and also what makes it cost"
-                        + " something to reprice, so keep it small. Sellers pay it too,"
-                        + " so anyone holding goods and no credits will not be able to"
-                        + " list at all.";
+        MarketState market = MarketStateHolder.get();
+        long currentFee = market == null ? 0 : market.listingFee();
+        int currentFree = market == null ? 0 : market.listingFreeOrders();
+        if (fee == currentFee && free == currentFree) {
+            status = free > 0
+                    ? "The listing fee is already " + fee + " with " + free + " free"
+                    : "The listing fee is already " + fee;
+            return;
+        }
 
-        showConfirm(fee == 0 ? "Remove the listing fee?"
-                : "Charge " + fee + " credits to place an order?",
-                body, "Set fee", () -> submitPolicy(p -> p.listingFee = fee));
+        String body;
+        if (fee == 0) {
+            body = "Placing orders will be free again from the next one onward.";
+        } else {
+            body = "Placing an order will cost " + fee + " credits, whether it is a buy"
+                    + " or a sell, and whether or not it ever trades. It is not"
+                    + " returned if the order is cancelled — that is what makes it"
+                    + " discourage flooding the book, and also what makes it cost"
+                    + " something to reprice, so keep it small. Sellers pay it too,"
+                    + " so anyone holding goods and no credits will not be able to"
+                    + " list at all.";
+            body += free > 0
+                    ? " The first " + free + " orders somebody is holding open cost that"
+                            + " much each; the next costs double, the one after triple,"
+                            + " and so on. Cancelling one brings the cost back down, so"
+                            + " it prices what you are holding open rather than what you"
+                            + " have ever placed."
+                    : " The same for everyone, however many orders they are already"
+                            + " holding open. Add an allowance — 2/3 — to make it climb"
+                            + " for whoever is holding the most.";
+        }
+
+        String title;
+        if (fee == 0) {
+            title = "Remove the listing fee?";
+        } else if (free > 0) {
+            title = "Charge " + fee + " credits to place an order, after " + free
+                    + " free?";
+        } else {
+            title = "Charge " + fee + " credits to place an order?";
+        }
+
+        showConfirm(title, body, "Set fee", () -> submitPolicy(p -> {
+            p.listingFee = fee;
+            p.listingFreeOrders = free;
+        }));
     }
 
     /**
@@ -1805,6 +1848,8 @@ public class MarketScreen extends Screen {
         } else if (s.accepted) {
             status = "Trading fee " + formatBps(policy.taxBps)
                     + ", listing fee " + policy.listingFee
+                    + (policy.listingFreeOrders > 0
+                            ? " after " + policy.listingFreeOrders + " free" : "")
                     + (policy.stipendAmount > 0
                             ? ", stipend " + policy.stipendAmount + " every "
                                     + policy.stipendEveryFills + " trades"
@@ -1964,8 +2009,24 @@ public class MarketScreen extends Screen {
 
         long listing = market.listingFee();
         if (listing > 0) {
+            int freeOrders = market.listingFreeOrders();
             y = wrapped(m, "Listing fee: " + listing + " credits to place any order,"
                     + " kept even if you cancel", x, y, 0xFFAA55);
+            // Only when it is on. A market with no allowance charges the flat fee and
+            // has nothing extra to explain.
+            if (freeOrders > 0) {
+                MinecraftClient mc = MinecraftClient.getInstance();
+                String mine = "";
+                if (mc.player != null) {
+                    // What the next order would actually cost this player, which is the
+                    // question anybody reads this line to answer.
+                    long next = market.listingFeeFor(MinecraftIds.userIdOf(mc.player));
+                    if (next > listing) mine = " Yours would be " + next + ".";
+                }
+                y = wrapped(m, "Climbs above " + freeOrders + " orders held open: the"
+                        + " next costs double, the one after triple. Cancel one and it"
+                        + " falls again." + mine, x, y, 0x909090);
+            }
         }
 
         long stipend = market.stipendAmount();
