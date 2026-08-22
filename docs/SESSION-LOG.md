@@ -12,15 +12,87 @@ date, and was repeated for most of this session before anyone checked. Local `ma
 
 ---
 
+## 0. The read-through, and what it found
+
+*Added after §1–§9 below, which describe the session that built Group E. Nothing was
+built here: the whole of it was an inspection, and it found seven defects in code that
+had 437 passing checks behind it. Read this before §4, which predicted all of them.*
+
+Six of the seven are the §4 shape exactly — **two things that must agree, kept in two
+places** — and two of them are in the code §4 was written about. The suites are now
+`456 / 6 / 5 / 16 / 16 / 6 / 12`, and each engine fix was verified to **fail** with the
+fix disabled before being trusted.
+
+1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
+   in one place and applied in another, and only the applier knew about the listing fee:
+   `validate` passed, the event went into the log, and `apply` deposited the goods and
+   *then* refused. The client answers a refusal by handing the physical items back, so
+   they existed on both sides — and the host, having appended but not broadcast, left
+   every other client to take a sequence gap. Both halves now ask
+   `MarketState.canDepositAndList`. **`A5` in the checklist already ran this recipe and
+   was marked passing**; the message it looked for could only have come from the path
+   that had already deposited.
+
+2. **`MarketArchive.verifyLines` called `apply` without `validate`** — on the one path
+   documented as treating a history as "a file from a stranger". `apply` enforces none of
+   the money rules; they live in `validate`, because that is where a host asks them
+   before appending. So a hand-built log could carry a welcome grant for any sum,
+   repeated as often as you like, and the balance it replayed to is what a migration
+   brings in. Measured before the fix: an archive replaying to 3,000,999,997 credits
+   against a published grant of 10. Nothing downstream caught it either —
+   `migrationObjection` weighs a migrant's *items* against their own statistics and never
+   their credits. Both are called now, in that order.
+
+3. **`MarketScreen` kept its own copy of the stipend interlock**, and the copy was the
+   version from before the rule was corrected twice — two listing fees per fill, one
+   claimant. It advertised "the most is 199" where the engine refused anything from 100.
+   `stipendOutpacesItsFees` is public now and the screen asks it. `ServerConfig` had
+   already been through this and says so in a comment; the second copy was missed.
+
+4. **The Market column's last row could never be scrolled into view.** `place()` clips a
+   row to `panelTop`/`panelBottom`; the scroll extent was measured against
+   `frameTop`/`frameH`. Those differ by the panel's five-pixel inset at each end, leaving
+   the extent nine pixels short — so the bottom control was unreachable at any offset.
+   In `E1`'s own setup that row is **Remove this market**. `noteScrollable` now takes the
+   view height separately from the rectangle that catches the wheel, because they were
+   never the same rectangle.
+
+5. **The escalating listing fee was off by one** against its own javadoc and `E2`: it
+   counted orders already resting and not the one being placed, so an allowance of three
+   let four orders through at the base fee. `T1e` pinned that — while its own comment
+   said "the fourth starts climbing". Both corrected.
+
+6. **The render thread read the whole of `MarketState` unsynchronised.** `markets`,
+   `WalletRegistry`, `ItemBalanceRegistry`, `TradeHistory` and every `OrderBook` are
+   plain maps written by the applier thread and read every frame while drawing —
+   `TradeHistory.tradedItems()` handed out a live `keySet` view. The reasoning was
+   already written down on `keyDirectory` and simply not carried anywhere else. Each
+   class guards its own collections now.
+
+7. **The About line offered a stipend to people who cannot claim one.** An unregistered
+   viewer has no last claim on record, which reads as fill zero, so the countdown went
+   negative and said "yours is waiting" beside a button that would never appear.
+
+`E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
+
+**What this says about the balance of effort.** §3 below says nearly every bug that
+session came from playing rather than reading. That was true and is still true of the UI
+— but the two that mattered most here were found by reading, and neither was reachable
+from a checklist: one needed a crafted file, the other needed a seller with no money at
+the moment a fee was set. §3's lesson holds for the screen; it does not generalise to the
+engine.
+
 ## 1. Where things stand
 
 The roadmap is finished. Everything in Phases 0–5 is done or deliberately closed. This
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 437   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 456   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 16   depositCapTest 6   attestationTest 12
 ```
+
+*(437 when this section was written; the 19 added are §0's.)*
 
 Every engine change below was verified to **fail** with its fix disabled before being
 trusted, per the project's existing discipline. Three failed the first time for a reason
