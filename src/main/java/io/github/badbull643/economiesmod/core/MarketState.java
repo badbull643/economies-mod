@@ -74,8 +74,29 @@ public class MarketState {
         return accountedElsewhere.contains(userId);
     }
 
+    /**
+     * Identities that have already carried a balance into this market, from anywhere.
+     *
+     * Distinct from both sets above, and the distinction is the whole point.
+     * migrationsDone is keyed to a source market, so it cannot see somebody arriving
+     * again from a market they have just created. accountedElsewhere holds everyone who
+     * was *registered* in a market somebody migrated away from — which is a different
+     * group entirely: it exists to deny them a second welcome grant, not to deny them
+     * their own balance, and its own note says they get that "if they turn up".
+     *
+     * Using accountedElsewhere for this refused the second person to migrate out of a
+     * shared market, because the first migration had already filed everyone who lived
+     * there. Which is the ordinary case, not the abusive one.
+     */
+    private final Set<UUID> migratedIn = ConcurrentHashMap.newKeySet();
+
+    public boolean hasMigratedIn(UUID beneficiary) {
+        return migratedIn.contains(beneficiary);
+    }
+
     void recordMigration(UUID fromMarketId, UUID beneficiary, List<UUID> participants) {
         migrationsDone.add(fromMarketId + ":" + beneficiary);
+        migratedIn.add(beneficiary);
         if (participants != null) accountedElsewhere.addAll(participants);
     }
 
