@@ -25,12 +25,13 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 ## 0. The read-through, and what it found
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
-built here: the whole of it was an inspection, and it found nine defects in code that had
-437 passing checks behind it. Read this before §4, which predicted almost all of them.*
+built here: the whole of it was an inspection, and it found ten defects in code that had
+437 passing checks behind it — the last of them a whole feature that could not be switched
+on. Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`460 / 6 / 5 / 16 / 16 / 6 / 12 / 11`, the last being a new `hostTrustTest`, and each
+`477 / 6 / 5 / 16 / 16 / 6 / 12 / 11`, the last being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -110,6 +111,26 @@ having started:
    from a draw call, and filling the map with empty books for items nobody has traded.
    All four are `peekBook` now. Its javadoc had said exactly this since it was written.
 
+And a tenth, found by someone asking how to run `E2`:
+
+10. **The free-order allowance had no control of any kind**, so the escalating listing
+    fee was unreachable code. `listingFreeOrders` was written in exactly one place —
+    `submitPolicy`, which copies whatever it already was — and `MarketBootstrap` never
+    set it, so it was zero at genesis and zero forever in every market that has ever
+    existed. No field, no `ServerConfig` key, no command; the checklist said "set the
+    free allowance above 0 by hand" and there was no by hand. A feature built, tested,
+    documented, and shipped switched permanently off, with #5's off-by-one sitting inside
+    it where nobody could ever have hit it.
+
+    The **Listing fee** field now takes `2` or `2/3`, the way the stipend control sets
+    amount and interval together — one decision, one control, per §4. Parsing lives in
+    `MarketState.listingFeeFromText` for the reason `bpsFromPercent` does: so it can be
+    tested without Minecraft, which `T5b` does.
+
+    Worth noticing how it was found. Nothing in the code says a field is unreachable, and
+    every test passed — `T1e` sets `listingFreeOrders` directly, which no user can. It
+    took somebody trying to follow the instructions.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -125,7 +146,7 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 460   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 477   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 16   depositCapTest 6   attestationTest 12   hostTrustTest 11
 ```
 

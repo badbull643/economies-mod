@@ -2773,6 +2773,74 @@ public class MarketTests {
                             ? 1 : 0, 1);
         }
 
+        section("T5b: a listing fee typed with its allowance");
+        {
+            // The allowance had no control at all until now — no field, no server-config
+            // key, nothing. listingFreeOrders was set in exactly one place, submitPolicy,
+            // which copies whatever it already was, so it was zero at genesis and zero
+            // forever. Every market ever created charged the flat fee, and the whole
+            // escalating half of this feature was unreachable code with a test behind it.
+            //
+            // One field for both, because a fee and the allowance it climbs past are one
+            // decision, and this project keeps finding the same bug in two numbers kept
+            // in two places.
+            check("a bare number is a flat fee",
+                    MarketState.listingFeeFromText("2").fee, 2);
+            check("and carries no allowance",
+                    MarketState.listingFeeFromText("2").freeOrders, 0);
+
+            check("a slash carries the allowance",
+                    MarketState.listingFeeFromText("2/3").fee, 2);
+            check("with the orders after it",
+                    MarketState.listingFeeFromText("2/3").freeOrders, 3);
+
+            check("space around it is not an error",
+                    MarketState.listingFeeFromText("  2 / 3  ").freeOrders, 3);
+            check("zero turns the fee off",
+                    MarketState.listingFeeFromText("0").fee, 0);
+            check("an explicit zero allowance is flat",
+                    MarketState.listingFeeFromText("5/0").freeOrders, 0);
+
+            // Half-typed rather than meaning zero. Reading "2/" as a flat fee would set
+            // a policy the typist did not ask for and say nothing about it.
+            check("a trailing slash is refused",
+                    MarketState.listingFeeFromText("2/") == null ? 1 : 0, 1);
+            check("a leading slash is refused",
+                    MarketState.listingFeeFromText("/3") == null ? 1 : 0, 1);
+            check("two slashes are refused",
+                    MarketState.listingFeeFromText("2/3/4") == null ? 1 : 0, 1);
+            check("a negative fee is refused",
+                    MarketState.listingFeeFromText("-1") == null ? 1 : 0, 1);
+            check("a negative allowance is refused",
+                    MarketState.listingFeeFromText("2/-1") == null ? 1 : 0, 1);
+            check("a decimal is refused — orders are whole",
+                    MarketState.listingFeeFromText("2.5") == null ? 1 : 0, 1);
+            check("words are refused",
+                    MarketState.listingFeeFromText("two") == null ? 1 : 0, 1);
+            check("empty is refused",
+                    MarketState.listingFeeFromText("") == null ? 1 : 0, 1);
+            check("null is refused",
+                    MarketState.listingFeeFromText(null) == null ? 1 : 0, 1);
+
+            // And what the parsed pair actually does, so this block is about the feature
+            // rather than about string handling.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "allowance market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.wallets().setBalance(ALICE, 10_000L);
+            m.deposit(ALICE, IRON, 100);
+
+            MarketState.ListingFeeSetting typed = MarketState.listingFeeFromText("2/3");
+            m.setListingFee(typed.fee);
+            m.setListingFreeOrders(typed.freeOrders);
+
+            for (int i = 0; i < 3; i++) {
+                m.submitOrder(new Order(700 + i, 60 + i, IRON, 1, false, ALICE));
+            }
+            check("typing 2/3 really does buy three orders at the base fee",
+                    m.listingFeeFor(ALICE), 4);
+        }
+
         section("T5: a fee typed as a percentage becomes exact basis points");
         {
             // The one place a human decimal meets a number every replica must agree on.
