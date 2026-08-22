@@ -104,12 +104,24 @@ public class HostServer {
      */
     private static final class ClientLink {
         final MessageChannel channel;
+        /**
+         * What this peer called itself in its Hello, or null.
+         *
+         * Kept so the host can answer "is this participant on my chain now" — a client
+         * that completed the handshake is, by definition, because this host sequenced
+         * everything it holds. A stale fork warning about somebody who has since joined
+         * you has no other way to be retired: the discovery poll is what clears one, and
+         * it only sees hosts, so a peer who stops hosting to come and join you leaves
+         * the warning standing forever.
+         */
+        final String peerName;
         private final BlockingQueue<Message> outbound;
         private final Thread writer;
         private volatile boolean open = true;
 
-        ClientLink(MessageChannel channel, int queueDepth) {
+        ClientLink(MessageChannel channel, int queueDepth, String peerName) {
             this.channel = channel;
+            this.peerName = peerName;
             this.outbound = new ArrayBlockingQueue<>(queueDepth);
             this.writer = new Thread(this::drain, "market-writer");
             this.writer.setDaemon(true);
@@ -293,6 +305,30 @@ public class HostServer {
                 + state.marketId() + ") — replayed " + log.lastSeq() + " events");
 
         warnIfGrantDisagrees();
+    }
+
+    /**
+     * Whether a peer by this name is synced to this host right now.
+     *
+     * Asked by a fork warning deciding whether it is still true. A client that completed
+     * the handshake holds exactly this host's chain — that is what the handshake is for —
+     * so a warning that they are on a different branch is answered by their presence, and
+     * nothing else will ever answer it: the discovery poll retires a warning by seeing
+     * the named host agree, and somebody who stops hosting in order to come and join you
+     * is no longer a host to be seen.
+     *
+     * By name, because a name is all a FORK refusal carries — Refused has hostName and no
+     * identity — and the two have to be comparable. That is weaker than a key and is the
+     * right weakness here: the cost of a collision is a warning retired early on a market
+     * the player is already connected to, and the cost of not asking is a warning that
+     * never goes away.
+     */
+    public boolean hasSyncedClient(String peerName) {
+        if (peerName == null) return false;
+        for (ClientLink c : clients) {
+            if (peerName.equals(c.peerName)) return true;
+        }
+        return false;
     }
 
     /**
@@ -587,7 +623,7 @@ public class HostServer {
             // Synced clients may sit idle indefinitely.
             socket.setSoTimeout(0);
 
-            link = new ClientLink(channel, config.outboundQueueDepth);
+            link = new ClientLink(channel, config.outboundQueueDepth, hello.displayName);
             clients.add(link);
             System.out.println("[host] " + channel.remoteAddress() + " synced and live ("
                     + clients.size() + " connected)");

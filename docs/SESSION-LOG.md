@@ -44,10 +44,9 @@ nothing depends on that.
 4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was §0.20 — the
-reset confirmation, rewritten after `E18` and `E19` both passed exactly and the dialog
-turned out to be the only thing wrong. **`E17`, `E17b`, `E19b` and the `E13`/`E14`
-re-checks are still unrun**, and backlog item 7 is open from the same sitting.
+**What is being worked on right now:** nothing. The last thing finished was §0.21 — a fork
+warning that no longer outlives the fork. **`E17`, `E17b`, `E19b`, `E20` and the
+`E13`/`E14` re-checks are all unrun**, and backlog item 7 is open from the same sitting.
 
 ---
 
@@ -55,7 +54,7 @@ re-checks are still unrun**, and backlog item 7 is open from the same sitting.
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found twenty defects in code that had 437 passing checks behind it — one a whole
+and it found twenty-one defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
@@ -482,6 +481,50 @@ And a twentieth, from running `E18` and `E19` — **both of which passed, exactl
     for §3 yet: the engine was right, the tests were right, the numbers were right, and
     the thing that was wrong was a paragraph — which no test can fail on and only a person
     can notice.
+
+And a twenty-first, reported from the same evening:
+
+21. **A fork warning could not be retired by the fork ending.** Alice warned that Bob was
+    on a different branch; Bob discarded his branch and joined her; the banner stayed up
+    for the rest of the session, and `MS_FORKED` drives more than a message.
+
+    `observeHostHead` was the only thing that ever cleared a divergence, and it clears one
+    by watching **the named host** advertise a matching head. Somebody who stops hosting
+    in order to come and join you is no longer a host. So the single most conclusive piece
+    of evidence available — that peer completing a handshake with our own HostServer,
+    which by definition hands them our chain — was the one source nothing consulted.
+
+    Two ways out now, one per direction. `hasSyncedClient` answers "is this participant on
+    my chain right now", asked from `divergence()` so every consumer gets the same answer
+    and the banner cannot disagree with the reset about whether a fork is still on. And
+    adopting a host's chain on a successful connect retires every claim on record, because
+    each was measured against a head we no longer have — the poll recomputes any that
+    still hold the next time it sees that host, so nothing is lost.
+
+    **Matched by name, which is the honest weakness.** `MarketClient.Refused` carries
+    `hostName` and no identity, so a name is what the two sides have in common; giving the
+    refusal an identity is a protocol change and this is not worth one. The asymmetry is
+    the argument: a collision retires a warning early on a market the player is already
+    connected to, and not asking left a warning that never went away. `E20` covers both,
+    including the three-participant case where Carol syncing must not answer for Alice.
+
+    Two smaller things came in with it, from the same report:
+
+    - **"I remember it saying 70 cobblestone, not 60."** Both were on screen and both were
+      right. The refund was 60 — the post-split deposit. The old dialog opened with
+      `describeLoss`, which is `NetPosition`: **every** credit and item held, pre-split
+      ones included, plus goods reserved in resting sells. Two numbers measuring different
+      things, in adjacent sentences, with nothing saying so. §0.20's rewrite drops
+      `describeLoss` from the forked case entirely for exactly this reason, and the
+      report is the evidence that it needed dropping rather than explaining.
+    - **`ALSOFT WaitForSingleObjectEx error` and `Can't keep up! Running 3343ms behind`**
+      are not this mod. The first is OpenAL's mixer thread and the second is vanilla's
+      tick watchdog, both routine with two clients and a host on one machine. Worth
+      writing down because they arrived in the same breath as two real bugs and look
+      alike from outside. The mod's per-tick work is a fill flush, a cheats check and a
+      refund drain; a 71-event replay is not a stall. If this ever *is* us, it will be
+      backlog item 2's territory — a long log walked on world load — and it will scale
+      with the log rather than appearing at 71 events.
 
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 

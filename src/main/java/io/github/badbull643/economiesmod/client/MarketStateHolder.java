@@ -141,8 +141,35 @@ public class MarketStateHolder {
 
     private static volatile Divergence divergence;
 
-    /** The most recently detected divergence, or null if everything we've seen agrees. */
-    public static Divergence divergence() { return divergence; }
+    /**
+     * The most recently detected divergence, or null if everything we've seen agrees.
+     *
+     * Retires a claim that has been answered since. Reported from play: Alice warned that
+     * Bob was on a different branch, Bob discarded his branch and joined her, and the
+     * banner stayed up for the rest of the session. Only observeHostHead cleared a
+     * divergence, and it clears one by watching the named host agree — so a peer who
+     * stops hosting in order to join you leaves the warning with nothing that could ever
+     * take it down. Somebody synced to our own host is the strongest possible evidence
+     * that the fork is over, and it was the one source nothing consulted.
+     *
+     * Cleared through the accessor rather than at the moment of syncing, because the
+     * moment is in core and the claim is here — and because everything that acts on a
+     * divergence comes through this method, which is what stops the banner and the reset
+     * disagreeing about whether there is still a fork. Ask this, never the field.
+     */
+    public static Divergence divergence() {
+        Divergence d = divergence;
+        if (d == null) return null;
+
+        HostServer host = hostServer;
+        if (host != null && host.hasSyncedClient(d.hostName)) {
+            divergence = null;
+            System.out.println("[economiesmod] " + d.hostName + " is synced to this host"
+                    + " now — retiring the fork warning about them");
+            return null;
+        }
+        return d;
+    }
 
     // (hostUserId → "seq:hash") for heads we've already compared. Checking costs a full
     // read of the log, and a poll repeats every 10s against a head that usually hasn't
@@ -699,6 +726,17 @@ public class MarketStateHolder {
             localState = null;
             mode = targetMode;
             lastRefusal = null;
+
+            // Every divergence on record was a claim about our chain against somebody
+            // else's, and we have just adopted this host's. The claims are not wrong so
+            // much as measured against a head we no longer have, and the poll recomputes
+            // any that still hold the moment it next sees that host — so this retires
+            // them rather than losing them. The mirror of hasSyncedClient in
+            // divergence(): that covers the peer joining us, this covers us joining them,
+            // and between them a fork warning cannot outlive the fork whichever way round
+            // the two players settled it.
+            divergence = null;
+            checkedHeads.clear();
 
             // Remembered so a dropped broadcast can be recovered by reconnecting to
             // the same host without the player re-entering anything. See resync().
@@ -1652,7 +1690,7 @@ public class MarketStateHolder {
         long splitAt = -1;
         long oursSince = -1;
 
-        Divergence d = divergence;
+        Divergence d = divergence();
         if (d != null && currentWorldDir != null) {
             splitAt = d.splitAt;
             try {
@@ -1774,7 +1812,7 @@ public class MarketStateHolder {
     private static List<Refund> depositsLostToReset() {
         List<Refund> out = new ArrayList<>();
 
-        Divergence split = divergence;
+        Divergence split = divergence();
         if (split == null || currentWorldDir == null) return out;
 
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -1802,7 +1840,7 @@ public class MarketStateHolder {
     private static List<OldOrder> ordersLostToReset() {
         List<OldOrder> out = new ArrayList<>();
 
-        Divergence split = divergence;
+        Divergence split = divergence();
         if (split == null || currentWorldDir == null) return out;
 
         MinecraftClient mc = MinecraftClient.getInstance();
