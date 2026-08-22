@@ -4,7 +4,15 @@
 that now scrolls. All of it has automated coverage and none of it has been run in game.
 The UI half matters most, because nobody has looked at it.*
 
-Run the suites first. Expect `437 / 6 / 5 / 16 / 16 / 6 / 12`.
+Run the suites first. Expect `460 / 6 / 5 / 16 / 16 / 6 / 12 / 11`:
+
+```
+./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
+    depositCapTest attestationTest hostTrustTest
+```
+
+`hostTrustTest` is new — it checks a host is trusted to order events and for nothing
+else.
 
 Do **E1 before anything else** — the layout changed under every other test on this list,
 so a fault there will look like a fault in whatever you were actually testing.
@@ -179,3 +187,25 @@ against their own statistics, and never their credits.
   risk in the fix — refusing too much — and it is what to actually check
 - The refusal for a bad archive names the rule, not the signature: *"event N breaks this
   market's own rules"*
+
+## E10. A host that is trusted too far
+
+Engine-tested (`hostTrustTest` H1/H2), and the reason `E9` is only half the story.
+`MarketClient` verified every broadcast's signature and then called `apply` — never
+`validate`. A signature proves who wrote an event, not that the event was allowed, and
+everything deciding that lives in `validate`. So a modified host could sequence itself a
+grant for any sum, sign it correctly with its own key, and every connected replica would
+apply it, **write it to its own log, and re-serve it the next time that player hosted.**
+
+The client asks `validate` now, and refuses the connection if it fails. That is a real
+change to the live sync path, so the thing to watch for is the opposite failure:
+
+- Join a host, trade for a while, have somebody else join and trade too. **Nothing should
+  ever disconnect you with "host sent an event this market's own rules refuse".** That
+  message appearing during ordinary play means validate and the host's own append path
+  have come apart, which is a bug in this change and not in the host
+- The same across a reconnect, and across a host handover — the two moments where a
+  client's state and the host's are most likely to differ
+- A dedicated server, since its market's creator is the box and its policy path differs
+
+If it does fire, the console line names the rule and the sequence number. Keep it.
