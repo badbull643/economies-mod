@@ -16,7 +16,7 @@ in-progress edit to pick up.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`. If any of it fails on a clean
+Expect `565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. If any of it fails on a clean
 checkout, that is news — it has only ever been run on one machine (backlog item 4).
 
 **Where the code is.** Branch `trust-model-and-migration`, ahead of its remote and 0
@@ -44,11 +44,10 @@ nothing depends on that.
 4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
    re-check because their code moved afterwards or is newer than the sitting.
 
-**What is being worked on right now:** nothing. The last thing finished was §0.23, the
-fourth unscrollable list in `MarketScreen`. **`E17`, `E17b`, `E19b` and `E21`, plus the
-`E13`/`E14` re-checks, are all unrun.** Backlog item 7 is down to its last third — the
-discovery poll — and item 5 has an argument behind it now that the line count never gave
-it.
+**What is being worked on right now:** nothing. The last thing finished was §0.24–25,
+which closes backlog item 7: the discovery poll now asks whether a longer peer is on our
+chain instead of assuming it. **`E17`, `E17b`, `E19b`, `E21` and `E22`, plus the
+`E13`/`E14` re-checks, are all unrun** — five of them touch code written the same day.
 
 ---
 
@@ -56,14 +55,14 @@ it.
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found twenty-three defects in code that had 437 passing checks behind it — one a whole
+and it found twenty-five defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`, the eighth being a new `hostTrustTest`, and each
+`565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`, the eighth being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -582,6 +581,65 @@ And a twenty-second and twenty-third, from re-running `E19` and `E20` the same n
     list has more in it than the box was built for. That is the argument for backlog item
     5 that the line count never made.
 
+And a twenty-fourth and twenty-fifth, closing backlog item 7:
+
+24. **The poll could not tell a longer chain from a different one, and guessed.** A probe
+    carries a host's head and nothing below it, so when that head is *above* ours there
+    is no point the two chains can be compared at. `observeHostHead` returned without an
+    opinion, and two things went wrong with that.
+
+    A fork with a longer peer stayed **invisible** until somebody pressed Connect — so
+    which side saw the warning was decided by nothing but which branch happened to be
+    longer. Both sittings show it: on the first, Alice at 90 against Bob's 98 saw nothing
+    and Bob saw everything; on the second, roles reversed, the poll flagged it before
+    anybody connected. Same code, opposite outcome, decided by an accident.
+
+    And the height was recorded **anyway**. `observeMarketHeight` was the first line of
+    the method, before a single hash had been compared, so a forked peer's head was filed
+    as this market advancing. Alice came away permanently "8 events behind" a branch that
+    was never hers, in a mark that is monotonic and persisted. Not cosmetic: `eventsBehind`
+    gates Host, and it told the participant on the chain everybody else shared that
+    hosting it would split the market, then advised catching up from a peer who would
+    refuse them. **The warning designed to prevent a fork was fired by one, at the only
+    person who had not caused it.**
+
+    It asks now. One `HashQuery` for their hash at **our** head: matching means our chain
+    is a prefix of theirs and they genuinely extend us, so the height is real and "behind"
+    is true; not matching means a fork, the height is not ours to record, and the split is
+    worth finding. `MarketClient.hashAt` is a single question with a yes-or-no answer,
+    deliberately not `findSplitPoint` — searching is for after the answer is no.
+
+    **What it costs, which is what kept it out.** One round trip per peer, and only when
+    that peer's head has moved: `checkedHeads` was already keyed by (peer, head) and its
+    early return pays for this, so a peer sitting still costs nothing, which is the
+    ordinary case for a poll on a timer. The split point is looked up before it is
+    searched for, because it does not move — two branches that have parted stay parted,
+    and both only grow — so an active fork does not re-run a bracketing search every time
+    either side places an order.
+
+25. **Discovering any host on a different market wiped the watermark.**
+    `MarketHighWater.observe` starts a fresh record when the id it is handed differs from
+    the one on file — reasonably, since it holds one market — and `observeHostHead` called
+    it **before** checking the market id was ours. So a poll that found a friend serving
+    something else reset the note of how far our market had reached.
+
+    That destroys precisely what the thing exists for. Its own design note says checking
+    live peers is not enough because *"someone returns after a week, nobody else happens
+    to be online, discovery finds nothing, and they host a log that is hundreds of events
+    behind"* — the watermark is what survives to tell them. A watermark that any foreign
+    host can clear does not survive anything.
+
+    Fixed by where §0.24 put the call: after the market id is confirmed ours, and after
+    the chain is confirmed ours too. Found by reading the call order while moving it,
+    which is the only way it could have been found — nothing observable changes until the
+    day somebody needed the warning and it had been quietly zeroed.
+
+    `hashAt` is pinned by `splitPointTest`, now 27 checks. Neither of these two is
+    testable where it lives: `observeHostHead` is client code with a `MinecraftClient` in
+    it, which is the same reason `E13` has no unit test. `E22` is the live half, and it is
+    the one that matters, because both defects were about what happens between two
+    machines rather than inside one.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -599,7 +657,7 @@ session went on what running it turned up, then on one new feature.
 ```
 coreTests 565   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 25   depositCapTest 6   attestationTest 12   hostTrustTest 16
-splitPointTest 22
+splitPointTest 27
 ```
 
 *(437 across seven suites when this section was written; the extra 57 checks and the

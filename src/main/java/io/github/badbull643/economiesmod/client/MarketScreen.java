@@ -1065,9 +1065,14 @@ public class MarketScreen extends Screen {
                         // Also compares their head against our chain — the poll already
                         // carries a signed (seq, hash), so a split is detectable here
                         // without anyone attempting a connection first.
+                        // The address rides along because the comparison is no longer
+                        // always local: a peer claiming a head above ours has to be
+                        // asked for their hash at ours, and the probe reply cannot
+                        // carry a point it was not asked about.
                         MarketStateHolder.observeHostHead(
                                 UUID.fromString(h.reply.marketId), h.reply.lastSeq,
-                                h.reply.lastHash, h.reply.userId, h.reply.hostName);
+                                h.reply.lastHash, h.reply.userId, h.reply.hostName,
+                                h.peer.address, h.peer.port);
                     } catch (IllegalArgumentException ignored) {
                         // malformed marketId from a peer — not ours to fix
                     }
