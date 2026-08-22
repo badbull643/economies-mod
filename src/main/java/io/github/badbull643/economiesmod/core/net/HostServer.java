@@ -1735,16 +1735,22 @@ public class HostServer {
             System.exit(2);
         }
 
+        // Reached only from the standalone launcher, so this is what "dedicated" means:
+        // started from a command line rather than from inside somebody's game. Forced
+        // rather than read, so a config copied from a client cannot claim otherwise.
+        //
+        // Ahead of --write-config, not after it. Everything below this point is true of
+        // anything that reaches this main, so writing the file first produced a snapshot
+        // taken before the one line that makes it a server — it wrote dedicated:false
+        // for a dedicated server, and now that a default is derived from it, the wrong
+        // answer for anything keyed to it. --help calls this "the effective config".
+        cfg.dedicated = true;
+
         if (writeConfig) {
             cfg.save(configFile);
             System.out.println("[host] wrote " + configFile.toAbsolutePath());
             return;
         }
-
-        // Reached only from the standalone launcher, so this is what "dedicated" means:
-        // started from a command line rather than from inside somebody's game. Forced
-        // rather than read, so a config copied from a client cannot claim otherwise.
-        cfg.dedicated = true;
 
         Path logFile = Paths.get(cfg.logFile);
         System.out.println("[host] log file: " + logFile.toAbsolutePath());
