@@ -3,6 +3,18 @@ package io.github.badbull643.economiesmod.core;
 import java.util.*;
 import java.util.UUID;
 
+/**
+ * One item's book of resting orders.
+ *
+ * Every public method is synchronized on the book. EventApplier matches into it from
+ * the sequencer or network reader thread, while the render thread calls restingAsks and
+ * restingBids to draw it and MarketState.listingFeeFor walks every book to count what
+ * an identity holds open. Those readers build lists by iterating the live deques, which
+ * is a ConcurrentModificationException the moment an order crosses mid-frame.
+ *
+ * Per book, so two items never contend, and nothing holds another monitor while taking
+ * this one — the book never calls back out into MarketState.
+ */
 //this is the single item book version so change from the multi item book take this into account
 public class OrderBook {
     //eventually change too an ordered map for clean iteration
@@ -11,7 +23,7 @@ public class OrderBook {
 
 
     //readd the comments so this makes sense pretty much
-    public List<Fill> submit(Order order) {
+    public synchronized List<Fill> submit(Order order) {
         List<Fill> fills = new ArrayList<>();
 
         if (order.isBid()) {
@@ -92,7 +104,7 @@ public class OrderBook {
     }
 
 
-    public Order cancel(long orderId, boolean isBid, UUID expectedUserId) {
+    public synchronized Order cancel(long orderId, boolean isBid, UUID expectedUserId) {
         TreeMap<Long, Deque<Order>> side = isBid ? bids : asks;
         for (Map.Entry<Long, Deque<Order>> entry : side.entrySet()) {
             Deque<Order> queue = entry.getValue();
@@ -109,7 +121,7 @@ public class OrderBook {
         return null;
     }
 
-    public List<Order> restingAsks() {
+    public synchronized List<Order> restingAsks() {
         List<Order> out = new ArrayList<>();
         for (Deque<Order> q : asks.values()) {
             out.addAll(q);
@@ -118,7 +130,7 @@ public class OrderBook {
     }
 
     /** Snapshot of resting buy orders, highest price first. */
-    public List<Order> restingBids() {
+    public synchronized List<Order> restingBids() {
         List<Order> out = new ArrayList<>();
         for (Deque<Order> q : bids.descendingMap().values()) {
             out.addAll(q);
@@ -126,7 +138,7 @@ public class OrderBook {
         return out;
     }
 
-    public Order find(long orderId, boolean isBid) {
+    public synchronized Order find(long orderId, boolean isBid) {
         TreeMap<Long, Deque<Order>> side = isBid ? bids : asks;
         for (Deque<Order> queue : side.values()) {
             for (Order o : queue) {

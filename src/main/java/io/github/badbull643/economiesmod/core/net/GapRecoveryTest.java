@@ -61,6 +61,8 @@ public class GapRecoveryTest {
 
     private static Path dir;
     private static UUID marketId;
+    /** Where the built history ends, so assertions do not restate genesis's size. */
+    private static long head;
     private static PlayerKeys hostKeys;
     private static PlayerKeys joinerKeys;
 
@@ -108,6 +110,7 @@ public class GapRecoveryTest {
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST, "gap test market", hostKeys);
         marketId = log.marketId();
+        long afterGenesis = log.lastSeq();
 
         Event.KeyRegistered kr = new Event.KeyRegistered();
         kr.userId = JOINER;
@@ -127,7 +130,11 @@ public class GapRecoveryTest {
         }
 
         lines = Files.readAllLines(hostLog, StandardCharsets.UTF_8);
-        check("history built", log.lastSeq(), 6);
+        // Five events on top of whatever genesis writes, and remembered rather than
+        // written out again below — genesis is free to grow, the history built here is
+        // not.
+        head = log.lastSeq();
+        check("history built", head - afterGenesis, 5);
     }
 
     /**
@@ -251,7 +258,7 @@ public class GapRecoveryTest {
                     new PeerCache(dir.resolve("gap-client-peers.json")), 0);
             client.connect("127.0.0.1", port);
 
-            check("caught up to the market's head", client.lastSeq(), 6);
+            check("caught up to the market's head", client.lastSeq(), head);
             check("with no gap reported", client.needsResync() ? 1 : 0, 0);
 
             client.disconnect();

@@ -7,6 +7,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 
@@ -294,13 +295,17 @@ public class MarketTests {
             // Swap in a valid signature from a different event. Without the signature
             // in the hash, this would go undetected.
             List<String> lines = Files.readAllLines(file);
-            String forged = lines.get(1).replaceAll("\"signature\":\"[^\"]*\"",
+            int at = lineOf(lines, "Deposit");
+            String forged = lines.get(at).replaceAll("\"signature\":\"[^\"]*\"",
                     "\"signature\":\"" + testKeys().sign("something else") + "\"");
-            lines.set(1, forged);
+            lines.set(at, forged);
             Files.write(file, lines);
 
             EventLog tampered = new EventLog(file);
-            check("swapped signature breaks the chain", tampered.verifyChain(), 2);
+            // Derived from where the forgery went rather than written out: the seq the
+            // deposit lands on is genesis plus whatever else genesis writes, and hard-
+            // coding it made this assert a layout that was free to change.
+            check("swapped signature breaks the chain", tampered.verifyChain(), at + 1);
         }
 
         section("J3: genesis rules — a market has exactly one birth certificate");
@@ -819,6 +824,294 @@ public class MarketTests {
                     EventApplier.validate(live, ok).accepted ? 1 : 0, 1);
         }
 
+        section("M6b: and migrating is itself holding a position, which it was not");
+        {
+            // M6 above proves the mint is refused for somebody *registered* here. That
+            // is the case that never mattered, because a migrant does not have to be.
+            //
+            // A MigrateBalance registers nobody and grants nobody, so neither of the two
+            // tests M6 relies on is ever true of an identity that has only migrated. And
+            // the per-branch guard is keyed to the source market, which is a fresh
+            // random id every time somebody creates one. So the same identity could
+            // create a market at the grant ceiling, take it, migrate in, reset, and
+            // repeat — measured at four million credits in four passes, against a market
+            // whose founder held fifty, without ever registering.
+            //
+            // isAccountedElsewhere is the test that is true of them: recordMigration
+            // files every participant of the market they came from, and they are one of
+            // those. It was already refusing them a second welcome grant; it just was
+            // not being asked here.
+            Path file = scratch("test-log-m6b.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+
+            long seqAt = log.lastSeq();
+            long carried = 0;
+            int accepted = 0;
+
+            // Four markets, each one Carol's own, each with a fresh id.
+            for (int i = 0; i < 4; i++) {
+                Event.MigrateBalance mb = new Event.MigrateBalance();
+                mb.userId = ALICE;                      // the host authors it
+                mb.marketId = live.marketId();
+                mb.fromMarketId = UUID.randomUUID();    // a market carol made this time
+                mb.fromMarketName = "carol's market " + i;
+                mb.beneficiary = CAROL;
+                mb.credits = MarketState.MAX_WELCOME_GRANT;
+                mb.items = new java.util.TreeMap<>();
+                mb.foreignParticipants = java.util.Arrays.asList(CAROL);
+
+                SequencedEvent se = new SequencedEvent();
+                se.seq = ++seqAt;
+                se.event = mb;
+
+                if (EventApplier.validate(live, se).accepted) {
+                    accepted++;
+                    carried += mb.credits;
+                    EventApplier.apply(live, se);
+                }
+            }
+
+            check("the first migration lands", accepted, 1);
+            check("and every one after it is refused", accepted, 1);
+            check("so what walked in is one market's worth, not four",
+                    carried, MarketState.MAX_WELCOME_GRANT);
+            check("which is what carol is actually holding",
+                    live.wallets().getBalance(CAROL), MarketState.MAX_WELCOME_GRANT);
+            check("and she never registered here at all",
+                    live.isRegistered(CAROL) ? 1 : 0, 0);
+
+            // Somebody who has genuinely never been here is still let in, or the rule
+            // would have closed migration rather than bounded it.
+            Event.MigrateBalance fresh = new Event.MigrateBalance();
+            fresh.userId = ALICE;
+            fresh.marketId = live.marketId();
+            fresh.fromMarketId = UUID.randomUUID();
+            fresh.beneficiary = DAVE;
+            fresh.credits = 100;
+            fresh.items = new java.util.TreeMap<>();
+            fresh.foreignParticipants = java.util.Arrays.asList(DAVE);
+            SequencedEvent se = new SequencedEvent();
+            se.seq = ++seqAt;
+            se.event = fresh;
+            check("a genuine outsider is unaffected",
+                    EventApplier.validate(live, se).accepted ? 1 : 0, 1);
+        }
+
+        section("M6e: two people leaving one market together both get in");
+        {
+            // The ordinary case, and the one M6b could not see. M6b migrates the same
+            // identity repeatedly from markets it keeps creating, which is the abuse —
+            // so a guard that refused *everyone from a market somebody had migrated out
+            // of* passed M6b perfectly while breaking the case anybody would actually
+            // hit: a pair of friends moving their market into a bigger one.
+            //
+            // The first migration files every participant of the market it came from, to
+            // stop them collecting a welcome grant on top of a balance they already have.
+            // Reading that set as "has migrated" turned the second friend away.
+            Path file = scratch("test-log-m6e.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+
+            UUID theirMarket = UUID.randomUUID();          // one market, two people
+            List<UUID> both = java.util.Arrays.asList(CAROL, DAVE);
+            long seqAt = log.lastSeq();
+            int landed = 0;
+
+            for (UUID who : both) {
+                Event.MigrateBalance mb = new Event.MigrateBalance();
+                mb.userId = ALICE;
+                mb.marketId = live.marketId();
+                mb.fromMarketId = theirMarket;             // the SAME source for both
+                mb.fromMarketName = "their shared market";
+                mb.beneficiary = who;
+                mb.credits = 1000;
+                mb.items = new java.util.TreeMap<>();
+                mb.foreignParticipants = both;             // everyone registered there
+
+                SequencedEvent se = new SequencedEvent();
+                se.seq = ++seqAt;
+                se.event = mb;
+                if (EventApplier.validate(live, se).accepted) {
+                    landed++;
+                    EventApplier.apply(live, se);
+                }
+            }
+
+            check("both of them land", landed, 2);
+            check("carol brought hers", live.wallets().getBalance(CAROL), 1000);
+            check("and dave brought his", live.wallets().getBalance(DAVE), 1000);
+
+            // Still no welcome grant on top — that is what filing the participants is
+            // actually for, and it has to keep working now something else does the
+            // refusing.
+            register(log, live, CAROL);
+            check("but neither collects a grant as well",
+                    grantRejection(live, ALICE, CAROL, live.welcomeGrant()) != null ? 1 : 0, 1);
+
+            // And the mint is still shut: a second arrival by the same identity, from a
+            // market they have just made, is refused however new that market's id is.
+            Event.MigrateBalance again = new Event.MigrateBalance();
+            again.userId = ALICE;
+            again.marketId = live.marketId();
+            again.fromMarketId = UUID.randomUUID();
+            again.beneficiary = DAVE;
+            again.credits = 1000;
+            again.items = new java.util.TreeMap<>();
+            again.foreignParticipants = java.util.Arrays.asList(DAVE);
+            SequencedEvent se = new SequencedEvent();
+            se.seq = ++seqAt;
+            se.event = again;
+            check("and a second helping is still refused",
+                    EventApplier.validate(live, se).accepted ? 1 : 0, 0);
+        }
+
+        section("M6c: a host may cap how much money one migration carries in");
+        {
+            // The honest half of the same problem, which no rule above touches. Two
+            // people arriving from a market that grants 1000, into one that grants 50,
+            // multiply its supply by twenty-one — and the people already there go from
+            // holding all of the money to holding five per cent of it. Nobody is robbed;
+            // everybody is outbid.
+            //
+            // Host-local, because the receiving market is the only party that can say
+            // what it will absorb, and because a group merging honestly produces exactly
+            // the same arithmetic as somebody doing it deliberately.
+            ServerConfig cfg = new ServerConfig();
+            cfg.maxMigratedCredits = 0;
+            check("zero accepts anything, so existing servers are unchanged",
+                    cfg.problem() == null ? 1 : 0, 1);
+
+            cfg.maxMigratedCredits = 500;
+            check("a figure is allowed", cfg.problem() == null ? 1 : 0, 1);
+
+            cfg.maxMigratedCredits = -1;
+            check("negative is refused", cfg.problem() != null ? 1 : 0, 1);
+            check("and says to use zero instead",
+                    String.valueOf(cfg.problem()).contains("use 0") ? 1 : 0, 1);
+        }
+
+        section("R1b: what a host will let a market grant, which is not what validate allows");
+        {
+            // The grant is the largest single lever on what credits are worth, and the
+            // compiled ceiling is a hundred times what any real market uses. Lowering
+            // *that* was the obvious move and is the wrong one: it lives in validate,
+            // which is replicated, so a market that had already set a larger grant would
+            // stop being able to replay its own recorded policy. That objection is what
+            // kept this on the backlog.
+            //
+            // A host rule instead, beside admission and the deposit caps. History stays
+            // valid; only the next change is judged. And it *has* to be a host rule for a
+            // second reason: "rotating" and "dedicated" describe whoever is hosting right
+            // now, so a ceiling that told them apart inside validate would make one
+            // policy event legal on one host and illegal on the next.
+            ServerConfig inGame = new ServerConfig();
+            check("somebody's game caps it low",
+                    inGame.maxWelcomeGrant(), ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+
+            ServerConfig box = new ServerConfig();
+            box.dedicated = true;
+            check("a dedicated server keeps the compiled ceiling",
+                    box.maxWelcomeGrant(), MarketState.MAX_WELCOME_GRANT);
+
+            // Unset is not zero, which is the failure that would silently stop every
+            // in-game host from sequencing any grant at all.
+            check("unset means the default, not nothing",
+                    new ServerConfig().maxWelcomeGrant() > 0 ? 1 : 0, 1);
+
+            box.maxWelcomeGrant = 500L;
+            check("an operator can lower it", box.maxWelcomeGrant(), 500L);
+            inGame.maxWelcomeGrant = 250_000L;
+            check("or raise it", inGame.maxWelcomeGrant(), 250_000L);
+
+            // Never above what every replica enforces regardless, or the setting would
+            // promise something the log would refuse.
+            ServerConfig tooHigh = new ServerConfig();
+            tooHigh.maxWelcomeGrant = MarketState.MAX_WELCOME_GRANT + 1;
+            check("but never above the compiled ceiling",
+                    tooHigh.problem() != null ? 1 : 0, 1);
+
+            ServerConfig negative = new ServerConfig();
+            negative.maxWelcomeGrant = -1L;
+            check("and not negative", negative.problem() != null ? 1 : 0, 1);
+
+            // A server that bootstraps a market above its own ceiling would refuse to
+            // sequence the figure it had just written into genesis. Dedicated, because
+            // that is the host the sentence describes and the only one that bootstraps
+            // from this file — R1d is the world, where the two settings are unrelated.
+            // The ceiling is set rather than inherited: dedicated raises the unset
+            // default to the compiled figure, and these numbers would then agree.
+            ServerConfig arguing = new ServerConfig();
+            arguing.dedicated = true;
+            arguing.maxWelcomeGrant = ServerConfig.ROTATING_MAX_WELCOME_GRANT;
+            arguing.welcomeGrant = ServerConfig.ROTATING_MAX_WELCOME_GRANT + 1;
+            check("a host cannot create a market it would then refuse",
+                    arguing.problem() != null ? 1 : 0, 1);
+            check("and says which two figures disagree",
+                    String.valueOf(arguing.problem()).contains("maxWelcomeGrant") ? 1 : 0, 1);
+
+            // The default grant has to sit under the default ceiling, or every fresh
+            // friend-group host is born unable to create a market.
+            check("the ordinary default is allowed",
+                    ServerConfig.friendGroup(25555).problem() == null ? 1 : 0, 1);
+            check("with room above it",
+                    ServerConfig.DEFAULT_WELCOME_GRANT
+                            < ServerConfig.ROTATING_MAX_WELCOME_GRANT ? 1 : 0, 1);
+
+            // validate is untouched, which is the whole point: a market that already
+            // holds a big grant still replays.
+            MarketState old = new MarketState();
+            old.setMarketIdentity(UUID.randomUUID(), "an old rich market", ALICE);
+            old.registerKey(ALICE, "alice-key");
+            check("an existing large grant still validates",
+                    policyRejection(old, ALICE, 0, 250_000L) == null ? 1 : 0, 1);
+        }
+
+        section("M6d: a dedicated server does not take migrations unless told to");
+        {
+            // Migration solves bootstrapping among people who know each other. The
+            // balance it carries was set by a welcome grant the migrant chose, in a
+            // world they control, up to MAX_WELCOME_GRANT — which is fine between
+            // friends and is "name your opening balance" on a public box.
+            //
+            // So the default follows the kind of host rather than a flag nobody sets.
+            // Boxed so that unset and explicitly-false are different answers, which is
+            // the whole mechanism and the part that would fail silently if it were a
+            // plain boolean defaulting to false.
+            ServerConfig inGame = new ServerConfig();
+            check("somebody's own game takes them", inGame.acceptsMigration() ? 1 : 0, 1);
+
+            ServerConfig box = new ServerConfig();
+            box.dedicated = true;
+            check("a dedicated server does not", box.acceptsMigration() ? 1 : 0, 0);
+
+            // Both overrides have to work, or the default is a rule rather than a default.
+            box.acceptsMigration = Boolean.TRUE;
+            check("an operator can turn them on", box.acceptsMigration() ? 1 : 0, 1);
+
+            inGame.acceptsMigration = Boolean.FALSE;
+            check("and off", inGame.acceptsMigration() ? 1 : 0, 0);
+
+            // Unset is not false. If this ever reads as false, every in-game host stops
+            // accepting migrations and the failure looks like a network fault.
+            box.acceptsMigration = null;
+            check("clearing it goes back to the host's own default",
+                    box.acceptsMigration() ? 1 : 0, 0);
+            inGame.acceptsMigration = null;
+            check("in both directions", inGame.acceptsMigration() ? 1 : 0, 1);
+
+            // Survives the round trip, since --write-config rewrites the whole file and
+            // a dropped field would silently re-enable migrations on a box that had
+            // turned them off.
+            check("an explicit false is still valid config",
+                    new ServerConfig() {{ dedicated = true; acceptsMigration = false; }}
+                            .problem() == null ? 1 : 0, 1);
+        }
+
         section("M5: a fast-forward is distinguishable from a fork");
         {
             // The test the host cannot perform for itself: given only "you are ahead of
@@ -922,12 +1215,13 @@ public class MarketTests {
             apply(log, live, deposit(ALICE, IRON, 100));
 
             List<String> lines = Files.readAllLines(src);
-            String tampered = lines.get(1).replace("\"quantity\":100", "\"quantity\":999999");
+            int at = lineOf(lines, "Deposit");
+            String tampered = lines.get(at).replace("\"quantity\":100", "\"quantity\":999999");
             SequencedEvent se = EventLog.parseLine(tampered);
             // Re-chain it so nothing but the signature is wrong.
             String rehashed = tampered.replace("\"hash\":\"" + se.hash + "\"",
                     "\"hash\":\"" + EventLog.recomputeHash(se) + "\"");
-            lines.set(1, rehashed);
+            lines.set(at, rehashed);
             Files.write(src, lines);
 
             check("chain looks intact to a hash-only check",
@@ -944,6 +1238,74 @@ public class MarketTests {
             check("forged archive refused", refused, 1);
             check("refused for the right reason",
                     why.contains("signature") ? 1 : 0, 1);
+        }
+
+        section("K5b: an archive whose events break its own market's rules is refused");
+        {
+            // K5 catches a forged event — one somebody else's key signed. This catches
+            // an event the author really did sign, in a market they really do own, that
+            // no honest host would ever have sequenced.
+            //
+            // verifyLines called EventApplier.apply and nothing else, and apply enforces
+            // none of the money rules: they live in validate, because validate is where
+            // the host asks them before it appends. So a history built by hand could
+            // hold a welcome grant for any sum, repeated as often as you like, and every
+            // one of them applied. That balance is what a migration carries in, and
+            // migrationObjection weighs the items a migrant brings against their own
+            // statistics but never their credits — so nothing downstream caught it
+            // either. This is the only gate on that path.
+            Path src = scratch("test-archive-k5b.jsonl");
+            Files.deleteIfExists(src);
+            EventLog log = new EventLog(src);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+
+            check("the market publishes its own figure", live.welcomeGrant(),
+                    ServerConfig.DEFAULT_WELCOME_GRANT);
+
+            // Signed by the market's own creator, chained correctly, and for a sum the
+            // market's published policy does not offer.
+            Event.WelcomeGrant wg = new Event.WelcomeGrant();
+            wg.userId = ALICE;
+            wg.targetUserId = ALICE;
+            wg.amount = 999_999_999L;
+            check("apply on its own takes it", apply(log, live, wg).accepted ? 1 : 0, 1);
+            check("which is the balance a migration would have carried",
+                    live.wallets().getBalance(ALICE), 999_999_999L);
+
+            int refused = 0;
+            String why = "";
+            try {
+                MarketArchive.verify(src);
+            } catch (MarketArchive.InvalidArchive e) {
+                refused = 1;
+                why = e.getMessage();
+            }
+            check("the archive is refused", refused, 1);
+            check("and says which rule it broke",
+                    why.contains("grant must be exactly") ? 1 : 0, 1);
+        }
+
+        section("K5c: and an honest archive still verifies");
+        {
+            // The risk in K5b's fix is refusing too much: every event in an honest log
+            // was validated by whoever sequenced it, so re-asking must be silent. A log
+            // with a grant, a deposit, an order and a fill in it, taken end to end.
+            Path src = scratch("test-archive-k5c.jsonl");
+            Files.deleteIfExists(src);
+            EventLog log = new EventLog(src);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            grant(log, live, BOB, live.welcomeGrant());
+            apply(log, live, deposit(ALICE, IRON, 100));
+            apply(log, live, placeOrder(ALICE, IRON, 5, 10, false));
+            apply(log, live, placeOrder(BOB, IRON, 5, 10, true));
+
+            check("the trade really happened", live.fillsEver(), 1);
+
+            MarketArchive.Summary s = MarketArchive.verify(src);
+            check("and the archive verifies", s.events, log.lastSeq());
         }
 
         section("K6: import refuses to overwrite existing history");
@@ -1271,6 +1633,185 @@ public class MarketTests {
                     "127.0.0.1".equals(back.bindAddress) ? 1 : 0, 1);
             check("creator survives",
                     ALICE.toString().equals(back.creatorUserId) ? 1 : 0, 1);
+
+            // A setting that is null in the object is omitted by Gson, so it never
+            // reaches the file and an operator has no way to learn it exists. That is
+            // how acceptsMigration shipped: in the code, in the checklist, and in
+            // nobody's config. save() writes the resolved answer for exactly this.
+            String written = new String(Files.readAllBytes(f), "UTF-8");
+            check("an unset default still reaches the file",
+                    written.contains("acceptsMigration") ? 1 : 0, 1);
+            check("as the answer it resolves to, not as null",
+                    written.contains("\"acceptsMigration\": true") ? 1 : 0, 1);
+            check("and reads back as an explicit value",
+                    Boolean.TRUE.equals(back.acceptsMigration) ? 1 : 0, 1);
+            check("which still resolves the same way",
+                    back.acceptsMigration() ? 1 : 0, 1);
+
+            // The other side of it: a dedicated server's file has to say false, or the
+            // operator reads the friend-group answer and believes it.
+            Path g = scratch("test-serverconfig-r1-dedicated.json");
+            Files.deleteIfExists(g);
+            ServerConfig box = ServerConfig.friendGroup(25611);
+            box.dedicated = true;
+            box.save(g);
+            check("a dedicated server writes the dedicated answer",
+                    new String(Files.readAllBytes(g), "UTF-8")
+                            .contains("\"acceptsMigration\": false") ? 1 : 0, 1);
+            check("and it survives the round trip",
+                    ServerConfig.load(g).acceptsMigration() ? 1 : 0, 0);
+        }
+
+        section("R1c: the file a world hosts under");
+        {
+            // The rules exist and always have; the file naming them is one nothing
+            // creates, in a directory the game never mentions until you have already
+            // hosted once. /trade hostconfig write is the way in, and these are the two
+            // things it must not get wrong: writing a key the world would overrule, and
+            // resolving a default against the wrong kind of host.
+            Path f = scratch("test-hostconfig-r1c.json");
+            Files.deleteIfExists(f);
+
+            ServerConfig world = ServerConfig.friendGroup(25612)
+                    .asWorldHost(25612, "Alice", ALICE.toString());
+            // Set, so the two launcher-only keys below are dropped rather than merely
+            // absent — both are null by default, and Gson omits a null, so a check
+            // against a default config would pass with no stripping at all.
+            world.marketName = "somewhere";
+            world.creatorUserId = ALICE.toString();
+            world.saveHostRules(f);
+            String written = new String(Files.readAllBytes(f), "UTF-8");
+
+            // Session facts, imposed by hostPolicyFor whatever the file says. A key an
+            // operator can edit and watch do nothing is worse than one that is absent:
+            // absent sends them to look for it, edited-and-ignored sends them to look
+            // for the bug somewhere else entirely.
+            for (String imposed : new String[] {
+                    "\"port\"", "\"hostName\"", "\"hostUserId\"", "\"dedicated\"" }) {
+                check("a world's file does not carry " + imposed,
+                        written.contains(imposed) ? 1 : 0, 0);
+            }
+            // Read only by the standalone launcher's main, which bootstraps a market
+            // from them. A world's market comes from the Market screen.
+            for (String launcher : new String[] {
+                    "\"logFile\"", "\"marketName\"", "\"creatorUserId\"" }) {
+                check("nor " + launcher + ", which only the launcher reads",
+                        written.contains(launcher) ? 1 : 0, 0);
+            }
+
+            // The other half, and the one this is all for. Every host rule has to be in
+            // the file at the value already in force — a setting nobody can see is a
+            // setting that does not exist, which is how the free-order allowance shipped
+            // switched permanently off.
+            for (String rule : new String[] {
+                    "\"admission\"", "\"maxWelcomeGrant\"", "\"acceptsMigration\"",
+                    "\"maxMigratedCredits\"", "\"maxDepositUnitsPerWindow\"",
+                    "\"requireAttestation\"", "\"banOnWorldChange\"", "\"welcomeGrant\"" }) {
+                check(rule + " is in the file", written.contains(rule) ? 1 : 0, 1);
+            }
+
+            // Compared as a number after loading, never as a substring of the file:
+            // "1000000" contains "10000", so a text match here passes against the very
+            // ceiling it exists to rule out. It did, before this was written this way.
+            check("the ceiling written is the one a game hosts under",
+                    ServerConfig.load(f).maxWelcomeGrant(),
+                    ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+            check("and migrations are on, which is what a friend group wants",
+                    written.contains("\"acceptsMigration\": true") ? 1 : 0, 1);
+
+            ServerConfig back = ServerConfig.load(f);
+            check("it loads back as a usable config", back.problem() == null ? 1 : 0, 1);
+            check("with the ceiling now explicit rather than resolved",
+                    back.maxWelcomeGrant(), ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+            check("and nothing in it claims to be a dedicated server",
+                    back.dedicated ? 1 : 0, 0);
+
+            // The case that made asWorldHost one method rather than two assignments:
+            // somebody copies a dedicated server's config into a world. Left alone, it
+            // resolves a 1,000,000 ceiling and refuses migrations, and writing that into
+            // a world's file would publish two rules the world will never enforce.
+            Path g = scratch("test-hostconfig-r1c-copied.json");
+            Files.deleteIfExists(g);
+            ServerConfig copied = new ServerConfig();
+            copied.dedicated = true;
+            check("a server's config resolves the server ceiling",
+                    copied.maxWelcomeGrant(), MarketState.MAX_WELCOME_GRANT);
+            copied.asWorldHost(25613, "Bob", BOB.toString()).saveHostRules(g);
+            String asWorld = new String(Files.readAllBytes(g), "UTF-8");
+            check("stamped as a world host it writes the world's ceiling",
+                    ServerConfig.load(g).maxWelcomeGrant(),
+                    ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+            check("and takes migrations again",
+                    asWorld.contains("\"acceptsMigration\": true") ? 1 : 0, 1);
+
+            // An operator's own figure survives all of it. The stamp decides what an
+            // unset default means, never what a set value means.
+            Path h = scratch("test-hostconfig-r1c-set.json");
+            Files.deleteIfExists(h);
+            ServerConfig chosen = ServerConfig.friendGroup(25614);
+            chosen.maxWelcomeGrant = 500L;
+            chosen.acceptsMigration = Boolean.FALSE;
+            chosen.asWorldHost(25614, "Alice", ALICE.toString()).saveHostRules(h);
+            ServerConfig chosenBack = ServerConfig.load(h);
+            check("a chosen ceiling survives the stamp", chosenBack.maxWelcomeGrant(), 500L);
+            check("and a chosen refusal of migrations does too",
+                    chosenBack.acceptsMigration() ? 1 : 0, 0);
+
+            // What the command prints is what the command writes. Two lists would drift,
+            // and the drift would send somebody looking for a key that is not there.
+            java.util.Set<String> printed = world.hostRulesTree().keySet();
+            int missing = 0;
+            for (String key : printed) {
+                if (!written.contains("\"" + key + "\"")) missing++;
+            }
+            check("every key the command lists reaches the file", missing, 0);
+            check("and there is something to list", printed.isEmpty() ? 0 : 1, 1);
+        }
+
+        section("R1d: lowering the ceiling in a world does not brick the file");
+        {
+            // Found running E17. The generated file carries welcomeGrant at its compiled
+            // default of 1000; lowering maxWelcomeGrant under it — which is the whole
+            // point of the setting — made problem() call the file unusable, and
+            // hostPolicyFor answers that by discarding all of it and hosting on the
+            // defaults. So the one edit the file exists for turned off every rule in it,
+            // including the ceiling being lowered, and said so in one console line.
+            //
+            // The pair is real on a host that bootstraps: it writes welcomeGrant into
+            // genesis and would then refuse to sequence it. A world bootstraps nothing —
+            // MarketBootstrap creates its market and never reads this file — and there
+            // welcomeGrant is a switch, tested against zero by issueWelcomeGrant, with
+            // the amount taken from the market. Different things, wrongly paired.
+            ServerConfig world = ServerConfig.friendGroup(25615)
+                    .asWorldHost(25615, "Alice", ALICE.toString());
+            world.maxWelcomeGrant = 100L;
+            check("the default grant figure is above that ceiling",
+                    world.welcomeGrant > world.maxWelcomeGrant() ? 1 : 0, 1);
+            check("and a world's file is still usable", world.problem() == null ? 1 : 0, 1);
+            check("with the lowered ceiling actually in force",
+                    world.maxWelcomeGrant(), 100L);
+
+            // The same numbers on the host the rule was written for. A server that would
+            // decline to sequence the grant it had just bootstrapped with is arguing with
+            // itself, and that is still refused.
+            ServerConfig box = new ServerConfig();
+            box.dedicated = true;
+            box.maxWelcomeGrant = 100L;
+            check("a bootstrapping host still refuses the pair",
+                    box.problem() != null ? 1 : 0, 1);
+            check("naming the setting that moves",
+                    String.valueOf(box.problem()).contains("maxWelcomeGrant") ? 1 : 0, 1);
+
+            // Zero is the opt-out and has to survive a low ceiling on either kind of
+            // host: it means no grants at all, which cannot exceed anything.
+            box.welcomeGrant = 0;
+            check("and lets a server that issues no grants through",
+                    box.problem() == null ? 1 : 0, 1);
+
+            // What the ceiling is actually for still works on a world: it gates policy
+            // events, which is a different question from what the file says.
+            check("the ceiling a world hosts under is its own",
+                    world.maxWelcomeGrant(), 100L);
         }
 
         section("R2: a server nobody could use is refused, not clamped");
@@ -1428,6 +1969,588 @@ public class MarketTests {
                     MarketState.taxOn(1_000_000_000L, 100), 10_000_000L);
         }
 
+        section("T2b: filling your own order is not free once there is a fee");
+        {
+            // Both sides are the same wallet, so the price washes out — but the fee is
+            // taken from the seller's proceeds and burned, and that side is you too.
+            // The cost is exactly the fee, it is silent, and it repeats every time your
+            // own ask undercuts your own bid, which is the ordinary shape of a book
+            // somebody is making on both sides.
+            MarketState m = new MarketState();
+            m.deposit(ALICE, IRON, 10);
+            m.wallets().setBalance(ALICE, 1000L);
+            m.setTaxBps(1000);              // 10%
+
+            long before = m.wallets().getBalance(ALICE);
+
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));   // ask 10 @ 50
+            m.submitOrder(new Order(2, 50, IRON, 10, true, ALICE));    // and buy it back
+
+            // 10 at 50 = 500, 10% of which is 50.
+            check("a self-trade costs exactly the fee", before - m.wallets().getBalance(ALICE), 50);
+            check("and the goods come straight back",
+                    m.itemBalances().getBalance(ALICE, IRON), 10);
+
+            // The premise the notifier relies on: with no fee there is genuinely
+            // nothing to report, which is why the quiet case stays quiet.
+            MarketState free = new MarketState();
+            free.deposit(BOB, IRON, 10);
+            free.wallets().setBalance(BOB, 1000L);
+            long untaxed = free.wallets().getBalance(BOB);
+            free.submitOrder(new Order(1, 50, IRON, 10, false, BOB));
+            free.submitOrder(new Order(2, 50, IRON, 10, true, BOB));
+            check("with no fee it really does net to nothing",
+                    free.wallets().getBalance(BOB), untaxed);
+        }
+
+        section("T1e: the listing fee climbs with orders held, not with order value");
+        {
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "escalating market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.wallets().setBalance(ALICE, 10_000L);
+            m.deposit(ALICE, IRON, 100);
+            m.setListingFee(2);
+            m.setListingFreeOrders(3);
+
+            // listingFeeFor prices the order about to be placed, counting it towards
+            // the allowance — so read with n resting, it says what the (n+1)th costs.
+            // This block used to read as though it said what the nth had cost, and the
+            // two readings differ by exactly one order: an allowance of three was
+            // letting four orders through at the base fee. The prose here said "the
+            // fourth starts climbing" while the assertion below it pinned the fourth at
+            // the base fee, which is how it survived being written down.
+            check("the first order pays the base fee", m.listingFeeFor(ALICE), 2);
+
+            // Two resting: the third is still inside an allowance of three.
+            for (int i = 0; i < 2; i++) {
+                m.submitOrder(new Order(100 + i, 50 + i, IRON, 1, false, ALICE));
+            }
+            check("the last order inside the allowance pays the base fee",
+                    m.listingFeeFor(ALICE), 2);
+
+            // Three resting. The fourth is the one that takes them past three.
+            m.submitOrder(new Order(102, 52, IRON, 1, false, ALICE));
+            check("the fourth costs double", m.listingFeeFor(ALICE), 4);
+
+            m.submitOrder(new Order(200, 90, IRON, 1, false, ALICE));
+            check("and the fifth triple", m.listingFeeFor(ALICE), 6);
+
+            // What was actually charged, not only what was quoted — the quote is no use
+            // if submitOrder takes something else.
+            long before = m.wallets().getBalance(ALICE);
+            m.submitOrder(new Order(201, 91, IRON, 1, false, ALICE));
+            check("and the fifth is what the fifth is charged",
+                    before - m.wallets().getBalance(ALICE), 6);
+            check("with five resting, a sixth would cost four times the base",
+                    m.listingFeeFor(ALICE), 8);
+
+            // Cancelling gives the allowance back — the fee prices what you are holding
+            // open, so releasing the book releases the cost.
+            m.cancelOrder(201, IRON, false, ALICE);
+            check("cancelling walks it back down", m.listingFeeFor(ALICE), 6);
+
+            // Never free, which is what the stipend's safety rests on.
+            check("somebody with nothing resting still pays", m.listingFeeFor(BOB), 2);
+
+            // Off by default, so markets written before this keep the flat fee.
+            MarketState flat = new MarketState();
+            flat.setMarketIdentity(UUID.randomUUID(), "flat market", ALICE);
+            flat.registerKey(ALICE, "alice-key");
+            flat.wallets().setBalance(ALICE, 10_000L);
+            flat.deposit(ALICE, IRON, 100);
+            flat.setListingFee(2);
+            flat.submitOrder(new Order(300, 50, IRON, 1, false, ALICE));
+            flat.submitOrder(new Order(301, 51, IRON, 1, false, ALICE));
+            check("no allowance set means no escalation", flat.listingFeeFor(ALICE), 2);
+        }
+
+        section("U4: a stipend pays per fill, and cannot be earned by self-dealing");
+        {
+            // Money otherwise enters only when new people do, while goods accrue for
+            // every hour anybody plays — so prices fall until they reach the integer
+            // floor of 1 and stop meaning anything. This is the counterweight.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "stipend market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            // A fee large enough that five trades collect more than the stipend
+            // pays out — see U5 for the rule this has to satisfy.
+            m.setListingFee(10);
+            m.setStipend(10, 5);
+
+            check("nothing owed on arrival", stipendRejection(m, ALICE, 10) != null ? 1 : 0, 1);
+
+            // Four fills is not yet five.
+            m.recordTrades(1, 1L, fillsOf(4));
+            check("still nothing at four fills",
+                    stipendRejection(m, ALICE, 10) != null ? 1 : 0, 1);
+
+            m.recordTrades(2, 2L, fillsOf(1));
+            check("payable at five", stipendRejection(m, ALICE, 10) == null ? 1 : 0, 1);
+
+            // The amount is the market's, for the same reason the grant's is: nothing
+            // can check who was sequencing.
+            check("but only for the market's figure",
+                    stipendRejection(m, ALICE, 11) != null ? 1 : 0, 1);
+
+            // Claiming resets the interval rather than the balance being a one-off.
+            Event.Stipend claim = new Event.Stipend();
+            claim.userId = ALICE;
+            claim.marketId = m.marketId();
+            claim.amount = 10;
+            SequencedEvent se = new SequencedEvent();
+            se.seq = 3; se.event = claim;
+            EventApplier.apply(m, se);
+            check("and pays out", m.wallets().getBalance(ALICE), 10);
+            check("then the interval starts again",
+                    stipendRejection(m, ALICE, 10) != null ? 1 : 0, 1);
+
+            // An identity registering later does not inherit other people's trading.
+            m.registerKey(BOB, "bob-key");
+            check("a newcomer waits their own interval, not the market's history",
+                    stipendRejection(m, BOB, 10) != null ? 1 : 0, 1);
+
+            // Off unless configured.
+            MarketState none = new MarketState();
+            none.setMarketIdentity(UUID.randomUUID(), "no stipend", ALICE);
+            none.registerKey(ALICE, "alice-key");
+            check("no policy, nothing to claim",
+                    stipendRejection(none, ALICE, 10) != null ? 1 : 0, 1);
+        }
+
+        section("U4b: a market starts paying nothing, and can go back to it");
+        {
+            // Off is the starting state and has to stay reachable. A market whose
+            // creator can turn a payment on but never off has been given a decision it
+            // cannot take back, and the fees it depends on cannot then be lowered
+            // either — the interlock would refuse that while a stipend was still set.
+            Path fresh = scratch("test-stipend-default.jsonl");
+            Files.deleteIfExists(fresh);
+            EventLog log = new EventLog(fresh);
+            MarketBootstrap.createMarket(log, ALICE, "plain market", testKeys());
+            check("a market created the ordinary way pays nothing",
+                    EventApplier.replay(log).stipendAmount(), 0);
+
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "switchable market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.setListingFee(2);
+            m.setStipend(50, 50);
+
+            // Turning it off is a policy like any other, and must not be caught by the
+            // interlock — which only asks about a stipend that pays something.
+            check("setting it to nothing is allowed",
+                    policyStipendRejection(m, ALICE, 2, 0, 50) == null ? 1 : 0, 1);
+            check("and allowed even with no fee to cover it",
+                    policyStipendRejection(m, ALICE, 0, 0, 50) == null ? 1 : 0, 1);
+
+            m.setStipend(0, 0);
+            m.recordTrades(1, 1L, fillsOf(100));
+            check("and then nothing is owed however much trades",
+                    stipendRejection(m, ALICE, 50) != null ? 1 : 0, 1);
+            // Said as "pays no stipend", not as an argument about the figure — a client
+            // holding the old amount is exactly who asks this.
+            check("and says so plainly",
+                    stipendRejection(m, ALICE, 50).contains("pays no stipend") ? 1 : 0, 1);
+        }
+
+        section("X1: a reader never sees an event half-settled");
+        {
+            // The only check in this suite that runs two threads, because the thing it
+            // is about cannot happen on one.
+            //
+            // EventApplier is the only writer, but the render thread reads the same
+            // state every frame. Giving each collection its own monitor stops any single
+            // read catching a map mid-write; it cannot make a set of reads agree with
+            // each other, and settling one event touches several. submitOrder takes the
+            // buyer's credits and *then* puts the order in the book, so between those
+            // two steps the money has left the wallet and is in no reservation — a
+            // reader landing there sees a market with credits simply missing.
+            //
+            // So apply holds one write lock across the whole event, and this holds the
+            // matching read lock and checks the books balance. With no tax and no
+            // listing fee, credits are conserved exactly: what is in wallets plus what
+            // is reserved in resting bids never changes, whatever is happening.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "concurrent market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.registerKey(BOB, "bob-key");
+            m.wallets().setBalance(ALICE, 100_000L);
+            m.wallets().setBalance(BOB, 100_000L);
+
+            final long TOTAL = 200_000L;
+            final java.util.concurrent.atomic.AtomicReference<String> fault =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            final java.util.concurrent.atomic.AtomicBoolean stop =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+            final java.util.concurrent.atomic.AtomicLong reads =
+                    new java.util.concurrent.atomic.AtomicLong();
+
+            Thread reader = new Thread(() -> {
+                try {
+                    while (!stop.get()) {
+                        long seen;
+                        m.readLock().lock();
+                        try {
+                            seen = m.wallets().getBalance(ALICE)
+                                    + m.wallets().getBalance(BOB);
+                            // Walked the way the render thread walks it: every book,
+                            // including ones being created underneath us.
+                            for (String itemId : m.activeItems()) {
+                                OrderBook b = m.peekBook(itemId);
+                                if (b == null) continue;
+                                for (Order o : b.restingBids()) {
+                                    seen += o.volume() * o.value();
+                                }
+                            }
+                        } finally {
+                            m.readLock().unlock();
+                        }
+                        reads.incrementAndGet();
+                        if (seen != TOTAL) {
+                            fault.compareAndSet(null, "credits came to " + seen
+                                    + ", not " + TOTAL);
+                            return;
+                        }
+                    }
+                } catch (Throwable t) {
+                    // A ConcurrentModificationException out of the walk lands here, and
+                    // is the other half of what this is for.
+                    fault.compareAndSet(null, t.getClass().getSimpleName() + ": "
+                            + t.getMessage());
+                }
+            }, "market-reader");
+            reader.setDaemon(true);
+            reader.start();
+
+            // A fresh item every round, so books are being created the whole time the
+            // reader is walking them.
+            long seq = 10;
+            int rounds = 0;
+            long deadline = System.currentTimeMillis() + 1500;
+            while (rounds < 600 && fault.get() == null
+                    && System.currentTimeMillis() < deadline) {
+                String item = "test:item_" + rounds;
+
+                Event.Deposit d = new Event.Deposit();
+                d.userId = ALICE; d.marketId = m.marketId();
+                d.itemId = item; d.quantity = 10;
+                applyAt(m, ++seq, d);
+
+                Event.PlaceOrder ask = placeOrder(ALICE, item, 5, 2, false);
+                ask.marketId = m.marketId();
+                applyAt(m, ++seq, ask);
+
+                // Crosses immediately: reserve, match, pay, refund — the whole window.
+                Event.PlaceOrder bid = placeOrder(BOB, item, 5, 2, true);
+                bid.marketId = m.marketId();
+                applyAt(m, ++seq, bid);
+
+                // And one that rests, so the reserved half of the sum is never zero and
+                // the reader is actually obliged to count it.
+                if (rounds % 8 == 0) {
+                    Event.PlaceOrder resting = placeOrder(BOB, item, 1, 3, true);
+                    resting.marketId = m.marketId();
+                    applyAt(m, ++seq, resting);
+                }
+                rounds++;
+            }
+
+            stop.set(true);
+            reader.join(5000);
+
+            check("the reader saw a consistent market throughout",
+                    fault.get() == null ? 1 : 0, 1);
+            if (fault.get() != null) System.out.println("      " + fault.get());
+            check("and it actually looked", reads.get() > 0 ? 1 : 0, 1);
+            check("the writer got through its rounds", rounds > 0 ? 1 : 0, 1);
+
+            // Conserved at rest too, which says the invariant itself was the right one.
+            long ended = m.wallets().getBalance(ALICE) + m.wallets().getBalance(BOB);
+            for (String itemId : m.activeItems()) {
+                OrderBook b = m.peekBook(itemId);
+                if (b == null) continue;
+                for (Order o : b.restingBids()) ended += o.volume() * o.value();
+            }
+            check("credits are conserved at the end", ended, TOTAL);
+        }
+
+        section("X2: settling an order re-enters the state's own lock");
+        {
+            // apply() holds the write lock for a whole event. Settling a PlaceOrder goes
+            // submitOrder -> canSubmit -> listingFeeFor -> openOrderCount, and that last
+            // one takes the *read* lock. A thread holding the write lock re-entering for
+            // read is allowed by ReentrantReadWriteLock — but "allowed" was reasoning,
+            // and a deadlock on the sequencer thread is not a thing to reason about.
+            //
+            // Nothing reached it before this. listingFeeFor returns early unless BOTH a
+            // fee and an allowance are set, and every test that set an allowance called
+            // submitOrder directly, so no test had ever held the write lock while asking
+            // for the read one. The allowance is also a control that shipped days ago,
+            // which is the combination worth being careful about: brand new, and on the
+            // one path that would hang the host rather than fail it.
+            MarketState m = new MarketState();
+            UUID id = UUID.randomUUID();
+            m.setMarketIdentity(id, "lock market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.wallets().setBalance(ALICE, 10_000L);
+            m.deposit(ALICE, IRON, 100);
+            m.setListingFee(2);
+            m.setListingFreeOrders(3);
+
+            final java.util.concurrent.atomic.AtomicInteger placed =
+                    new java.util.concurrent.atomic.AtomicInteger();
+            Thread applier = new Thread(() -> {
+                for (int i = 0; i < 6; i++) {
+                    Event.PlaceOrder p = placeOrder(ALICE, IRON, 100 + i, 1, false);
+                    p.marketId = id;
+                    if (!applyAt(m, 10 + i, p).accepted) return;
+                    placed.incrementAndGet();
+                }
+            }, "market-applier");
+            applier.setDaemon(true);
+            applier.start();
+            applier.join(10_000);
+
+            // The assertion is that it finished at all. A hung applier leaves this at
+            // fewer than six and the thread still alive, which is what a deadlock looks
+            // like from outside.
+            check("six orders settled without hanging", placed.get(), 6);
+            check("and the thread is done", applier.isAlive() ? 1 : 0, 0);
+
+            // And the arithmetic held while the locks were being taken and retaken:
+            // three at the base fee, then double, triple, quadruple.
+            check("charging the escalating fee throughout",
+                    m.wallets().getBalance(ALICE), 10_000L - (2 + 2 + 2 + 4 + 6 + 8));
+        }
+
+        section("T1f: a listing nobody can pay for is refused before anything is deposited");
+        {
+            // The two halves of DepositAndList used to be checked in two places that did
+            // not agree. validate looked at quantity, price and itemId; apply deposited
+            // the goods and then asked submitOrder, which refuses a seller who cannot
+            // pay the listing fee. So the event passed validate, went into the log, and
+            // was refused after the deposit had landed — leaving the goods in the ledger
+            // on an event whose author had just been told it failed, while the client
+            // answered that refusal by handing the physical items back.
+            //
+            // Both now ask MarketState.canDepositAndList, which is the only copy.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "fee market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.setListingFee(5);
+            m.wallets().setBalance(ALICE, 3L);          // less than the fee
+
+            Event.DepositAndList d = new Event.DepositAndList();
+            d.userId = ALICE;
+            d.marketId = m.marketId();
+            d.itemId = IRON;
+            d.quantity = 10;
+            d.price = 7;
+            SequencedEvent se = new SequencedEvent();
+            se.seq = 2;
+            se.event = d;
+
+            EventApplier.Result v = EventApplier.validate(m, se);
+            check("validate refuses it", v.accepted ? 1 : 0, 0);
+            // valueOf, not v.reason directly: when this regresses, reason is null and a
+            // suite that dies here reports one failure instead of the five below it.
+            check("and names the fee it cannot pay",
+                    String.valueOf(v.reason).contains("listing costs 5") ? 1 : 0, 1);
+
+            // The half that actually cost items: apply must leave nothing behind.
+            EventApplier.Result a = EventApplier.apply(m, se);
+            check("apply refuses it too", a.accepted ? 1 : 0, 0);
+            check("and no goods were deposited on the way to refusing",
+                    m.itemBalances().getBalance(ALICE, IRON), 0);
+            check("and no credits moved", m.wallets().getBalance(ALICE), 3);
+
+            // The same event once they can afford it, so the refusal is about the fee
+            // and not about deposit-and-list being broken.
+            m.wallets().adjust(ALICE, 2);               // now exactly 5
+            check("affordable, it is accepted",
+                    EventApplier.validate(m, se).accepted ? 1 : 0, 1);
+            check("and applies", EventApplier.apply(m, se).accepted ? 1 : 0, 1);
+            check("the goods are listed, not sitting in the ledger",
+                    m.itemBalances().getBalance(ALICE, IRON), 0);
+            check("and the fee was taken", m.wallets().getBalance(ALICE), 0);
+            check("with the order actually resting",
+                    m.peekBook(IRON).restingAsks().size(), 1);
+        }
+
+        section("U8: one order fills a whole book, which is what the interlock costs");
+        {
+            // The measurement the corrected rule is built on, kept because the old rule
+            // was wrong precisely by assuming otherwise. A fill was taken to cost two
+            // listing fees, on the reasoning that two orders have to cross. They do not:
+            // one order crossing a stacked book produces a fill per resting order it
+            // consumes, and the fees for those were paid once, when they were placed.
+            //
+            // That halved the real cost, and the policy check was permitting stipends at
+            // twice what the market could collect. One person could rest a book against
+            // themselves, sweep it with a single order, and claim more than the fees had
+            // cost — no confederate needed.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "sweep market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.wallets().setBalance(ALICE, 100_000L);
+            m.deposit(ALICE, IRON, 1000);
+            m.setListingFee(2);
+
+            long before = m.wallets().getBalance(ALICE);
+            for (int i = 0; i < 20; i++) {
+                m.submitOrder(new Order(i + 1, 10, IRON, 1, false, ALICE));
+            }
+            MarketState.SubmitResult swept =
+                    m.submitOrder(new Order(999, 10, IRON, 20, true, ALICE));
+            long spent = before - m.wallets().getBalance(ALICE);
+
+            check("one order fills the whole book", swept.fills.size(), 20);
+            // 21 orders at 2 credits. The trade itself nets to nothing — same wallet on
+            // both sides, no tax set — so every credit lost is a listing fee.
+            check("and 21 fees paid for 20 fills", spent, 42);
+            check("so a fill costs about one fee, not two",
+                    spent < 20 * 2 * 2 ? 1 : 0, 1);
+        }
+
+        section("U5: a stipend that outpays its own cost is refused as policy");
+        {
+            // The interlock. Producing a fill means two orders crossing, so at least two
+            // listing fees at the base rate. A stipend worth more than that per fill is
+            // a mint anybody can work by trading with themselves — and a market whose
+            // policy is only safe when set carefully mints the first time somebody is
+            // careless.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "interlock market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+
+            // A fill costs one listing fee, not two. One order crossing a stacked book
+            // produces a fill per resting order it consumes, and it is the resting side
+            // that already paid — so five fills collect five fees, not ten.
+            check("a stipend its fees can cover is allowed",
+                    policyStipendRejection(m, ALICE, 10, 10, 5) == null ? 1 : 0, 1);
+
+            // 5 fills at a fee of 10 collect 50. Paying 50 is break-even, and
+            // break-even is not safe: self-dealing at no loss is still an unbounded
+            // supply of claims.
+            check("break-even is refused",
+                    policyStipendRejection(m, ALICE, 10, 50, 5) != null ? 1 : 0, 1);
+
+            check("and paying more than it collects certainly is",
+                    policyStipendRejection(m, ALICE, 10, 100, 5) != null ? 1 : 0, 1);
+
+            // The old rule assumed two fees per fill and would have allowed this.
+            check("what the doubled estimate used to permit is now refused",
+                    policyStipendRejection(m, ALICE, 10, 60, 5) != null ? 1 : 0, 1);
+
+            // A fee of zero makes fills free, so no stipend is safe at all.
+            check("no listing fee means no stipend",
+                    policyStipendRejection(m, ALICE, 0, 1, 1000) != null ? 1 : 0, 1);
+
+            check("the refusal says how to fix it",
+                    policyStipendRejection(m, ALICE, 10, 100, 5)
+                            .contains("Raise the listing fee") ? 1 : 0, 1);
+
+            // Everyone registered claims once per interval, so the payout multiplies by
+            // however many people are here while the fees do not. This is what two
+            // colluders were doing, and what ten would do without colluding at all.
+            MarketState crowd = new MarketState();
+            crowd.setMarketIdentity(UUID.randomUUID(), "crowded market", ALICE);
+            crowd.registerKey(ALICE, "alice-key");
+            check("affordable for one",
+                    policyStipendRejection(crowd, ALICE, 10, 40, 5) == null ? 1 : 0, 1);
+            crowd.registerKey(BOB, "bob-key");
+            check("and not for two", 
+                    policyStipendRejection(crowd, ALICE, 10, 40, 5) != null ? 1 : 0, 1);
+            check("the refusal counts the heads it is paying",
+                    policyStipendRejection(crowd, ALICE, 10, 40, 5)
+                            .contains("2 registered") ? 1 : 0, 1);
+        }
+
+        section("U6: a policy event is the whole policy, and drops what it omits");
+        {
+            // Not a rule so much as a shape worth pinning, because it has now caught
+            // two people. A MarketPolicy carries every field; anything the author does
+            // not restate is set to zero by the event they write. It nearly wiped the
+            // welcome grant once, and it silently wiped the stipend the moment those
+            // fields were added and the client's fee controls were not updated.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "whole policy market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.setListingFee(2);
+            m.setStipend(10, 5);
+            m.setListingFreeOrders(3);
+
+            // A policy restating only the fee. Everything else goes to zero — this is
+            // the event doing exactly what it is defined to do.
+            Event.MarketPolicy partial = new Event.MarketPolicy();
+            partial.userId = ALICE;
+            partial.marketId = m.marketId();
+            partial.listingFee = 5;
+            partial.grantAmount = m.welcomeGrant();
+            partial.timestamp = 1L;
+            SequencedEvent se = new SequencedEvent();
+            se.seq = 2; se.event = partial;
+            EventApplier.apply(m, se);
+
+            check("the field it set is set", m.listingFee(), 5);
+            check("and the ones it omitted are gone", m.stipendAmount(), 0);
+            check("all of them", m.listingFreeOrders(), 0);
+        }
+
+        section("U7: a server can open a market with a stipend, or be told why not");
+        {
+            // A dedicated server bootstrapping the ordinary way is its own creator, and
+            // has no screen to set policy from afterwards — so whatever it cannot write
+            // at genesis, that market can never have. That is why these live in the
+            // config at all.
+            ServerConfig ok = ServerConfig.friendGroup(25555);
+            ok.listingFee = 2;
+            ok.stipendAmount = 50;
+            check("a stipend its fees can cover starts fine", ok.problem() == null ? 1 : 0, 1);
+
+            // 50 fills at 2 a side pays 200; a stipend of 200 breaks even, which is not
+            // safe — self-dealing at no loss is still an unbounded supply of claims.
+            ServerConfig breakEven = ServerConfig.friendGroup(25555);
+            breakEven.listingFee = 2;
+            breakEven.stipendAmount = 200;
+            check("break-even is refused", breakEven.problem() != null ? 1 : 0, 1);
+
+            ServerConfig noFee = ServerConfig.friendGroup(25555);
+            noFee.stipendAmount = 10;
+            check("a stipend with no listing fee is refused",
+                    noFee.problem() != null ? 1 : 0, 1);
+            check("and the refusal says a listing fee is what is missing",
+                    noFee.problem().contains("listing fee") ? 1 : 0, 1);
+
+            // Refused at startup rather than written into genesis, because a policy every
+            // replica rejects would leave the market unusable from its second event.
+            Path file = scratch("test-genesis-refused.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            int threw = 0;
+            try {
+                MarketBootstrap.createMarket(log, ALICE, "doomed market", testKeys(),
+                        1000, 0, 500);
+            } catch (IOException expected) {
+                threw = 1;
+            }
+            check("genesis refuses a policy it knows would be rejected", threw, 1);
+
+            // And the good case really does land in the log rather than just validating.
+            Path good = scratch("test-genesis-stipend.jsonl");
+            Files.deleteIfExists(good);
+            EventLog goodLog = new EventLog(good);
+            MarketBootstrap.createMarket(goodLog, ALICE, "opening market", testKeys(),
+                    1000, 2, 50);
+            MarketState opened = EventApplier.replay(goodLog);
+            check("the opening stipend is what the market publishes",
+                    opened.stipendAmount(), 50);
+            check("at the default interval", opened.stipendEveryFills(),
+                    MarketState.DEFAULT_STIPEND_EVERY_FILLS);
+            check("with the fee that pays for it", opened.listingFee(), 2);
+        }
+
         section("T1b: where a rate stops being worth anything");
         {
             // Reported from a live market: a 2.5% fee appeared to take nothing. It was
@@ -1552,6 +2675,50 @@ public class MarketTests {
             m.submitOrder(new Order(4, 50, IRON, 10, true, BOB));
             // Second trade: 500 gross, 50 tax, 450 net. First trade keeps its full 500.
             check("only the later trade is taxed", m.wallets().getBalance(ALICE), 950);
+        }
+
+        section("V1b: every deposit rule needs deposits counted, not just the cap");
+        {
+            // The statistics multiple was left out of the host's list, so setting it
+            // alone built a limiter with a zero-length window. It tracked nothing,
+            // usedBy always answered zero, and each deposit was judged on its own
+            // against the multiple — so ten handled iron authorised thirty deposited,
+            // then thirty more. The rule was walked through by splitting a deposit,
+            // which is the failure DepositLimiter.tracking() was written to prevent for
+            // the play-hour rule before this one existed.
+            ServerConfig statsOnly = ServerConfig.friendGroup(25555);
+            statsOnly.maxDepositMultipleOfHandled = 3;
+            check("the statistics rule counts deposits",
+                    statsOnly.countsDeposits() ? 1 : 0, 1);
+
+            ServerConfig capOnly = ServerConfig.friendGroup(25555);
+            capOnly.maxDepositUnitsPerWindow = 100;
+            check("so does the cap", capOnly.countsDeposits() ? 1 : 0, 1);
+
+            ServerConfig hoursOnly = ServerConfig.friendGroup(25555);
+            hoursOnly.maxDepositUnitsPerPlayHour = 100;
+            check("so does claimed play time", hoursOnly.countsDeposits() ? 1 : 0, 1);
+
+            check("and nothing configured keeps nothing",
+                    ServerConfig.friendGroup(25555).countsDeposits() ? 1 : 0, 0);
+
+            // A zero window under any of them is the same silent failure, so validation
+            // refuses it rather than building a limiter that answers about one deposit.
+            ServerConfig noWindow = ServerConfig.friendGroup(25555);
+            noWindow.maxDepositMultipleOfHandled = 3;
+            noWindow.depositWindowMinutes = 0;
+            check("a zero window is refused, not quietly accepted",
+                    noWindow.problem() != null ? 1 : 0, 1);
+
+            // Tracking without a ceiling is the shape the statistics rule needs: no cap
+            // to enforce, but a running total to be asked about.
+            DepositLimiter tracked = new DepositLimiter(0, 60 * 60_000L);
+            check("a limiter with no cap still tracks", tracked.tracking() ? 1 : 0, 1);
+            check("and enforces nothing", tracked.enabled() ? 1 : 0, 0);
+            tracked.record(ALICE, IRON, 30, 1_000L);
+            tracked.record(ALICE, IRON, 30, 2_000L);
+            check("so splitting a deposit no longer hides it",
+                    tracked.usedBy(ALICE, IRON, 3_000L), 60);
         }
 
         section("V1: a deposit cap counts a window, on the host's clock");
@@ -1831,6 +2998,104 @@ public class MarketTests {
                     BranchDiff.ordersOnlyAfter(log, 1, ALICE).size(), 4);
         }
 
+        section("X3: what a reset destroys that nothing can give back");
+        {
+            // Items deposited after the split are the only loss a reset causes outside
+            // the ledger: they left a Minecraft inventory, and the branch recording them
+            // is about to be deleted. Balances from before come back with the shared
+            // history; orders come back as a checklist; these are simply gone.
+            //
+            // The whole risk here is over-refunding, because this ends in items
+            // appearing in a world. Every case below is a way that could happen.
+            Path p = scratch("test-branchdiff-x3.jsonl");
+            Files.deleteIfExists(p);
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(p);
+            MarketBootstrap.createMarket(log, ALICE, "refund market", keys);
+            UUID marketId = log.marketId();
+
+            // Before the split: 100 iron. The host's copy has these too.
+            long split = depositAt(log, keys, ALICE, marketId, IRON, 100);
+
+            // After it: 40 more iron, 10 diamond, and 7 wood that get withdrawn again.
+            depositAt(log, keys, ALICE, marketId, IRON, 40);
+            depositAt(log, keys, ALICE, marketId, DIAMOND, 10);
+            depositAt(log, keys, ALICE, marketId, WOOD, 7);
+            withdrawAt(log, keys, ALICE, marketId, WOOD, 7);
+
+            Map<String, Long> owed = BranchDiff.depositsOnlyAfter(log, split, ALICE);
+
+            check("only what went in after the split", owed.getOrDefault(IRON, 0L), 40L);
+            check("counted per item", owed.getOrDefault(DIAMOND, 0L), 10L);
+            // Already back in the inventory. Refunding again is the plainest duplication
+            // this could produce.
+            check("nothing for what was withdrawn again",
+                    owed.containsKey(WOOD) ? 1 : 0, 0);
+
+            // The 100 from before the split must never appear here — the market still
+            // says they are Alice's and hands them back on reconnecting.
+            check("the pre-split balance is not refunded",
+                    owed.getOrDefault(IRON, 0L) < 100 ? 1 : 0, 1);
+
+            check("and none of it is anybody else's",
+                    BranchDiff.depositsOnlyAfter(log, split, BOB).size(), 0);
+
+            // A branch that never diverged owes nothing.
+            check("no divergence, nothing owed",
+                    BranchDiff.depositsOnlyAfter(log, log.lastSeq(), ALICE).size(), 0);
+        }
+
+        section("X3b: sold and reserved goods, which are the two ways to over-refund");
+        {
+            Path p = scratch("test-branchdiff-x3b.jsonl");
+            Files.deleteIfExists(p);
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(p);
+            MarketBootstrap.createMarket(log, ALICE, "refund edges", keys);
+            UUID marketId = log.marketId();
+            long split = log.lastSeq();
+
+            register(log, EventApplier.replay(log), BOB);   // so Bob may author events
+
+            // Alice deposits 50 iron after the split and rests a sell for 20 of them.
+            depositAt(log, keys, ALICE, marketId, IRON, 50);
+            Event.PlaceOrder ask = placeOrder(ALICE, IRON, 5, 20, false);
+            ask.marketId = marketId;
+            ask.timestamp = 9L;
+            log.append(ask, keys.sign(EventCanonical.canonicalPayload(ask)));
+
+            // Reserved goods are still hers — the ledger shows 30 free, but she put 50
+            // in and 50 is what a reset costs her.
+            check("goods reserved in a resting sell still count",
+                    BranchDiff.depositsOnlyAfter(log, split, ALICE)
+                            .getOrDefault(IRON, 0L), 50L);
+
+            // Bob buys the 20. Alice now holds credits for them, and the buyer holds the
+            // goods — refunding her would create iron that exists twice.
+            grant(log, EventApplier.replay(log), BOB, 1000);
+            Event.PlaceOrder bid = placeOrder(BOB, IRON, 5, 20, true);
+            bid.marketId = marketId;
+            bid.timestamp = 10L;
+            log.append(bid, keys.sign(EventCanonical.canonicalPayload(bid)));
+
+            MarketState after = EventApplier.replay(log);
+            check("the trade happened", after.fillsEver(), 1);
+            check("and the buyer holds the goods",
+                    after.itemBalances().getBalance(BOB, IRON), 20L);
+
+            check("what she sold is not refunded to her",
+                    BranchDiff.depositsOnlyAfter(log, split, ALICE)
+                            .getOrDefault(IRON, 0L), 30L);
+
+            // Bob deposited nothing, so his 20 are not his to be given back either —
+            // they came from Alice through a fill, not from his inventory.
+            check("and the buyer is owed nothing for them",
+                    BranchDiff.depositsOnlyAfter(log, split, BOB)
+                            .getOrDefault(IRON, 0L), 0L);
+        }
+
         section("W3: deposits are weighed against the player's own statistics");
         {
             // The one figure here the player did not write. Minecraft counts mined,
@@ -1923,6 +3188,22 @@ public class MarketTests {
             old.worldAgeTicks = WorldAttestation.TICKS_PER_HOUR * 40;
             check("forty claimed hours affords the same haul",
                     old.objections(cfg, 400).isEmpty() ? 1 : 0, 1);
+
+            // The refusal has to survive being checked. It printed the hours to one
+            // decimal while flooring the ceiling from the real value, so a world of
+            // 1.56 hours read "1.6 hours" beside a limit of 156 — and multiplying gave
+            // 160. A refusal whose own arithmetic does not add up reads as a broken
+            // server rather than a caught one.
+            WorldAttestation awkward = new WorldAttestation();
+            awkward.gameMode = "survival";
+            awkward.worldAgeTicks = (long) (WorldAttestation.TICKS_PER_HOUR * 1.56);
+            String said = awkward.objections(cfg, 202).get(0);
+            check("the refusal states the rate it used",
+                    said.contains("100 per claimed hour") ? 1 : 0, 1);
+            check("and the hours it used, to where they reconcile",
+                    said.contains("1.56") ? 1 : 0, 1);
+            check("and the ceiling that follows from them",
+                    said.contains("156") ? 1 : 0, 1);
 
             // Off unless configured, like everything else in this area.
             ServerConfig noPolicy = ServerConfig.friendGroup(25555);
@@ -2048,6 +3329,133 @@ public class MarketTests {
                             != null ? 1 : 0, 1);
         }
 
+        section("U3: a host says so when its configured grant is not the market's");
+        {
+            // Nothing breaks when the two disagree — issueWelcomeGrant takes the amount
+            // from the market and reads the config only as "issue grants, or not", so
+            // what goes out is correct either way. What is worth reporting is that an
+            // operator editing welcomeGrant on an existing market changes a number in a
+            // file and nothing else, because the amount was fixed when the market was
+            // created.
+            //
+            // Genesis records the figure whatever it is, so a market can always be
+            // asked what it grants rather than falling back to a constant.
+            Path chosen = scratch("test-grant-chosen.jsonl");
+            Files.deleteIfExists(chosen);
+            EventLog chosenLog = new EventLog(chosen);
+            MarketBootstrap.createMarket(chosenLog, ALICE, "grant 50 market",
+                    testKeys(), 50);
+            check("genesis records the grant it was given",
+                    EventApplier.replay(chosenLog).welcomeGrant(), 50);
+
+            Path plain = scratch("test-grant-default.jsonl");
+            Files.deleteIfExists(plain);
+            EventLog plainLog = new EventLog(plain);
+            MarketBootstrap.createMarket(plainLog, ALICE, "default grant market",
+                    testKeys());
+            check("and records the default too, rather than leaving it unstated",
+                    EventApplier.replay(plainLog).welcomeGrant(),
+                    ServerConfig.DEFAULT_WELCOME_GRANT);
+
+            Path file = scratch("test-grant-mismatch.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketBootstrap.createMarket(log, ALICE, "mismatch market", testKeys());
+
+            ServerConfig agrees = ServerConfig.friendGroup(25555);
+            agrees.hostUserId = ALICE.toString();
+            agrees.welcomeGrant = ServerConfig.DEFAULT_WELCOME_GRANT;
+            check("silent when the server and the market agree",
+                    hostFor(agrees, file).grantMismatchWarning() == null ? 1 : 0, 1);
+
+            ServerConfig disagrees = ServerConfig.friendGroup(25555);
+            disagrees.hostUserId = ALICE.toString();
+            disagrees.welcomeGrant = 50;
+            String warning = hostFor(disagrees, file).grantMismatchWarning();
+            check("a mismatch is reported", warning != null ? 1 : 0, 1);
+
+            // Zero is the opt-out from issuing grants at all, not an operator who got
+            // the number wrong, so it must not be reported as one.
+            ServerConfig off = ServerConfig.friendGroup(25555);
+            off.hostUserId = ALICE.toString();
+            off.welcomeGrant = 0;
+            check("but issuing none is a choice, not a mistake",
+                    hostFor(off, file).grantMismatchWarning() == null ? 1 : 0, 1);
+            // Both numbers, because "your grant is wrong" without them sends an
+            // operator back to the file to work out which way round it is.
+            check("and names the market's figure and the server's",
+                    warning != null && warning.contains("1000") && warning.contains("50")
+                            ? 1 : 0, 1);
+        }
+
+        section("T5b: a listing fee typed with its allowance");
+        {
+            // The allowance had no control at all until now — no field, no server-config
+            // key, nothing. listingFreeOrders was set in exactly one place, submitPolicy,
+            // which copies whatever it already was, so it was zero at genesis and zero
+            // forever. Every market ever created charged the flat fee, and the whole
+            // escalating half of this feature was unreachable code with a test behind it.
+            //
+            // One field for both, because a fee and the allowance it climbs past are one
+            // decision, and this project keeps finding the same bug in two numbers kept
+            // in two places.
+            check("a bare number is a flat fee",
+                    MarketState.listingFeeFromText("2").fee, 2);
+            check("and carries no allowance",
+                    MarketState.listingFeeFromText("2").freeOrders, 0);
+
+            check("a slash carries the allowance",
+                    MarketState.listingFeeFromText("2/3").fee, 2);
+            check("with the orders after it",
+                    MarketState.listingFeeFromText("2/3").freeOrders, 3);
+
+            check("space around it is not an error",
+                    MarketState.listingFeeFromText("  2 / 3  ").freeOrders, 3);
+            check("zero turns the fee off",
+                    MarketState.listingFeeFromText("0").fee, 0);
+            check("an explicit zero allowance is flat",
+                    MarketState.listingFeeFromText("5/0").freeOrders, 0);
+
+            // Half-typed rather than meaning zero. Reading "2/" as a flat fee would set
+            // a policy the typist did not ask for and say nothing about it.
+            check("a trailing slash is refused",
+                    MarketState.listingFeeFromText("2/") == null ? 1 : 0, 1);
+            check("a leading slash is refused",
+                    MarketState.listingFeeFromText("/3") == null ? 1 : 0, 1);
+            check("two slashes are refused",
+                    MarketState.listingFeeFromText("2/3/4") == null ? 1 : 0, 1);
+            check("a negative fee is refused",
+                    MarketState.listingFeeFromText("-1") == null ? 1 : 0, 1);
+            check("a negative allowance is refused",
+                    MarketState.listingFeeFromText("2/-1") == null ? 1 : 0, 1);
+            check("a decimal is refused — orders are whole",
+                    MarketState.listingFeeFromText("2.5") == null ? 1 : 0, 1);
+            check("words are refused",
+                    MarketState.listingFeeFromText("two") == null ? 1 : 0, 1);
+            check("empty is refused",
+                    MarketState.listingFeeFromText("") == null ? 1 : 0, 1);
+            check("null is refused",
+                    MarketState.listingFeeFromText(null) == null ? 1 : 0, 1);
+
+            // And what the parsed pair actually does, so this block is about the feature
+            // rather than about string handling.
+            MarketState m = new MarketState();
+            m.setMarketIdentity(UUID.randomUUID(), "allowance market", ALICE);
+            m.registerKey(ALICE, "alice-key");
+            m.wallets().setBalance(ALICE, 10_000L);
+            m.deposit(ALICE, IRON, 100);
+
+            MarketState.ListingFeeSetting typed = MarketState.listingFeeFromText("2/3");
+            m.setListingFee(typed.fee);
+            m.setListingFreeOrders(typed.freeOrders);
+
+            for (int i = 0; i < 3; i++) {
+                m.submitOrder(new Order(700 + i, 60 + i, IRON, 1, false, ALICE));
+            }
+            check("typing 2/3 really does buy three orders at the base fee",
+                    m.listingFeeFor(ALICE), 4);
+        }
+
         section("T5: a fee typed as a percentage becomes exact basis points");
         {
             // The one place a human decimal meets a number every replica must agree on.
@@ -2149,6 +3557,28 @@ public class MarketTests {
         }
     }
 
+    /** A host over an existing log, built but never started — no socket is opened. */
+    private static io.github.badbull643.economiesmod.core.net.HostServer hostFor(
+            ServerConfig cfg, Path log) throws Exception {
+        return new io.github.badbull643.economiesmod.core.net.HostServer(
+                cfg, log, testKeys(), new PeerCache(scratch("test-grant-peers.json")));
+    }
+
+    /**
+     * Which line holds the first event of this type.
+     *
+     * These tests used to index the log by position, which quietly stopped meaning what
+     * it said the moment genesis grew a second event: one of them went on passing while
+     * tampering with the wrong record entirely. Position in the file is not a contract;
+     * the event type is.
+     */
+    private static int lineOf(List<String> lines, String eventType) {
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains("\"eventType\":\"" + eventType + "\"")) return i;
+        }
+        throw new IllegalStateException("no " + eventType + " event in the log");
+    }
+
     private static Path scratch(String name) {
         try {
             Files.createDirectories(SCRATCH_DIR);
@@ -2185,6 +3615,47 @@ public class MarketTests {
 
         EventApplier.Result r = EventApplier.validate(state, se);
         return r.accepted ? null : r.reason;
+    }
+
+    /** Why a stipend claim would be refused, or null if it would stand. */
+    private static String stipendRejection(MarketState state, UUID who, long amount) {
+        Event.Stipend st = new Event.Stipend();
+        st.userId = who;
+        st.marketId = state.marketId();
+        st.amount = amount;
+        st.timestamp = 1L;
+        SequencedEvent se = new SequencedEvent();
+        se.seq = state.fillsEver() + 100;   // past genesis; the rule counts fills, not seq
+        se.event = st;
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
+    /** Why a policy setting this stipend against this fee would be refused. */
+    private static String policyStipendRejection(MarketState state, UUID author,
+                                                 long listingFee, long stipend,
+                                                 long everyFills) {
+        Event.MarketPolicy mp = new Event.MarketPolicy();
+        mp.userId = author;
+        mp.marketId = state.marketId();
+        mp.taxBps = 0;
+        mp.grantAmount = state.welcomeGrant();
+        mp.listingFee = listingFee;
+        mp.stipendAmount = stipend;
+        mp.stipendEveryFills = everyFills;
+        mp.timestamp = 1L;
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 2;
+        se.event = mp;
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
+    /** N fills of one iron at one credit, for advancing the market's fill count. */
+    private static List<Fill> fillsOf(int n) {
+        List<Fill> out = new ArrayList<>();
+        for (int i = 0; i < n; i++) out.add(new Fill(ALICE, BOB, 1, 1, IRON));
+        return out;
     }
 
     private static String policyRejection(MarketState state, UUID author, int bps) {
@@ -2269,6 +3740,34 @@ public class MarketTests {
         kr.publicKey = testKeys().publicKeyString();
         SequencedEvent se = log.append(kr, testKeys().sign(EventCanonical.canonicalPayload(kr)));
         EventApplier.apply(state, se);
+    }
+
+    /** Applies an event at a given sequence number, with no log behind it. */
+    private static EventApplier.Result applyAt(MarketState state, long seq, Event e) {
+        SequencedEvent se = new SequencedEvent();
+        se.seq = seq;
+        se.event = e;
+        return EventApplier.apply(state, se);
+    }
+
+    /** Appends a signed deposit and returns the seq it landed at. */
+    private static long depositAt(EventLog log, PlayerKeys keys, UUID user, UUID marketId,
+                                  String item, long qty) throws Exception {
+        Event.Deposit d = new Event.Deposit();
+        d.userId = user; d.marketId = marketId; d.itemId = item; d.quantity = qty;
+        d.clientEventId = UUID.randomUUID().toString();
+        d.timestamp = System.currentTimeMillis();
+        return log.append(d, keys.sign(EventCanonical.canonicalPayload(d))).seq;
+    }
+
+    /** The same for a withdrawal — the half that stops a refund being paid twice. */
+    private static long withdrawAt(EventLog log, PlayerKeys keys, UUID user, UUID marketId,
+                                   String item, long qty) throws Exception {
+        Event.Withdraw w = new Event.Withdraw();
+        w.userId = user; w.marketId = marketId; w.itemId = item; w.quantity = qty;
+        w.clientEventId = UUID.randomUUID().toString();
+        w.timestamp = System.currentTimeMillis();
+        return log.append(w, keys.sign(EventCanonical.canonicalPayload(w))).seq;
     }
 
     private static Event.Deposit deposit(UUID user, String item, long qty) {
