@@ -220,6 +220,65 @@ is the one thing meant to survive everybody being offline.
 
 `splitPointTest` covers `hashAt`; `E22` is the live half, and it is the half that matters,
 because all of this is about what happens between two machines.
+---
+
+## 8. Host rules a group can agree once — as defaults, never as enforcement
+
+**Decided 2026-08-23, after the question "should they travel?" was asked properly.**
+The answer is no, and the distinction is the whole entry: *travelling* means whoever hosts
+is made to enforce them, *agreeing once* means the group wrote them down and each host
+starts from that. Only the second is worth building, and it is much the cheaper.
+
+**Why not travelling.** Three separate blockers, and any one of them is enough:
+
+- **Time-windowed rules have no clock.** `maxDepositUnitsPerWindow` is "N units per 60
+  minutes", and a replicated rule must be a deterministic function of the log — so the
+  only clock available is the event's own `timestamp`, which is set **client-side** before
+  signing. Replicating it means rate-limiting somebody against a clock they control.
+- **Some rules judge evidence that is not in the log.** Attestation, `refuseCreativeWorlds`,
+  `refuseCheatWorlds`, `maxDepositMultipleOfHandled` and the play-hour rule all weigh an
+  out-of-band claim about a player's Minecraft world. No replica can re-verify a claim it
+  never received.
+- **And item 3 already paid for the third.** A rule whose default differs by deployment
+  type makes one policy event legal on one host and illegal on the next, which forks the
+  market the moment hosting rotates.
+
+**The reframing that settles it.** Host rules are a host's defence against its *clients*,
+not the market's defence against its *host*. Making them travel adds no security, because
+the party enforcing them is the party who could ignore them either way — a dishonest host
+already ignores its own deposit caps. What travelling would add is consistency, which is a
+usability property, and the trust model should not be reshaped to buy one.
+
+**What to build.** A record in the log that the creator can publish and that each host
+reads and adopts as its starting configuration, with local override still allowed. Nothing
+in `EventApplier.validate` changes, no replica has to agree about validity, and nothing can
+fork. A friend rotating in picks up the group's caps instead of having none, which is the
+actual failure today.
+
+**The subset, and the line.** Deposit caps, `acceptsMigration`, `maxMigratedCredits`,
+`maxWelcomeGrant`, admission. **Not** attestation, the world checks, or a ban — those are
+personal by nature: "I do not want this person on my machine" is a different decision from
+"this group excludes them", and forcing the first to mean the second is heavier than it
+looks.
+
+**Cost of not doing it:** a group's economy is only as protected as its most permissive
+host. A cap that applied on Tuesday and not Wednesday capped nothing, because the goods
+deposited on Wednesday are in the ledger for good. Rotating to somebody who never opened
+the file is enough, and nothing warns anyone that it happened.
+
+**Two things to get right, both already known.** §7's trap sits right next to this: *"A
+`MarketPolicy` event is the whole policy. Anything it does not restate is set to zero"* —
+which silently wiped the stipend once. Anything policy-shaped needs `submitPolicy`'s
+build-from-current-state treatment from the first commit, not after it bites.
+
+And the cheaper alternative deserves stating, because any design here should beat it:
+`host-config.json` is a file in a world directory, and a group could simply share it.
+Nobody will — which is the same reason `/trade hostconfig` had to exist at all — but that
+is the baseline.
+
+**Below items 5 and 6 in value.** It is a session's work, and unlike them nothing is
+currently broken by its absence: what it prevents is a slow leak nobody notices, rather
+than something a player can walk into this evening.
 
 ---
 
