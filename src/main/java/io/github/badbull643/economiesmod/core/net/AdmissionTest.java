@@ -96,6 +96,7 @@ public class AdmissionTest {
         peerSharingRespectsDedicated();
         aFailedStartWritesNothing();
         migrationIsWeighedAgainstStatistics();
+        aDedicatedServerDeclinesMigration();
 
         System.out.println();
         if (failures == 0) {
@@ -104,6 +105,88 @@ public class AdmissionTest {
             System.out.println(failures + " of " + checksRun + " checks FAILED");
         }
         System.exit(failures == 0 ? 0 : 1);
+    }
+
+    /**
+     * A8: a dedicated server declines migrations, and says what to do instead.
+     *
+     * Migration solves bootstrapping among people who know each other. The balance it
+     * carries was set by a welcome grant the migrant chose, in a world they control, up
+     * to MAX_WELCOME_GRANT — fine between friends, and "name your opening balance" on a
+     * public box. So a dedicated host declines by default.
+     *
+     * Over the wire rather than against ServerConfig, because the default resolving
+     * correctly is only half of it: this is the half that proves the refusal is wired to
+     * the path that hands out money, and that it comes back before the sender has
+     * uploaded a whole history.
+     */
+    private static void aDedicatedServerDeclinesMigration() throws Exception {
+        System.out.println("  [A8: a dedicated server declines migrations by default]");
+
+        Path hostLog = dir.resolve("adm-dedicated.jsonl");
+        Path foreignLog = dir.resolve("adm-dedicated-foreign.jsonl");
+        Files.deleteIfExists(hostLog);
+        Files.deleteIfExists(foreignLog);
+
+        PlayerKeys boxKeys = PlayerKeys.generate();
+        EventLog log = new EventLog(hostLog);
+        MarketBootstrap.createMarket(log, HOST, "public market", boxKeys);
+
+        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        cfg.hostName = "the box";
+        cfg.hostUserId = HOST.toString();
+        cfg.dedicated = true;          // the only thing that differs
+        check("which is enough to decline them", cfg.acceptsMigration() ? 1 : 0, 0);
+
+        HostServer host = new HostServer(cfg, hostLog, boxKeys,
+                new PeerCache(dir.resolve("adm-host-peers.json")));
+        Thread t = new Thread(() -> {
+            try { host.start(); } catch (IOException e) { /* stopped */ }
+        }, "dedicated-migration-test-host");
+        t.setDaemon(true);
+        t.start();
+        IOException bindError = host.awaitBound(5000);
+        if (bindError != null) throw bindError;
+
+        try {
+            // A market the migrant genuinely holds a position in, so nothing else could
+            // be the reason for the refusal.
+            PlayerKeys mine = PlayerKeys.generate();
+            EventLog foreign = new EventLog(foreignLog);
+            MarketBootstrap.createMarket(foreign, INVITED, "my own market", mine);
+
+            Event.Deposit dep = new Event.Deposit();
+            dep.userId = INVITED;
+            dep.marketId = foreign.marketId();
+            dep.itemId = "minecraft:iron_ingot";
+            dep.quantity = 10;
+            dep.timestamp = System.currentTimeMillis();
+            foreign.append(dep, mine.sign(EventCanonical.canonicalPayload(dep)));
+
+            Message.MigrateResult result = MarketClient.requestMigration(
+                    "127.0.0.1", cfg.port, INVITED,
+                    Files.readAllLines(foreignLog), null);
+
+            check("migration refused", result != null && !result.accepted ? 1 : 0, 1);
+            // The refusal has to name the way in, or somebody reads "no" as "you cannot
+            // play here" and goes away.
+            check("and points at adding a market slot instead",
+                    result != null && result.reason != null
+                            && result.reason.contains("add another market") ? 1 : 0, 1);
+            check("saying their own market is untouched",
+                    result != null && result.reason != null
+                            && result.reason.contains("stays exactly as it is") ? 1 : 0, 1);
+
+            // And an operator who wants them can have them, or the default is a rule.
+            cfg.acceptsMigration = Boolean.TRUE;
+            Message.MigrateResult allowed = MarketClient.requestMigration(
+                    "127.0.0.1", cfg.port, INVITED,
+                    Files.readAllLines(foreignLog), null);
+            check("turning it on lets one through",
+                    allowed != null && allowed.accepted ? 1 : 0, 1);
+        } finally {
+            host.stop();
+        }
     }
 
     /** The policy has to let the right people through, or it is just a closed door. */

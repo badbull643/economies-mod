@@ -1332,6 +1332,22 @@ public class MarketScreen extends Screen {
         return null;
     }
 
+    /**
+     * Whether the foreign market on offer is served by a dedicated server.
+     *
+     * From the discovery reply rather than from a connection, because the question has
+     * to be answerable before deciding whether to offer Migrate — and `dedicated` is on
+     * QueryReply for exactly that reason, with a comment saying a badge that only
+     * appeared after connecting would answer too late to be of use in choosing.
+     *
+     * Self-reported and signed, so nobody can change it in transit and a host can still
+     * describe itself however it likes. That is enough for advice, which is all this is.
+     */
+    private boolean foreignIsDedicated() {
+        PeerPoll.HostInfo h = foreignHost();
+        return h != null && h.reply != null && h.reply.dedicated;
+    }
+
     /** Lays out only the applicable actions, top to bottom with no gaps. */
     private void refreshMarketActions() {
         if (activeScreen != SCREEN_MARKET) return;
@@ -1346,8 +1362,20 @@ public class MarketScreen extends Screen {
         // Only where there is somewhere to migrate TO, and never as an answer to a
         // fork — the host refuses that, because our position already includes the
         // history their copy has and crediting it again would pay us twice.
+        //
+        // And not towards a dedicated server, which by default does not take them: the
+        // balance a migrant carries was set by a welcome grant they chose in a world
+        // they control, which is fine among people who know each other and is not what
+        // a public box wants. The guidance beside this offers the route that costs
+        // nothing instead — add a market slot and connect from it.
+        //
+        // Read from the discovery reply, which carries `dedicated` precisely so it can
+        // be known before connecting. It is advice, not the answer: the server's own
+        // acceptsMigration is what actually decides, and an operator may have turned it
+        // back on. Erring this way hides a button that would have worked; erring the
+        // other way sends somebody's whole log over the wire to be refused.
         boolean migrate = foreign && situation != MS_NO_MARKET && situation != MS_FORKED
-                && situation != MS_DAMAGED;
+                && situation != MS_DAMAGED && !foreignIsDedicated();
         boolean reset = situation != MS_NO_MARKET;
 
         // Hidden rather than greyed, unlike the Host button on a dedicated market.
@@ -1975,10 +2003,24 @@ public class MarketScreen extends Screen {
 
         if (foreign != null && situation != MS_NO_MARKET && situation != MS_FORKED) {
             y += 6;
-            for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(
-                    foreign.reply.hostName + " is running a separate market ('"
+            // Two different pieces of advice, because a dedicated server is a different
+            // proposition. Migration suits people who know each other; a public box does
+            // not take them by default, and saying only "you cannot migrate" would leave
+            // somebody thinking they cannot join at all. The route that costs nothing is
+            // the one worth naming — slots are separate logs, so joining from a new one
+            // leaves the market they already have exactly where it is.
+            String advice = foreignIsDedicated()
+                    ? foreign.reply.hostName + " is a dedicated server running a separate"
+                            + " market ('" + foreign.reply.marketName + "'). It does not"
+                            + " take migrations. To join it, use Add another market and"
+                            + " connect from that one — this market stays as it is, and"
+                            + " you arrive there on their welcome grant like anyone else."
+                    : foreign.reply.hostName + " is running a separate market ('"
                             + foreign.reply.marketName + "'). Migrating carries your"
-                            + " whole position there and abandons this one."), listW)) {
+                            + " whole position there and abandons this one. Add another"
+                            + " market instead to join without giving this one up.";
+            for (OrderedText line : this.textRenderer.wrapLines(
+                    new LiteralText(advice), listW)) {
                 this.textRenderer.drawWithShadow(m, line, x, y, 0x88CCFF);
                 y += 10;
             }

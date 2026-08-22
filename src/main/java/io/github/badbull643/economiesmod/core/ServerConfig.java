@@ -290,11 +290,46 @@ public class ServerConfig {
     /**
      * Whether to describe this host as a dedicated server to clients.
      *
-     * Set by the standalone launcher, not by anything a player can reach. It changes
-     * no behaviour at all — it is the single player-facing signal that this host is
-     * always up and nobody needs to take a turn hosting.
+     * Set by the standalone launcher, not by anything a player can reach. It is the
+     * player-facing signal that this host is always up and nobody needs to take a turn
+     * hosting — and, through acceptsMigration below, the default answer to whether
+     * somebody may carry a balance in from elsewhere.
      */
     public boolean dedicated = false;
+
+    /**
+     * Whether this host accepts migrations. Unset means "whatever suits this kind of
+     * host": **off for a dedicated server, on for somebody's game.**
+     *
+     * Migration exists to solve bootstrapping among people who know each other — a log
+     * handed over on Discord, a group merging two markets they both meant to be one.
+     * Everything it does rests on the receiving market being willing to take a stranger's
+     * arithmetic on trust, bounded only by what their own Minecraft statistics can be
+     * made to support.
+     *
+     * A dedicated server is the deployment where that assumption is worst. It is the one
+     * that admission policy, deposit caps and attestation all exist for, and it is the
+     * one where an arriving player is most likely to be somebody nobody vouches for. The
+     * balance they carry in was set by a welcome grant *they chose*, in a world they
+     * control, up to MAX_WELCOME_GRANT — so migration there is not "bringing your
+     * savings", it is "naming your opening balance".
+     *
+     * Off by default there, then, and the answer for somebody who wants to join is the
+     * one that costs them nothing: add another market in their world and connect from
+     * that slot. Slots are separate logs, so their own economy is untouched and they
+     * arrive here on the same welcome grant as everybody else.
+     *
+     * Boxed rather than a plain boolean so unset is distinguishable from explicitly
+     * false — an operator who wants migrations on a dedicated box can say so, and one
+     * who never thinks about it gets the safe answer for the kind of host they are
+     * running.
+     */
+    public Boolean acceptsMigration = null;
+
+    /** The effective answer, with the default resolved. Ask this, never the field. */
+    public boolean acceptsMigration() {
+        return acceptsMigration != null ? acceptsMigration : !dedicated;
+    }
 
     /**
      * The identity the server signs grants and sequencing with.

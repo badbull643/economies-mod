@@ -902,6 +902,26 @@ public class HostServer {
     private void handleMigrate(MessageChannel channel, Message.MigrateRequest first) {
         Message.MigrateResult reply = new Message.MigrateResult();
         try {
+            // Before admission, before the chunks, before verifying a whole history: if
+            // this host does not take migrations at all, none of that work is worth
+            // doing and the sender should hear so immediately rather than after
+            // uploading their log.
+            //
+            // Names the alternative, because a refusal that leaves somebody thinking
+            // they cannot join is worse than the migration would have been. Adding a
+            // market slot and connecting from it costs them nothing — separate logs, so
+            // the market they already have is untouched.
+            if (!config.acceptsMigration()) {
+                System.out.println("[host] refused migration from " + first.userId
+                        + " — this host does not accept them");
+                reply.reason = "this server does not accept migrations. To join, add"
+                        + " another market in your world and connect from that one —"
+                        + " your existing market stays exactly as it is, and you arrive"
+                        + " here on the same welcome grant as everybody else";
+                channel.send(reply);
+                return;
+            }
+
             // Migration is a pre-handshake exchange that writes a MigrateBalance and
             // credits the sender. Gating only the handshake would leave the admission
             // policy bypassable by the one path that hands out money.

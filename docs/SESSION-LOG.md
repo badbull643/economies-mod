@@ -26,14 +26,14 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found fourteen defects in code that had 437 passing checks behind it — one a whole
+and it found fifteen defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`487 / 6 / 5 / 16 / 16 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
+`494 / 6 / 5 / 16 / 21 / 6 / 12 / 16`, the last being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -213,6 +213,33 @@ And a fourteenth, reported from play:
     Minecraft-dependent client code and `HostServer.stop()` itself was never broken —
     adding a test for the part that worked would buy coverage of the wrong thing.
 
+And a fifteenth, raised as a design question rather than a bug — correctly:
+
+15. **A dedicated server offered migration like any other host.** The Migrate button
+    tested only whether a foreign market existed, and the refusal advice said *"Migrate
+    (carries your balance) or Reset log"* to a public box exactly as to a friend.
+
+    Migration solves bootstrapping among people who know each other. The balance it
+    carries was set by a welcome grant the migrant chose, in a world they control, up to
+    `MAX_WELCOME_GRANT` — so on a public server it is not "bringing your savings", it is
+    "naming your opening balance". That is the deployment admission, deposit caps and
+    attestation all exist for, and migration walked past all of them.
+
+    `acceptsMigration` in `host-config.json`, **boxed so unset is not false**: unset means
+    off for a dedicated server and on for somebody's game, and either can be set
+    explicitly. Enforced in `handleMigrate` before admission and before any chunk is
+    read, so a refusal arrives without the sender uploading a history first.
+
+    **And the better answer got named.** The UI offered import-your-wealth or
+    destroy-it, and never mentioned the route that costs nothing: market slots are
+    separate logs, so *Add another market* and connecting from the new slot joins anywhere
+    while leaving your own market exactly where it is. That now leads the advice
+    everywhere, and is what a dedicated server's refusal points at.
+
+    Also worth recording: there was no way for any operator to refuse a migration at all
+    before this. `maxMigratedCredits: 0` means unlimited, not none — a gap in §0.12,
+    added the same day.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -228,8 +255,8 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 487   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
-admissionTest 16   depositCapTest 6   attestationTest 12   hostTrustTest 16
+coreTests 494   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+admissionTest 21   depositCapTest 6   attestationTest 12   hostTrustTest 16
 ```
 
 *(437 across seven suites when this section was written; the extra 23 checks and the
