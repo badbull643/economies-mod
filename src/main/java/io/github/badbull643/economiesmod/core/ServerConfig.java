@@ -332,6 +332,46 @@ public class ServerConfig {
     }
 
     /**
+     * The largest welcome grant somebody hosting in their game will sequence.
+     *
+     * Ten thousand against items that trade for one or two. The compiled ceiling is a
+     * hundred times that, which is four orders of magnitude above anything a real market
+     * uses — and the grant is the largest single lever on what credits are worth, so a
+     * fat finger there does more damage than every other setting combined.
+     */
+    public static final long ROTATING_MAX_WELCOME_GRANT = 10_000L;
+
+    /**
+     * The most this host will let a market grant a newcomer. Unset follows the kind of
+     * host: **the low figure above in somebody's game, the compiled ceiling on a
+     * dedicated server.**
+     *
+     * A host rule, and it could not be anything else. The ceiling in EventApplier is
+     * replicated, so every replica has to reach the same verdict about the same event —
+     * and "rotating" versus "dedicated" describes whoever is hosting at this moment, not
+     * the market. A ceiling that differed between them would make one policy event legal
+     * on one host and illegal on the next, and hosting rotates by design.
+     *
+     * Which is also why nothing existing breaks. Lowering MarketState.MAX_WELCOME_GRANT
+     * would have left any market that had already set a larger grant unable to replay its
+     * own recorded policy — the objection that kept this on the backlog. Refusing to
+     * *sequence* a new one has no such reach: history stays valid, and only the next
+     * change is judged.
+     *
+     * A dedicated server keeps the high figure because it is the deployment that might
+     * legitimately want it — a long-running economy with real scarcity, set once by an
+     * operator who thought about it — and because it is the one where the number is not
+     * one keystroke from a player who wondered what would happen.
+     */
+    public Long maxWelcomeGrant = null;
+
+    /** The effective answer, with the default resolved. Ask this, never the field. */
+    public long maxWelcomeGrant() {
+        if (maxWelcomeGrant != null) return maxWelcomeGrant;
+        return dedicated ? MarketState.MAX_WELCOME_GRANT : ROTATING_MAX_WELCOME_GRANT;
+    }
+
+    /**
      * The identity the server signs grants and sequencing with.
      *
      * Null means "derive one and remember it". The old launcher fell back to a
@@ -468,6 +508,7 @@ public class ServerConfig {
         // On a tree rather than by mutating this, so saving a config does not change it.
         com.google.gson.JsonObject out = gson.toJsonTree(this).getAsJsonObject();
         out.addProperty("acceptsMigration", acceptsMigration());
+        out.addProperty("maxWelcomeGrant", maxWelcomeGrant());
         Files.write(file, gson.toJson(out).getBytes(StandardCharsets.UTF_8));
     }
 
@@ -515,6 +556,21 @@ public class ServerConfig {
         }
         if (welcomeGrant < 0) {
             return "welcomeGrant cannot be negative, not " + welcomeGrant;
+        }
+        if (maxWelcomeGrant != null && maxWelcomeGrant < 0) {
+            return "maxWelcomeGrant cannot be negative, not " + maxWelcomeGrant;
+        }
+        if (maxWelcomeGrant() > MarketState.MAX_WELCOME_GRANT) {
+            return "maxWelcomeGrant may not exceed " + MarketState.MAX_WELCOME_GRANT
+                    + ", which every replica enforces regardless of this setting";
+        }
+        // Caught here rather than at the first policy event, because a market this host
+        // bootstraps writes its grant into genesis — and a host that refuses to sequence
+        // the figure it just created a market with is a server that argues with itself.
+        if (welcomeGrant > maxWelcomeGrant()) {
+            return "welcomeGrant is " + welcomeGrant + " but this host will not sequence"
+                    + " a grant above " + maxWelcomeGrant()
+                    + " — raise maxWelcomeGrant if that is really what you want";
         }
         if (maxMigratedCredits < 0) {
             return "maxMigratedCredits cannot be negative, not " + maxMigratedCredits

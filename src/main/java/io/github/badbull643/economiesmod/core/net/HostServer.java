@@ -1261,6 +1261,33 @@ public class HostServer {
             return;
         }
 
+        // What this host will let a market grant a newcomer.
+        //
+        // A host rule, and it has to be: the ceiling in EventApplier is replicated, so
+        // every replica must reach the same verdict about the same event — and whether
+        // a market is "rotating" or "dedicated" is a fact about whoever is hosting right
+        // now, not about the market. Put it in validate and the same policy event would
+        // be legal on one host and illegal on the next, which forks the market the
+        // moment hosting changes hands. It sits here with admission and the deposit caps
+        // instead, and travels no better than they do — see the log's note on that.
+        //
+        // The nice consequence is that no existing market breaks. Lowering the number in
+        // validate would have made a market that had already set a larger grant fail to
+        // replay its own recorded policy, which is what kept this undone.
+        if (event instanceof Event.MarketPolicy) {
+            long asked = ((Event.MarketPolicy) event).grantAmount;
+            long ceiling = config.maxWelcomeGrant();
+            if (asked > ceiling) {
+                System.out.println("[host] refused a welcome grant of " + asked
+                        + " — this host allows " + ceiling);
+                reject(p.from, msg.clientEventId, "this host will not sequence a welcome"
+                        + " grant above " + ceiling + ", and you asked for " + asked
+                        + ". A grant far above what things trade for is the largest"
+                        + " single lever on what credits are worth");
+                return;
+            }
+        }
+
         // After validate, so an event refused for some other reason costs nobody any of
         // their allowance, and before append, because this is the last point at which
         // declining is free.

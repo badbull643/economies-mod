@@ -994,6 +994,76 @@ public class MarketTests {
                     String.valueOf(cfg.problem()).contains("use 0") ? 1 : 0, 1);
         }
 
+        section("R1b: what a host will let a market grant, which is not what validate allows");
+        {
+            // The grant is the largest single lever on what credits are worth, and the
+            // compiled ceiling is a hundred times what any real market uses. Lowering
+            // *that* was the obvious move and is the wrong one: it lives in validate,
+            // which is replicated, so a market that had already set a larger grant would
+            // stop being able to replay its own recorded policy. That objection is what
+            // kept this on the backlog.
+            //
+            // A host rule instead, beside admission and the deposit caps. History stays
+            // valid; only the next change is judged. And it *has* to be a host rule for a
+            // second reason: "rotating" and "dedicated" describe whoever is hosting right
+            // now, so a ceiling that told them apart inside validate would make one
+            // policy event legal on one host and illegal on the next.
+            ServerConfig inGame = new ServerConfig();
+            check("somebody's game caps it low",
+                    inGame.maxWelcomeGrant(), ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+
+            ServerConfig box = new ServerConfig();
+            box.dedicated = true;
+            check("a dedicated server keeps the compiled ceiling",
+                    box.maxWelcomeGrant(), MarketState.MAX_WELCOME_GRANT);
+
+            // Unset is not zero, which is the failure that would silently stop every
+            // in-game host from sequencing any grant at all.
+            check("unset means the default, not nothing",
+                    new ServerConfig().maxWelcomeGrant() > 0 ? 1 : 0, 1);
+
+            box.maxWelcomeGrant = 500L;
+            check("an operator can lower it", box.maxWelcomeGrant(), 500L);
+            inGame.maxWelcomeGrant = 250_000L;
+            check("or raise it", inGame.maxWelcomeGrant(), 250_000L);
+
+            // Never above what every replica enforces regardless, or the setting would
+            // promise something the log would refuse.
+            ServerConfig tooHigh = new ServerConfig();
+            tooHigh.maxWelcomeGrant = MarketState.MAX_WELCOME_GRANT + 1;
+            check("but never above the compiled ceiling",
+                    tooHigh.problem() != null ? 1 : 0, 1);
+
+            ServerConfig negative = new ServerConfig();
+            negative.maxWelcomeGrant = -1L;
+            check("and not negative", negative.problem() != null ? 1 : 0, 1);
+
+            // A server that bootstraps a market above its own ceiling would refuse to
+            // sequence the figure it had just written into genesis.
+            ServerConfig arguing = new ServerConfig();
+            arguing.welcomeGrant = ServerConfig.ROTATING_MAX_WELCOME_GRANT + 1;
+            check("a host cannot create a market it would then refuse",
+                    arguing.problem() != null ? 1 : 0, 1);
+            check("and says which two figures disagree",
+                    String.valueOf(arguing.problem()).contains("maxWelcomeGrant") ? 1 : 0, 1);
+
+            // The default grant has to sit under the default ceiling, or every fresh
+            // friend-group host is born unable to create a market.
+            check("the ordinary default is allowed",
+                    ServerConfig.friendGroup(25555).problem() == null ? 1 : 0, 1);
+            check("with room above it",
+                    ServerConfig.DEFAULT_WELCOME_GRANT
+                            < ServerConfig.ROTATING_MAX_WELCOME_GRANT ? 1 : 0, 1);
+
+            // validate is untouched, which is the whole point: a market that already
+            // holds a big grant still replays.
+            MarketState old = new MarketState();
+            old.setMarketIdentity(UUID.randomUUID(), "an old rich market", ALICE);
+            old.registerKey(ALICE, "alice-key");
+            check("an existing large grant still validates",
+                    policyRejection(old, ALICE, 0, 250_000L) == null ? 1 : 0, 1);
+        }
+
         section("M6d: a dedicated server does not take migrations unless told to");
         {
             // Migration solves bootstrapping among people who know each other. The
