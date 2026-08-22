@@ -5,9 +5,11 @@ import com.google.gson.JsonParser;
 import io.github.badbull643.economiesmod.core.*;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -303,6 +305,50 @@ public class MarketClient {
      * so there is no session to do this inside. On success the caller should reset and
      * connect normally; nothing about the local log is touched here.
      */
+    /**
+     * One host's hash at one sequence number, or null if it could not be had.
+     *
+     * The question a discovery poll needs and could not ask. A probe carries a host's
+     * head and nothing below it, so when that head is *above* ours there is no point the
+     * two chains can be compared at — and "they are ahead of me on my chain" and "they
+     * are on a different chain that happens to be longer" look identical from here. The
+     * first means catch up; the second means you have forked and catching up is a
+     * refusal. Asking for their hash at **our** head separates them in one round trip.
+     *
+     * Deliberately not findSplitPoint. That searches, over several rounds, for where two
+     * chains parted; this asks a single question with a yes or no answer, and it is asked
+     * on the poll path where every round trip is paid on a timer.
+     *
+     * Timeouts are shorter than the search's for the same reason: a peer that has gone
+     * away must not hold the poll up, and the poll will ask again in a few seconds.
+     */
+    public static String hashAt(String host, int port, long seq) throws IOException {
+        if (seq <= 0) return null;
+
+        Socket socket = new Socket();
+        socket.connect(new InetSocketAddress(host, port), 3_000);
+        socket.setSoTimeout(5_000);
+        try (MessageChannel ch = new MessageChannel(socket)) {
+            Message.HashQuery q = new Message.HashQuery();
+            q.seqs = Collections.singletonList(seq);
+            ch.send(q);
+
+            Message reply = ch.receive();
+            if (!(reply instanceof Message.HashReply)) return null;
+            Message.HashReply hr = (Message.HashReply) reply;
+            if (hr.seqs == null || hr.hashes == null) return null;
+
+            for (int i = 0; i < hr.seqs.size() && i < hr.hashes.size(); i++) {
+                Long at = hr.seqs.get(i);
+                if (at != null && at == seq) return hr.hashes.get(i);
+            }
+            // They answered without the seq we asked for, which is what a host shorter
+            // than that seq does. Not an error and not an answer: null means "could not
+            // be had", and the caller holds no opinion rather than guessing one.
+            return null;
+        }
+    }
+
     /**
      * The last sequence number at which our chain and a host's still agree.
      *

@@ -171,75 +171,39 @@ who thinks to check. It does not cover somebody who does not.
 
 ---
 
-## 7. The poll cannot tell a longer chain from a different one
+## 7. ~~The poll cannot tell a longer chain from a different one~~ — DONE 2026-08-22
 
-**From §0.20 in the session log. `MarketClient.findSplitPoint` exists and works.**
+All three paths that build a `Divergence` supply a split point now. `noteForkFromRefusal`
+always did; `offerCatchUp` was given one in §0.22 after the AHEAD path cost a real run
+five items and five entries on its re-place checklist; and the discovery poll asks in
+§0.24.
 
-**Two of the three are done.** `noteForkFromRefusal` has always supplied `splitAt`, and
-`offerCatchUp` does now — see §0.22, where the AHEAD path cost a real run five items and
-five entries on its re-place checklist, under a comment asserting the fallback was safe.
-**The discovery poll is what is left**, and it is the one that runs without anybody
-pressing anything.
+**The poll's version needed a question nobody could ask before.** A probe carries a head
+and nothing below it, so a peer *above* us could not be compared with at all — the poll
+held no opinion about whether we had forked, and recorded their head as this market's
+height regardless. `MarketClient.hashAt` asks one `HashQuery` for their hash at **our**
+head: matching means they extend us, so the height is real and "behind" is true; not
+matching means a fork, the height is not ours to record, and the split is worth finding.
 
-So the banner somebody sees without pressing Connect is still the pre-`E18` one — *"differs
-at event N"*, where N is the other side's head — and two clients polling each other show
-two different numbers, neither of which is a split point.
+**The cost that kept it out is paid by a cache that already existed.** `checkedHeads` was
+keyed by (peer, head) and returned early when neither had moved, so a peer sitting still
+costs nothing — the ordinary case for a poll on a timer. And the split point is looked up
+before it is searched for, because it does not move: two branches that have parted stay
+parted and both only grow.
 
-It reaches past the banner. `depositsLostToReset` falls back to `divergence.seq - 1` when
-the split is unknown. That is a true upper bound and a very loose one: against a
-poll-sourced divergence at 52, on a pair of chains that parted at 22, it looks for
-deposits after event 51 and finds nearly none.
+**What it was worth, which was more than the banner.** `eventsBehind` gates Host, and a
+height recorded from a forked peer told the participant on the chain everybody else shared
+that hosting it would split the market — then advised catching up from a peer who would
+refuse them. The warning built to prevent a fork was fired by one, at the only person who
+had not caused it.
 
-**Second symptom, reported 2026-08-22, and it is worse than the banner.** The poll calls
-`observeMarketHeight` **first, unconditionally**, before any hash is compared — so a
-forked peer's head is recorded as this market advancing. Alice at 90 against Bob's forked
-98 came away permanently "8 events behind", on a branch that was never hers to catch up
-to, and the mark is monotonic and persisted in `high-water.json`.
+§0.25 came out of the same change: `observeMarketHeight` was called before the market id
+was checked, and `MarketHighWater.observe` starts a fresh record when handed a different
+id — so polling any host serving a different market silently zeroed the watermark, which
+is the one thing meant to survive everybody being offline.
 
-That is not cosmetic. `eventsBehind()` gates **Host**: `onHost` opens a DANGER overlay
-saying *"Hosting now would refuse everyone who is up to date, and split the market the
-moment you trade"*, and advises connecting to somebody serving it to catch up
-automatically. Against a phantom mark every clause of that is false, and the advice leads
-to a refusal — the honest host, on the chain everybody else shares, is the one warned off
-hosting it.
-
-The watermark's own design note is where the reasoning breaks: it stands in for a quorum,
-*"a note of how far ahead the market was last time we saw anyone serving it"*, and it is
-deliberately monotonic so it survives peers going offline. That is right for the case it
-was built for — somebody returning after a week — and it assumes a market id identifies
-one chain. A fork is precisely the state where it does not.
-
-**The same missing question answers both.** When a peer reports a head above ours the poll
-cannot compare — `if (seq > log.lastSeq()) return;` — so it holds no opinion, which is
-correct given what it knows and is why a fork with a longer peer stays invisible until
-somebody presses Connect. One `HashQuery` at **our** head settles it: matching means they
-genuinely extend us, so the height is real and "behind" is true; not matching means a
-fork, so the height must not be recorded and a divergence should be raised with a split
-point. Cached by (peer, head), a poll cycle costs one extra round trip only when a peer's
-head has moved.
-
-**Cost of not doing it:** a reset started from the poll's banner refunds almost nothing
-while the confirmation names what it will hand back. It errs the safe way — under-refunding
-cannot create items, and that bound is deliberate — so this is wrong quietly rather than
-dangerously. Bounded, silent, and financial in the way that matters to whoever loses the
-items.
-
-**It has already happened once**, on the sibling path, and nothing caught it: every number
-printed was self-consistent and no test failed. §0.22 was found by comparing what the
-console said went in against what it said came back. A guard that makes failure safe also
-makes it silent, which is the argument for finishing this rather than leaving one third of
-it.
-
-**Why it was built this way, which is worth keeping.** The search is a second round trip
-to a host that has just refused you, on purpose: a failure costs the detail and not the
-refusal. The poll runs on a timer against every host it can see, so making it search every
-cycle would turn one background poll into several.
-
-The shape that fits both: find the split once per host and head, cache it against that
-pair, and let the poll and the reset read the cache. A new head invalidates it, which is
-the same rule the chain hash already uses everywhere else. Collapsing all three
-constructions onto one path that knows the answer is the §4 move, and this is the fourth
-entry in this file whose root is a fact known in one place and needed in three.
+`splitPointTest` covers `hashAt`; `E22` is the live half, and it is the half that matters,
+because all of this is about what happens between two machines.
 
 ---
 

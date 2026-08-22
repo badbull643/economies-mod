@@ -185,14 +185,42 @@ public class MarketStateHolder {
      * host it polls — signed, and nonce-bound against replay — so the comparison costs
      * nothing extra on the wire.
      *
-     * Only meaningful when their head is at or behind ours: our hash at their seq is a
-     * point they must also have if we share a history. If they're ahead of us we hold
-     * no opinion, which is the same position the host takes during a handshake.
+     * <h2>When their head is above ours</h2>
+     *
+     * This used to return without an opinion, because a probe carries a head and nothing
+     * below it and we have no hash at a sequence we have not reached. Two things went
+     * wrong with holding no opinion, and they were the same missing question:
+     *
+     * A fork with a longer peer stayed <b>invisible</b> until somebody pressed Connect,
+     * so which side saw the warning was decided by nothing more than which branch
+     * happened to be longer. And worse, the height was recorded anyway — the call to
+     * observeMarketHeight was the first line of this method, before a single hash had
+     * been compared — so a forked peer's head was filed as <b>this market</b> advancing.
+     * A host at 90 against a forked peer at 98 came away permanently "8 events behind" a
+     * branch that was never theirs, in a mark that is monotonic and persisted. That is
+     * not cosmetic: eventsBehind gates Host, and it told the participant who was on the
+     * chain everybody else shared that hosting it would split the market, then advised
+     * catching up from a peer who would refuse them.
+     *
+     * So it asks. One HashQuery for their hash at <b>our</b> head answers it: matching
+     * means our chain is a prefix of theirs and they genuinely extend us, so the height
+     * is real and "behind" is true; not matching means a fork, the height is not ours to
+     * record, and the split is worth finding.
+     *
+     * <h2>What it costs</h2>
+     *
+     * One round trip per peer, only when that peer's head has moved — checkedHeads
+     * already keyed the work by (peer, head) and the early return above pays for this.
+     * A peer sitting still costs nothing, which is the ordinary case for a poll on a
+     * timer. Blocking, and called from the discovery thread for that reason.
+     *
+     * The split point is looked up before it is searched for, because it does not move:
+     * two branches that have parted stay parted, and both only grow. Without that, an
+     * active fork would run a bracketing search every time either side placed an order.
      */
     public static void observeHostHead(UUID marketId, long seq, String hash,
-                                       String hostUserId, String hostName) {
-        observeMarketHeight(marketId, seq);
-
+                                       String hostUserId, String hostName,
+                                       String hostAddress, int hostPort) {
         MarketState s = get();
         if (s == null || s.marketId() == null || marketId == null) return;
         if (!s.marketId().equals(marketId)) return;          // different market entirely
@@ -204,26 +232,76 @@ public class MarketStateHolder {
 
         try {
             EventLog log = new EventLog(logPathFor(currentWorldDir));
-            if (seq > log.lastSeq()) return;      // they're ahead; nothing of ours to compare
-            String ours = log.hashAt(seq);
+            long ourHead = log.lastSeq();
+            if (ourHead <= 0) return;        // nothing of ours to compare against
+
+            // Where the two are compared, and what each says there. For a peer at or
+            // below us that is their head; for one above us it is ours, because that is
+            // the highest point we can hold an opinion about. Divergence.seq means "where
+            // the hashes were seen to disagree" and a reset falls back to one below it,
+            // so recording their head for a comparison made at ours would be a claim
+            // nothing checked.
+            long at = Math.min(seq, ourHead);
+            String ours = log.hashAt(at);
             if (ours == null) return;
+
+            String theirs;
+            if (seq <= ourHead) {
+                theirs = hash;               // the probe already answered at this point
+            } else {
+                if (hostAddress == null || hostPort <= 0) return;
+                theirs = MarketClient.hashAt(hostAddress, hostPort, at);
+                // Unanswerable rather than answered: a peer that has gone away, or one
+                // that would not say. Not cached, so the next poll asks again — the
+                // alternative is filing "no opinion" as though it were one.
+                if (theirs == null) return;
+            }
 
             checkedHeads.put(hostUserId, head);
 
-            if (ours.equals(hash)) {
-                // They're on our chain after all — clear any earlier warning about them.
+            if (ours.equals(theirs)) {
+                // On our chain: either level with us, or genuinely ahead. Only now is
+                // their height this market's height, and only now can "you are behind"
+                // be said honestly.
+                observeMarketHeight(marketId, seq);
+
                 Divergence d = divergence;
                 if (d != null && hostName != null && hostName.equals(d.hostName)) {
                     divergence = null;
                 }
             } else {
-                divergence = new Divergence(hostName, seq, hash, ours);
+                // A fork. Their height is not this market advancing — it is a different
+                // branch of it — so the watermark must not learn about it, whichever of
+                // the two is longer.
+                Divergence known = divergence;
+                long splitAt = known != null && known.splitAt >= 0
+                        && hostName != null && hostName.equals(known.hostName)
+                        ? known.splitAt
+                        : findSplitQuietly(hostAddress, hostPort, log);
+
+                divergence = new Divergence(hostName, at, theirs, ours, splitAt);
                 System.err.println("[economiesmod] divergence: " + hostName
-                        + " reports " + hash + " at event " + seq
-                        + ", we have " + ours);
+                        + " reports " + theirs + " at event " + at
+                        + ", we have " + ours
+                        + (splitAt >= 0
+                                ? " — parted after event " + splitAt + ", "
+                                        + (ourHead - splitAt) + " of ours since"
+                                : ""));
             }
         } catch (IOException e) {
             // A poll is best-effort; a read failure here is not worth surfacing.
+        }
+    }
+
+    /** The split point, or -1, without letting a failed search cost the divergence. */
+    private static long findSplitQuietly(String hostAddress, int hostPort, EventLog log) {
+        if (hostAddress == null || hostPort <= 0) return -1;
+        try {
+            return MarketClient.findSplitPoint(hostAddress, hostPort, log);
+        } catch (IOException e) {
+            System.err.println("[economiesmod] could not locate the split point: "
+                    + e.getMessage());
+            return -1;
         }
     }
 

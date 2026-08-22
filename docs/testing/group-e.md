@@ -48,6 +48,8 @@ down is newer than the sitting:
   path never asked where the two chains parted
 - **`E21`** is new from that run: the re-place list could not be scrolled, and it is the
   only record of what to put back
+- **`E22`** is newest: the poll now asks whether a longer peer is on your chain, instead
+  of assuming so and filing their head as your market's height
 
 Nothing else on this list has moved since it was run.
 
@@ -804,3 +806,53 @@ since every `DepositAndList` makes one — then:
 
 Worth doing on the **Market** tab and in the side column both, since `replaceInSideColumn`
 puts the box in two different places.
+
+## E22. What the poll can now tell about a longer peer
+
+New, never run. Until now a probe carried a host's head and nothing below it, so a peer
+*ahead* of you could not be compared with at all — and the poll both held no opinion about
+whether you had forked and recorded their head as your market's height anyway. Which side
+of a fork saw the warning came down to which branch happened to be longer.
+
+It sends one `HashQuery` for their hash at **your** head now. Everything below is about
+telling the two answers apart.
+
+**The honest case — they really are ahead of you on your chain:**
+
+- Alice hosts and gets ahead; Bob, who shares her history, polls without connecting
+- Bob's alert says he is behind by the right number, and Host warns him off with
+  *"You are N events behind"*. That warning is the point of the watermark and must survive
+- Connect → he catches up, and the alert clears
+
+**The forked case, which is the one that was wrong:**
+
+- Fork as in `B2`, and make sure **the peer who did not fork is the shorter of the two** —
+  that is the arrangement that used to show nothing. On the first sitting that was Alice
+  at 90 against a forked Bob at 98
+- Without connecting, the shorter side must now raise the FORKED banner from the poll
+  alone, and it must name where they parted
+- **The behind alert must not appear**, and Host must not warn about being behind. Their
+  events are a different branch, not this market advancing
+- Check `high-water.json` is not raised by them. It is monotonic and persisted, so a
+  number written here wrongly outlives the session that wrote it
+- Retire the fork (either side discards and joins the other, per `E20`) and confirm Host
+  is offered normally afterwards
+
+**The cost, which is why it was not done sooner:**
+
+- Watch the console with two hosts visible and nothing happening → **no repeated round
+  trips.** The question is asked once per peer per head, so a peer sitting still costs
+  nothing
+- Leave a fork live and keep trading on both sides → the split search must not re-run per
+  poll. The split does not move once found, and is looked up before it is searched for
+- Kill the peer mid-poll → no opinion is cached, the next poll asks again, and nothing is
+  recorded from a question that went unanswered
+
+**And the watermark's own bug, from the same fix:**
+
+- With a market open, poll a friend hosting a **completely different** market → your
+  `high-water.json` must be untouched. `observeMarketHeight` used to be called before the
+  market id was checked, and `MarketHighWater.observe` starts a fresh record when handed a
+  different id, so any foreign host silently zeroed the mark
+- The check that matters: set the mark by seeing a peer ahead, then poll a foreign host,
+  then go offline and try to Host. The "you are behind" warning must still fire
