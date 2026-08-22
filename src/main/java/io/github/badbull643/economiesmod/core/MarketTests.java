@@ -823,6 +823,107 @@ public class MarketTests {
                     EventApplier.validate(live, ok).accepted ? 1 : 0, 1);
         }
 
+        section("M6b: and migrating is itself holding a position, which it was not");
+        {
+            // M6 above proves the mint is refused for somebody *registered* here. That
+            // is the case that never mattered, because a migrant does not have to be.
+            //
+            // A MigrateBalance registers nobody and grants nobody, so neither of the two
+            // tests M6 relies on is ever true of an identity that has only migrated. And
+            // the per-branch guard is keyed to the source market, which is a fresh
+            // random id every time somebody creates one. So the same identity could
+            // create a market at the grant ceiling, take it, migrate in, reset, and
+            // repeat — measured at four million credits in four passes, against a market
+            // whose founder held fifty, without ever registering.
+            //
+            // isAccountedElsewhere is the test that is true of them: recordMigration
+            // files every participant of the market they came from, and they are one of
+            // those. It was already refusing them a second welcome grant; it just was
+            // not being asked here.
+            Path file = scratch("test-log-m6b.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+
+            long seqAt = log.lastSeq();
+            long carried = 0;
+            int accepted = 0;
+
+            // Four markets, each one Carol's own, each with a fresh id.
+            for (int i = 0; i < 4; i++) {
+                Event.MigrateBalance mb = new Event.MigrateBalance();
+                mb.userId = ALICE;                      // the host authors it
+                mb.marketId = live.marketId();
+                mb.fromMarketId = UUID.randomUUID();    // a market carol made this time
+                mb.fromMarketName = "carol's market " + i;
+                mb.beneficiary = CAROL;
+                mb.credits = MarketState.MAX_WELCOME_GRANT;
+                mb.items = new java.util.TreeMap<>();
+                mb.foreignParticipants = java.util.Arrays.asList(CAROL);
+
+                SequencedEvent se = new SequencedEvent();
+                se.seq = ++seqAt;
+                se.event = mb;
+
+                if (EventApplier.validate(live, se).accepted) {
+                    accepted++;
+                    carried += mb.credits;
+                    EventApplier.apply(live, se);
+                }
+            }
+
+            check("the first migration lands", accepted, 1);
+            check("and every one after it is refused", accepted, 1);
+            check("so what walked in is one market's worth, not four",
+                    carried, MarketState.MAX_WELCOME_GRANT);
+            check("which is what carol is actually holding",
+                    live.wallets().getBalance(CAROL), MarketState.MAX_WELCOME_GRANT);
+            check("and she never registered here at all",
+                    live.isRegistered(CAROL) ? 1 : 0, 0);
+
+            // Somebody who has genuinely never been here is still let in, or the rule
+            // would have closed migration rather than bounded it.
+            Event.MigrateBalance fresh = new Event.MigrateBalance();
+            fresh.userId = ALICE;
+            fresh.marketId = live.marketId();
+            fresh.fromMarketId = UUID.randomUUID();
+            fresh.beneficiary = DAVE;
+            fresh.credits = 100;
+            fresh.items = new java.util.TreeMap<>();
+            fresh.foreignParticipants = java.util.Arrays.asList(DAVE);
+            SequencedEvent se = new SequencedEvent();
+            se.seq = ++seqAt;
+            se.event = fresh;
+            check("a genuine outsider is unaffected",
+                    EventApplier.validate(live, se).accepted ? 1 : 0, 1);
+        }
+
+        section("M6c: a host may cap how much money one migration carries in");
+        {
+            // The honest half of the same problem, which no rule above touches. Two
+            // people arriving from a market that grants 1000, into one that grants 50,
+            // multiply its supply by twenty-one — and the people already there go from
+            // holding all of the money to holding five per cent of it. Nobody is robbed;
+            // everybody is outbid.
+            //
+            // Host-local, because the receiving market is the only party that can say
+            // what it will absorb, and because a group merging honestly produces exactly
+            // the same arithmetic as somebody doing it deliberately.
+            ServerConfig cfg = new ServerConfig();
+            cfg.maxMigratedCredits = 0;
+            check("zero accepts anything, so existing servers are unchanged",
+                    cfg.problem() == null ? 1 : 0, 1);
+
+            cfg.maxMigratedCredits = 500;
+            check("a figure is allowed", cfg.problem() == null ? 1 : 0, 1);
+
+            cfg.maxMigratedCredits = -1;
+            check("negative is refused", cfg.problem() != null ? 1 : 0, 1);
+            check("and says to use zero instead",
+                    String.valueOf(cfg.problem()).contains("use 0") ? 1 : 0, 1);
+        }
+
         section("M5: a fast-forward is distinguishable from a fork");
         {
             // The test the host cannot perform for itself: given only "you are ahead of

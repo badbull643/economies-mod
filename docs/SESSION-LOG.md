@@ -25,13 +25,14 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 ## 0. The read-through, and what it found
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
-built here: the whole of it was an inspection, and it found ten defects in code that had
-437 passing checks behind it — the last of them a whole feature that could not be switched
-on. Read this before §4, which predicted almost all of them.*
+built here: the whole of it was an inspection, and it found twelve defects in code that
+had 437 passing checks behind it — one of them a whole feature that could not be switched
+on, and one an unbounded mint that the guard written to stop it never fired against.
+Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`477 / 6 / 5 / 16 / 16 / 6 / 12 / 11`, the last being a new `hostTrustTest`, and each
+`487 / 6 / 5 / 16 / 16 / 6 / 12 / 11`, the last being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -131,6 +132,34 @@ And a tenth, found by someone asking how to run `E2`:
     every test passed — `T1e` sets `listingFreeOrders` directly, which no user can. It
     took somebody trying to follow the instructions.
 
+And two more, from being asked what happens when a market with a big welcome grant joins
+one with a small one:
+
+11. **Migrating twice was unbounded.** The guard against it names the attack in its own
+    comment — *"join, take the grant, reset, create your own market, take that grant too,
+    migrate it back, repeat"* — and tested whether the beneficiary was **registered** or
+    **already granted** here. A `MigrateBalance` sets neither, and the per-branch guard is
+    keyed to the *source* market id, which is a fresh random id every time somebody makes
+    a market. So the rule never fired against the thing it was written for. Measured:
+    **4,000,000 credits in four passes**, into a market whose founder held 50, by an
+    identity that never registered. `isAccountedElsewhere` is the test that *is* true of
+    them — it was already refusing their second welcome grant — and is now asked here
+    too. `M6b`.
+
+12. **Nothing bounded migrated credits at all**, honestly or otherwise.
+    `migrationObjection` weighs the *items* a migrant brings against their own Minecraft
+    statistics and never looks at their balance. Two people arriving from a market that
+    grants 1000, into one that grants 50, take it from a supply of 100 to 2100 — the
+    people already there keep every credit and go from holding all the money to **4.8%**
+    of it. Nobody is robbed; everybody is outbid, and nobody is told. New
+    `maxMigratedCredits` in `host-config.json`, off by default, beside the deposit caps —
+    host-local because the receiving market is the only party that can say what it will
+    absorb. `M6c`, and `E11` for the live version.
+
+    Worth keeping separate in your head: 11 is a hole, 12 is a policy. An honest merge
+    produces identical arithmetic to a deliberate one, which is exactly why it needed a
+    setting rather than a rule.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -146,7 +175,7 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 477   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 487   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 16   depositCapTest 6   attestationTest 12   hostTrustTest 11
 ```
 
@@ -244,10 +273,12 @@ grant finally has a control — see §7.
   the decision reaffirmed — recorded here because it is not obvious from the tree.
 - **Never built from a clean checkout, and no CI.** Every claim that this works rests on
   one machine.
-- **Host rules do not travel.** Deposit caps, admission and attestation are per-host, read
-  from that host's own `host-config.json`, so they change when hosting rotates and a group
-  cannot agree them once. Market rules — fees, grant, stipend — live in the log and are
-  uniform for everyone.
+- **Host rules do not travel.** Deposit caps, admission, attestation and now
+  `maxMigratedCredits` are per-host, read from that host's own `host-config.json`, so they
+  change when hosting rotates and a group cannot agree them once. Market rules — fees,
+  grant, stipend — live in the log and are uniform for everyone. §0.12 is the sharpest
+  case of this: the migration cap protects whoever happens to be hosting when somebody
+  arrives, and rotating to a host that has not set it opens the door again.
 - **The play-hour rule is kept but off**, with the reasoning on the config field. It
   weighs a rolling window against a lifetime, and is a rate limit applied to a stock.
 
@@ -275,6 +306,14 @@ grant finally has a control — see §7.
 
 ## 8. Open decisions
 
+- **Whether `MAX_WELCOME_GRANT` should be 1,000,000.** Raised while fixing §0.11 and
+  §0.12 and deliberately left alone, because both of those were repairs and this is a
+  balance change. It is four orders of magnitude above what items actually trade for,
+  and it is the number every migration problem is denominated in: the ceiling is what a
+  market can hand somebody to carry elsewhere. Lowering it to, say, 10,000 would bound
+  the whole family at once without adding a rule anywhere. Against: it silently breaks
+  any existing market that set a grant above the new ceiling, since `validate` would then
+  refuse its own recorded policy — that needs thought before anyone touches it.
 - Whether the stipend's interval of 50 is right. It is a guess, and nothing has watched a
   real session. Fills only accrue while somebody is hosting and connected — there is no
   offline trading — so a small group produces them slowly.

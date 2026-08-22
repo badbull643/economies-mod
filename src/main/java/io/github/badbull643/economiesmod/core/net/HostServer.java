@@ -1507,6 +1507,20 @@ public class HostServer {
             return "this server needs to know what world you are trading from, and your"
                     + " client did not say — it may be too old to migrate here";
         }
+
+        // Credits, before items, and before the attestation is consulted at all —
+        // because unlike the item rules this one needs no evidence from the client.
+        // It is the receiving market's own limit on how much money may walk in at once,
+        // and everything below this line is unreachable for somebody bringing nothing
+        // but credits, which is what made this the gap: migrationObjection weighed
+        // items and only items, so a balance of any size passed unexamined.
+        if (config.maxMigratedCredits > 0 && position.credits > config.maxMigratedCredits) {
+            return "you would be bringing " + position.credits + " credits, and this"
+                    + " server accepts up to " + config.maxMigratedCredits
+                    + " in a migration — a market that grants more than this one does"
+                    + " would otherwise reprice everything here on the way in";
+        }
+
         if (claim == null || config.maxDepositMultipleOfHandled <= 0) return null;
 
         for (Map.Entry<String, Long> entry : position.items.entrySet()) {
