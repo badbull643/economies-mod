@@ -4,7 +4,7 @@
 that now scrolls. All of it has automated coverage and none of it has been run in game.
 The UI half matters most, because nobody has looked at it.*
 
-Run the suites first. Expect `460 / 6 / 5 / 16 / 16 / 6 / 12 / 11`:
+Run the suites first. Expect `477 / 6 / 5 / 16 / 16 / 6 / 12 / 11`:
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -45,24 +45,46 @@ second market in the world (Add another market) and a foreign host visible on Ne
 
 ## E2. The listing fee climbing with orders held
 
+**The allowance** is how many orders you may hold open before the fee starts climbing.
+Two credits with an allowance of three means three orders at 2 each; the fourth costs 4,
+the fifth 6, the sixth 8. Cancel one and it comes back down — it prices what you are
+holding open, not what you have ever placed. An allowance of **0 turns escalation off**
+and gives the flat fee, which is what every market had before this.
+
+Type both into the **Listing fee** field on the Market tab, creator only:
+
 ```
-listing fee 1, and set the free allowance above 0 by hand if you want to see escalation
+2       a flat fee of 2, no escalation
+2/3     a fee of 2, with 3 orders free before it climbs
+0       no listing fee at all
 ```
 
-Zero allowance means no escalation at all, which is the default and what existing markets
-keep. With an allowance of 3:
+*This is new. Until now the field took only the fee, and the allowance had no control
+anywhere — not a field, not a server-config key, not a command. `listingFreeOrders` was
+written in exactly one place, `submitPolicy`, which copies whatever it already was, so it
+was zero at genesis and zero forever. Every market ever created charged the flat fee and
+the escalating half of this feature was unreachable. The doc used to say "set the free
+allowance above 0 by hand", and there was no by hand.*
 
-- The first three orders each cost the base fee
-- The fourth costs double, the fifth triple
-- **Cancel one** and the next order costs less again — the fee prices what you are
-  holding open, not what you have ever placed
-- Somebody with nothing resting still pays the base fee. Never free is what the stipend's
-  safety rests on
+Set the fee to `2/3` and watch the credit counter as you place sell orders on something
+cheap:
 
-This is what it does now; it is not what it did when this was written. The code counted
-only the orders already resting, so an allowance of three let *four* through at the base
-fee, and the automated test pinned that while its own comment described the behaviour
-above. Both corrected — `T1e` now reads the schedule the way this list does.
+- The **first three** orders each cost 2
+- The **fourth** costs 4, the **fifth** 6
+- `About this market` gains a second line naming the allowance, and tells you what your
+  own next order would cost once you are past it
+- **Cancel one** → the next order is cheaper again
+- Somebody with nothing resting still pays the base 2. Never free is what the stipend's
+  safety rests on, so this is the one that matters if any of them fail
+- Set it back to `2` → the extra About line goes and the fee is flat again
+- Try `2/` and `/3` → refused, naming the format, rather than quietly setting something
+- Try an allowance with no fee, `0/3` → refused, because an allowance needs a fee to
+  climb from
+
+The schedule above is also not what the code did when this was written. It counted only
+the orders already resting, so an allowance of three let *four* through at the base fee —
+and `T1e` pinned that while its own comment described the corrected behaviour. Both
+fixed; `T1e` and `T5b` now read it the way this list does.
 
 ## E3. The stipend, end to end
 
