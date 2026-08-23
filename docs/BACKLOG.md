@@ -107,8 +107,8 @@ fills nobody experienced. See the design note, and the Not-on-this-list section 
 ## 2. Log compaction — and what a long log actually costs
 
 **Design: [`design/log-compaction.md`](design/log-compaction.md), rewritten 2026-08-23
-against measurements. Steps 1 and 2 built the same day; the snapshot itself is not. This
-is the current work, chosen ahead of item 5.**
+against measurements. Steps 1, 2 and 3 built the same day, and half of 4. What remains is
+a decision rather than code — see step 4 and step 5 below.**
 
 **Read the design note rather than this entry.** What was here before said "build option A
 only" and gave a cost model that measurement contradicts — it is summarised below only so
@@ -134,7 +134,9 @@ cheap, correct under every open question below, and absent from the original not
    ms**, twenty-two times where this started. Note what it actually saved: not `apply`,
    which is 1% of a load, but verifying and parsing the prefix — and the last full pass
    left was the `EventLog` constructor finding its own head, which is deferred now.
-4. **Snapshot-only clients on dedicated markets**, with opt-in archiving.
+4. **Snapshot-only clients on dedicated markets**, with opt-in archiving. *The client
+   load path uses the snapshot as of 2026-08-23; what is left is whether it should keep
+   the log at all, which is a decision rather than code.*
 5. **First-join onboarding at scale**, which is open — see below.
 
 **Cost of not doing it:** 25,000 events is not a large-server number, it is a

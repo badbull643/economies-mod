@@ -344,7 +344,19 @@ And the fingerprint does what it is for: adding a single field to `MarketState` 
 from `6400af1f2bdcd673` to `7b603358f24ca00e`, which discards every snapshot written
 before it.
 
-**4. Snapshot-only clients on dedicated markets, with opt-in archiving.** Depends on 3. The
+**4. Snapshot-only clients on dedicated markets, with opt-in archiving.** *Half done
+2026-08-23.*
+
+**The half that needed no decision is built:** `MarketClient` goes through
+`EventApplier.load` like the other two load paths, so a connect no longer rebuilds the
+market from the beginning. This is the path a snapshot is worth most on, because it is the
+only one that runs every session rather than once per world — on a market with a dedicated
+server, every player pays it every time they join. It verifies now as well, which it did
+not; the verdict is deliberately not acted on, since each event was validated as it
+arrived and a break there is disk damage rather than dishonesty.
+
+**The half that is left is the decision**: whether a client of a dedicated market should
+hold the log at all, or keep only a snapshot and leave archiving to whoever opts in. The
 `persist` flag already exists and is already the lever — it is `true` for every remote
 connect and `false` only for a host's self-connect. Two cautions:
 
@@ -366,11 +378,11 @@ at a hundred players it is the largest cost in the system.
 - **Built:** steps 1, 2 and 3, on 2026-08-23.
 - **Refused:** C, in this architecture. D. B **for rotating mode**.
 - **Deferred:** nothing. Everything not refused is in the plan.
-- **Known and left alone:** `MarketClient`'s constructor still replays its whole local log
-  on every connect, without a snapshot. It is the same fix and it belongs with step 4,
-  which is about what a client on a dedicated market should keep at all — wiring a
-  snapshot into a path that may stop existing is work done twice. On a rotating host this
-  path is the self-connect, which replays a log the host has just replayed.
+- ~~**Known and left alone:** `MarketClient`.~~ **Done 2026-08-23.** It goes through
+  `EventApplier.load` like the other two, so the one load path that runs every session
+  rather than once per world gets the snapshot as well. It also verifies now, which it
+  did not; the verdict is deliberately not acted on, because each event was already
+  validated as it arrived and a break there is disk damage rather than dishonesty.
 - **Also known:** a snapshot is written on load and not while a session runs, so a long
   sitting still replays its whole tail next time. `STRIDE` bounds that at 5,000 events,
   which is under a tenth of a second.
