@@ -79,14 +79,53 @@ public final class MarketSnapshot {
      * Below this many events a snapshot is not worth its own risk — the replay it saves
      * is a few milliseconds, and every snapshot is one more thing that can be stale.
      */
-    public static final long MIN_EVENTS = 5000;
+    private static long minEvents = 5000;
 
     /**
      * How far the log may run past a snapshot before a new one is written. Also the
      * worst-case tail a load ever replays, which at measured speed is a few tens of
      * milliseconds.
      */
-    public static final long STRIDE = 5000;
+    private static long stride = 5000;
+
+    public static long minEvents() { return minEvents; }
+    public static long stride() { return stride; }
+
+    /**
+     * Moves the thresholds, for a test that wants to watch a snapshot actually appear,
+     * and for trying the feature out on a market smaller than a real one.
+     *
+     * The alternative is a test that builds five thousand signed events to see one file
+     * get written, which is slow enough that nobody would keep it — and the defect this
+     * covers was precisely a threshold that turned out to decide nothing, on a market
+     * deliberately shrunk to look at it. Restore what this returns in a finally.
+     */
+    static long[] thresholdsForTesting(long min, long str) {
+        long[] was = { minEvents, stride };
+        minEvents = min;
+        stride = str;
+        return was;
+    }
+
+    /**
+     * Whether a snapshot is worth writing, given where the log ends and where the
+     * snapshot beside it already sits ({@code existingSeq <= 0} for none).
+     *
+     * The two thresholds answer different questions and this is the only place that
+     * knows it. {@link #minEvents()} decides when a market is long enough to be worth
+     * snapshotting at all; {@link #stride()} decides how far the log may drift past a
+     * snapshot that already exists. Testing the first write against STRIDE — which is
+     * what the caller used to do — makes MIN_EVENTS decide nothing at all, and is
+     * invisible while the two constants happen to be equal.
+     *
+     * That was here for exactly one session and was found by somebody lowering
+     * MIN_EVENTS to try the feature out and getting no snapshot and no explanation.
+     */
+    static boolean worthWriting(long headSeq, long existingSeq) {
+        if (headSeq < minEvents) return false;
+        if (existingSeq <= 0) return true;
+        return headSeq - existingSeq >= stride;
+    }
 
     /** The file that belongs beside a given log. */
     public static Path pathFor(EventLog log) {
