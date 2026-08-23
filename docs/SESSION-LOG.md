@@ -885,11 +885,16 @@ grant finally has a control — see §7.
 - **Log compaction unbuilt**, deliberately. `docs/design/log-compaction.md` has the full
   pass; its recommendation is build option A only, when it is worth a session of its own.
   Backlog item 2.
-- **A forked market cannot be recovered from**, only reset away from — and a reset
-  destroys items that have already left somebody's Minecraft inventory. This is the case
-  a friend group hits by splitting into two play groups and both continuing: same market
-  id, so migration is refused, and no merge exists. `docs/design/fork-rebase.md` is the
-  pass; backlog item 1, and split-point discovery is the small piece to do first.
+- ~~**A forked market cannot be recovered from**, only reset away from.~~ **Closed
+  2026-08-23.** A reset now says where the two branches parted and hands back the items
+  deposited since, which were the only thing it destroyed that no history could recreate.
+  Orders come back as a checklist. **The rebase is refused, not deferred** — everything it
+  could still restore is either credits nobody paid, which is minting, or fills against a
+  book that no longer exists. Backlog item 1 carries the audit.
+
+  One residual, named there rather than fixed: deposit after the split, *sell* it on the
+  losing branch, then reset, and those goods are gone. The bound that causes it is
+  deliberate — somebody else may still be hosting that branch and holding them.
 - **`.gitignore` is gone**, removed deliberately, so `build/`, `run/` and
   `server-identity.key` are tracked. That last is an unencrypted private key. Raised, and
   the decision reaffirmed — recorded here because it is not obvious from the tree.
