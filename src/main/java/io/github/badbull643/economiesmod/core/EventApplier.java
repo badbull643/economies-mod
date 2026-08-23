@@ -316,15 +316,45 @@ public class EventApplier {
          */
         public final long chainBrokenAt;
 
+        /**
+         * The snapshot this load started from, or 0 if it read the whole log.
+         *
+         * Here so the console can say which happened. A snapshot is invisible when it
+         * works — the same line was printed either way — and this project has already
+         * learned twice that a mechanism whose failure is quiet needs its success to be
+         * loud, or nobody can tell the two apart from outside.
+         */
+        public final long restoredFrom;
+
         Replayed(MarketState state, long headSeq, String headHash) {
-            this(state, headSeq, headHash, -1);
+            this(state, headSeq, headHash, -1, 0);
         }
 
         Replayed(MarketState state, long headSeq, String headHash, long chainBrokenAt) {
+            this(state, headSeq, headHash, chainBrokenAt, 0);
+        }
+
+        Replayed(MarketState state, long headSeq, String headHash, long chainBrokenAt,
+                 long restoredFrom) {
             this.state = state;
             this.headSeq = headSeq;
             this.headHash = headHash;
             this.chainBrokenAt = chainBrokenAt;
+            this.restoredFrom = restoredFrom;
+        }
+
+        /**
+         * How this load happened, in words, for the console.
+         *
+         * One phrasing in one place, because two call sites print it and a market that
+         * says "replayed 140 events" on one path and something else on the other is a
+         * difference somebody will read as a bug.
+         */
+        public String describe() {
+            if (restoredFrom <= 0) return "replayed " + headSeq + " events";
+            long since = headSeq - restoredFrom;
+            return "restored a snapshot at event " + restoredFrom + " and replayed "
+                    + since + (since == 1 ? " event" : " events") + " since";
         }
     }
 
@@ -427,7 +457,7 @@ public class EventApplier {
 
         long broke = broken[0];
         if (broke == -1 && log.unreadableAtSoFar() != -1) broke = log.unreadableAtSoFar();
-        return new Replayed(state, head[0], hash[0], broke);
+        return new Replayed(state, head[0], hash[0], broke, snap.seq);
     }
 
     /**
@@ -447,6 +477,8 @@ public class EventApplier {
 
         try {
             MarketSnapshot.save(log, result.state, result.headSeq, result.headHash);
+            System.out.println("[economiesmod] wrote a snapshot at event "
+                    + result.headSeq + " — the next load starts from there");
         } catch (Exception e) {
             // A snapshot is an optimisation. Failing to write one costs a slower load
             // next time and must never cost a market.

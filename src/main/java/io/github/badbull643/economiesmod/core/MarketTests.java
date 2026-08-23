@@ -4023,6 +4023,23 @@ public class MarketTests {
                     broken.chainBrokenAt != -1 ? 1 : 0, 1);
             check("a damaged chain is never snapshotted",
                     Files.exists(pathOfSnapshot(bad)) ? 1 : 0, 0);
+
+            // A load says which of the two things it did. This is not cosmetic: the
+            // whole feature is invisible when it works, so the console line was
+            // identical either way and a live test could not tell whether the snapshot
+            // had been used at all.
+            check("a full replay says so", wrote.restoredFrom, 0);
+            check("and describes itself as one",
+                    wrote.describe().equals("replayed " + wrote.headSeq + " events")
+                            ? 1 : 0, 1);
+
+            apply(log, live, deposit(BOB, IRON, 1));
+            EventApplier.Replayed viaSnap = EventApplier.load(new EventLog(p));
+            check("a restored load reports where it started from",
+                    viaSnap.restoredFrom, wrote.headSeq);
+            check("and counts only the tail it replayed",
+                    viaSnap.describe().contains("replayed 1 event since") ? 1 : 0, 1);
+            check("and still reaches the real head", viaSnap.headSeq, wrote.headSeq + 1);
             } finally {
                 MarketSnapshot.thresholdsForTesting(wasThresholds[0], wasThresholds[1]);
             }

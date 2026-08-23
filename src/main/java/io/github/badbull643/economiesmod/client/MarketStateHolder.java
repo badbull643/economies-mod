@@ -643,7 +643,7 @@ public class MarketStateHolder {
             // so the feed has to be filled from the log by hand. A synced history does
             // arrive through APPLIED and fills it on its own.
             seedActivity(localLog);
-            System.out.println("[economiesmod] local: replayed " + localLog.lastSeq() + " events");
+            System.out.println("[economiesmod] local: " + loaded.describe());
         } catch (Exception e) {
             System.err.println("[economiesmod] local log load failed: " + e);
             e.printStackTrace();
