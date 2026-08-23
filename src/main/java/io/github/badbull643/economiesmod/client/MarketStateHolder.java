@@ -630,12 +630,15 @@ public class MarketStateHolder {
 
         try {
             localLog = new EventLog(logPathFor(worldDir));
-            chainBrokenAt = localLog.verifyChain();
-            damageReason = localLog.damageReason();
+            // One pass for both. This was verifyChain, then damageReason (which verifies
+            // again), then replay — three walks of the whole file to open a world.
+            EventApplier.Replayed loaded = EventApplier.load(localLog);
+            chainBrokenAt = loaded.chainBrokenAt;
+            damageReason = localLog.damageReasonFor(chainBrokenAt);
             if (chainBrokenAt != -1) {
                 System.err.println("[economiesmod] log unusable: " + damageReason);
             }
-            localState = EventApplier.replay(localLog);
+            localState = loaded.state;
             // Replay here goes straight through EventApplier rather than through APPLIED,
             // so the feed has to be filled from the log by hand. A synced history does
             // arrive through APPLIED and fills it on its own.
@@ -957,9 +960,10 @@ public class MarketStateHolder {
 
         try {
             localLog = log;
-            chainBrokenAt = log.verifyChain();
-            damageReason = log.damageReason();
-            localState = EventApplier.replay(log);
+            EventApplier.Replayed loaded = EventApplier.load(log);
+            chainBrokenAt = loaded.chainBrokenAt;
+            damageReason = log.damageReasonFor(chainBrokenAt);
+            localState = loaded.state;
             seedActivity(log);
         } catch (Exception e) {
             // Same reasoning as loadLocal: this runs on a UI-driven path, and a throw
@@ -1844,6 +1848,11 @@ public class MarketStateHolder {
             // player who owns the world, including their own self-connection when
             // hosting — with no way to fix it from inside the game.
             Files.deleteIfExists(log.resolveSibling("known-keys.json"));
+            // The snapshot is state computed from the log being deleted. Its chain-hash
+            // binding means a leftover one is refused rather than believed — a new log
+            // will not carry the hash it names — so this is tidiness rather than a
+            // guard. Which is exactly why it is done here and not relied on there.
+            Files.deleteIfExists(log.resolveSibling(log.getFileName() + ".snapshot.json"));
             // The watermark describes the market being discarded, so it goes with it —
             // otherwise a fresh market would look permanently behind the old one.
             if (highWater != null) highWater.clear();

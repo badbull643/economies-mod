@@ -288,12 +288,17 @@ public class HostServer {
         this.log = new EventLog(logFile);
         this.keyRegistry = new KeyRegistry(logFile.resolveSibling("known-keys.json"), true);
 
-        long bad = log.verifyChain();
-        if (bad != -1) {
-            throw new IOException("log chain broken at seq " + bad + " — refusing to start");
+        // Verified and replayed in one pass. A broken chain still refuses to start; the
+        // only difference is that the refusal now costs a replay it throws away, which
+        // is the rare path, in exchange for one walk of the file instead of two on the
+        // path that always runs.
+        EventApplier.Replayed loaded = EventApplier.load(log);
+        if (loaded.chainBrokenAt != -1) {
+            throw new IOException("log chain broken at seq " + loaded.chainBrokenAt
+                    + " — refusing to start");
         }
 
-        this.state = EventApplier.replay(log);
+        this.state = loaded.state;
 
         // A host with no genesis event has no market to serve. Refusing here is what
         // stops a market being created silently, as a side effect of clicking Host.

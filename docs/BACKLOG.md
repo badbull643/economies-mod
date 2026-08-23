@@ -104,28 +104,57 @@ fills nobody experienced. See the design note, and the Not-on-this-list section 
 
 ---
 
-## 2. Log compaction — local snapshots
+## 2. Log compaction — and what a long log actually costs
 
-**Design: [`design/log-compaction.md`](design/log-compaction.md). Nothing built.**
+**Design: [`design/log-compaction.md`](design/log-compaction.md), rewritten 2026-08-23
+against measurements. Steps 1 and 2 built the same day; the snapshot itself is not. This
+is the current work, chosen ahead of item 5.**
 
-The log only grows, and three paths walk all of it: world load, host start, and client
-connect. All O(events).
+**Read the design note rather than this entry.** What was here before said "build option A
+only" and gave a cost model that measurement contradicts — it is summarised below only so
+this file does not disagree with the note it points at.
 
-Build **option A only** — a self-computed snapshot bound to the chain hash, never shared.
-It costs no trust: you only load state you computed yourself from a chain you verified,
-and any change below the snapshot point invalidates it. Do not build B (a host asserting
-balances breaks the one invariant the signed chain exists for). Do not plan for C.
+The log only grows, and five call sites walk all of it: `loadLocal`, the `HostServer`
+constructor, the `MarketClient` constructor, and `BranchDiff` twice — which `resetCost()`
+calls twice more, so opening the reset dialog is four full walks from a UI thread.
 
-**Cost of not doing it:** opening a long-lived world gets slower every day. Bounded, and
-it falls on people with successful markets, which is a good problem. Network sync is
-already incremental, so this is local computation and disk, not bandwidth.
+**The measured plan, in order.** Items 1 and 2 are done, as of 2026-08-23; both were
+cheap, correct under every open question below, and absent from the original note.
+
+1. **~~Stream `readFrom`~~ — DONE.** It materialised every event into an `ArrayList`
+   before its caller saw one, about 1 KB of heap each. `EventLog.forEach` is the
+   primitive now. The old code cannot open a 100,000-event market in a 128 MB heap at
+   all — it dies with an `OutOfMemoryError`; the new code opens it in 64 MB.
+2. **~~Hex encoding, then one pass instead of two~~ — DONE.** `String.format("%02x")` was
+   45% of a load and a lookup table produces the same characters. The two byte-identical
+   copies of the hash function are one. `EventApplier.verifyAndReplay` does in a single
+   walk what the load path did in four. Measured end to end: **3.0×–3.9×**.
+3. **~~The snapshot (option A)~~ — DONE.** `MarketSnapshot`, beside the log, keyed to log
+   length and never to `dedicated`. A 100,000-event load went 4208 ms → 1135 ms → **190
+   ms**, twenty-two times where this started. Note what it actually saved: not `apply`,
+   which is 1% of a load, but verifying and parsing the prefix — and the last full pass
+   left was the `EventLog` constructor finding its own head, which is deferred now.
+4. **Snapshot-only clients on dedicated markets**, with opt-in archiving.
+5. **First-join onboarding at scale**, which is open — see below.
+
+**Cost of not doing it:** 25,000 events is not a large-server number, it is a
+market-that-lasted-a-season number — 83 days for fifteen people, 25 for fifty. Every
+deployment that succeeds arrives there. At a hundred players the log reaches ~511 MB in a
+year and stops being a speed problem at all.
 
 **Why it needs a whole session:** the failure mode is silent and financial. `MarketState`
-holds thirteen fields including `TreeMap<Long, Deque<Order>>` books that reflective
-serialisation will not round-trip, so it wants a hand-written serialiser plus a
-round-trip equivalence test comparing every observable against a full replay, on a log
-rich enough to include fills, cancels, migrations and a policy change. A serialiser bug
-means wrong balances.
+held thirteen fields when the note was written and holds **twenty-one** seven days later,
+including `TreeMap<Long, Deque<Order>>` books that reflective serialisation will not
+round-trip. A serialiser written then would silently drop eight fields today, one of them
+the set that stops §0.11's unbounded migration. Hand-written serialiser, shape
+fingerprint, and a round-trip equivalence test against a full replay on a log rich enough
+to include fills, cancels, migrations and a policy change.
+
+**What is open, and it is bigger than the feature.** Option B — a host handing out state —
+stays refused for rotating mode, permanently. For a dedicated server it was never priced:
+a new joiner either downloads and verifies ~511 MB before playing, or accepts the server's
+state, and there is no third option. That is a trust-model decision nobody has made. Do
+not treat B as refused across the board on the strength of the old entry.
 
 ---
 
