@@ -4040,6 +4040,28 @@ public class MarketTests {
             check("and counts only the tail it replayed",
                     viaSnap.describe().contains("replayed 1 event since") ? 1 : 0, 1);
             check("and still reaches the real head", viaSnap.headSeq, wrote.headSeq + 1);
+
+            // The client is the third load path and the only one that runs every
+            // session rather than once per world, so it is the one a snapshot is worth
+            // most on — and it was the one left out.
+            //
+            // What this proves and what it does not: it proves a client built over a log
+            // with a snapshot beside it lands exactly where a full replay lands, which
+            // is the property that matters and the one a bad restore would break. It
+            // does not prove the snapshot was used — putting the client back on a bare
+            // replay leaves these two green, because using one is a speed change. That
+            // half rests on the checks above, which show load() restoring, and on the
+            // client calling load().
+            EventApplier.Replayed fullNow = EventApplier.verifyAndReplay(new EventLog(p));
+            io.github.badbull643.economiesmod.core.net.MarketClient asClient =
+                    new io.github.badbull643.economiesmod.core.net.MarketClient(
+                            BOB, "Bob", testKeys(), new EventLog(p), false,
+                            new PeerCache(scratch("test-snapshot-peers.json")), 0);
+            check("a client over a snapshotted log reaches the same seq",
+                    asClient.lastSeq(), fullNow.headSeq);
+            check("and the same state",
+                    describeState(asClient.state()).equals(describeState(fullNow.state))
+                            ? 1 : 0, 1);
             } finally {
                 MarketSnapshot.thresholdsForTesting(wasThresholds[0], wasThresholds[1]);
             }
