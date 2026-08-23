@@ -4026,8 +4026,14 @@ public class MarketTests {
             } finally {
                 MarketSnapshot.thresholdsForTesting(wasThresholds[0], wasThresholds[1]);
             }
-            check("the shipped thresholds are put back",
-                    MarketSnapshot.minEvents(), 5000);
+            // Against what the seam borrowed, not against a number written here. Writing
+            // 5000 in this line made the suite fail the moment somebody lowered the
+            // default to try the feature in game, which is the one time they most need
+            // the suite to still work — and it was checking the wrong thing anyway. What
+            // matters is that the seam puts back whatever it found.
+            check("the thresholds are put back where they were",
+                    MarketSnapshot.minEvents(), wasThresholds[0]);
+            check("and so is the stride", MarketSnapshot.stride(), wasThresholds[1]);
         }
 
         section("L12: the shape fingerprint sees the fields it has to see");
