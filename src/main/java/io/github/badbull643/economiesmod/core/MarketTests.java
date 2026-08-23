@@ -4075,6 +4075,93 @@ public class MarketTests {
             check("and so is the stride", MarketSnapshot.stride(), wasThresholds[1]);
         }
 
+        section("L14: a snapshot with no log beside it, which is what step 4 leaves behind");
+        {
+            // A client of a dedicated market keeps a snapshot and stops writing history.
+            // Next session there is a snapshot and an empty log, and the snapshot has to
+            // be taken on its own authority — the alternative is re-downloading the whole
+            // market every session, which is worse than what it replaced.
+            long[] was = MarketSnapshot.thresholdsForTesting(10, 10);
+            try {
+                Path full = scratch("test-nolog-source.jsonl");
+                Files.deleteIfExists(full);
+                Files.deleteIfExists(pathOfSnapshot(full));
+                EventLog log = new EventLog(full);
+                MarketState live = new MarketState();
+                seedMarket(log, live);
+                register(log, live, BOB);
+                grant(log, live, ALICE, 5000);
+                grant(log, live, BOB, 5000);
+                apply(log, live, deposit(ALICE, IRON, 40));
+                apply(log, live, placeOrder(ALICE, IRON, 6, 20, false));
+                apply(log, live, placeOrder(BOB, IRON, 6, 20, true));
+                EventApplier.Replayed real = EventApplier.verifyAndReplay(new EventLog(full));
+
+                // The shape a snapshot-only replica is left in: its snapshot, no history.
+                Path bare = scratch("test-nolog-client.jsonl");
+                Files.deleteIfExists(bare);
+                Files.deleteIfExists(pathOfSnapshot(bare));
+                MarketSnapshot.save(new EventLog(bare), real.state, real.headSeq, real.headHash);
+                Files.write(bare, new byte[0]);
+
+                check("the log really is empty", new EventLog(bare).lastSeq(), 0);
+                MarketSnapshot.Restored kept = MarketSnapshot.loadIfValid(new EventLog(bare));
+                check("a snapshot with no log is taken on its own authority",
+                        kept != null ? 1 : 0, 1);
+                if (kept != null) {
+                    check("at the head it was written from", kept.seq, real.headSeq);
+                    check("and it is the same market a full replay builds",
+                            describeState(kept.state).equals(describeState(real.state))
+                                    ? 1 : 0, 1);
+                }
+                EventApplier.Replayed viaLoad = EventApplier.load(new EventLog(bare));
+                check("loading it reaches that head too", viaLoad.headSeq, real.headSeq);
+                check("and says it was restored", viaLoad.restoredFrom, real.headSeq);
+
+                // The distinction that makes this safe: an empty log is "nothing to
+                // check against", a SHORT log is "we disagree" and must be refused.
+                Path shortLog = scratch("test-nolog-short.jsonl");
+                Files.deleteIfExists(shortLog);
+                Files.deleteIfExists(pathOfSnapshot(shortLog));
+                MarketSnapshot.save(new EventLog(shortLog), real.state, real.headSeq,
+                        real.headHash);
+                List<String> firstFew = new ArrayList<>(
+                        Files.readAllLines(full).subList(0, 3));
+                Files.write(shortLog, firstFew);
+                check("a log too short to reach the snapshot is a disagreement, not a gap",
+                        MarketSnapshot.loadIfValid(new EventLog(shortLog)) == null ? 1 : 0, 1);
+            } finally {
+                MarketSnapshot.thresholdsForTesting(was[0], was[1]);
+            }
+        }
+
+        section("L15: who keeps a market's history, and who is allowed to serve it");
+        {
+            Path sf = scratch("test-archive-settings.json");
+            Files.deleteIfExists(sf);
+            Settings s = new Settings(sf);
+            UUID big = UUID.randomUUID();
+            UUID small = UUID.randomUUID();
+
+            check("nothing is archived to begin with", s.archives(big) ? 1 : 0, 0);
+            s.setArchives(big, true);
+            check("saying so is remembered", s.archives(big) ? 1 : 0, 1);
+            check("and only for that market", s.archives(small) ? 1 : 0, 0);
+
+            // Reopened from disk, because a setting that lives only in memory would look
+            // right here and be gone by the session it is for.
+            check("and survives being written and read back",
+                    new Settings(sf).archives(big) ? 1 : 0, 1);
+
+            s.setArchives(big, false);
+            check("and can be turned off again", s.archives(big) ? 1 : 0, 0);
+
+            // A market we cannot name is never an instruction to discard history. Every
+            // caller has to get a definite no out of this, and null is not one.
+            check("an unknown market is archived, not discarded",
+                    s.archives(null) ? 1 : 0, 1);
+        }
+
         section("L12: the shape fingerprint sees the fields it has to see");
         {
             List<String> shape = MarketSnapshot.shapeLines();

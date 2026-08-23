@@ -3,6 +3,7 @@ package io.github.badbull643.economiesmod.client;
 import com.google.gson.JsonElement;
 import com.mojang.brigadier.context.CommandContext;
 import io.github.badbull643.economiesmod.core.MarketState;
+import io.github.badbull643.economiesmod.core.Settings;
 import io.github.badbull643.economiesmod.core.Order;
 import io.github.badbull643.economiesmod.core.OrderBook;
 import io.github.badbull643.economiesmod.core.ServerConfig;
@@ -89,6 +90,12 @@ public final class TradeCommands {
                                 .then(ClientCommandManager.literal("write")
                                         .executes(TradeCommands::hostConfigWrite))
                                 .executes(TradeCommands::hostConfig))
+                        .then(ClientCommandManager.literal("archive")
+                                .then(ClientCommandManager.literal("on")
+                                        .executes(c -> setArchive(c, true)))
+                                .then(ClientCommandManager.literal("off")
+                                        .executes(c -> setArchive(c, false)))
+                                .executes(TradeCommands::archive))
                         .executes(TradeCommands::usage));
     }
 
@@ -98,7 +105,76 @@ public final class TradeCommands {
         info(src, "/trade orders — your resting orders");
         info(src, "/trade price <item> — the book for one item");
         info(src, "/trade hostconfig — the rules this world hosts under");
+        info(src, "/trade archive — whether this copy keeps the market's whole history");
         info(src, "Trading itself is on the market screen (M).");
+        return 1;
+    }
+
+    /**
+     * Whether this machine keeps the full history of the market it is holding.
+     *
+     * On a market a dedicated server serves, the default is no: a snapshot is enough to
+     * play from, the events were each checked as they arrived, and a hundred players do
+     * not need a hundred copies of a half-gigabyte log to keep one market alive. A few
+     * do, though, and this is how somebody becomes one of them.
+     *
+     * Here rather than only in `economiesmod-settings-<name>.json` for §0.18's reason,
+     * which cost this project a whole entry: a rule whose default does something, with no
+     * way to reach it short of knowing a file exists, is a rule nobody can act on. The
+     * console line printed when a market stops being archived names this command.
+     */
+    private static int archive(CommandContext<FabricClientCommandSource> ctx) {
+        FabricClientCommandSource src = ctx.getSource();
+        MarketState market = marketOrComplain(src);
+        if (market == null) return 0;
+
+        Settings settings = MarketStateHolder.settings();
+        boolean on = settings != null && settings.archives(market.marketId());
+
+        head(src, "Archiving '" + market.marketName() + "'");
+        info(src, on
+                ? "On — this copy keeps every event, and could serve this market if"
+                  + " whoever hosts it stops."
+                : "Off — this copy keeps a snapshot of the balances and books, not the"
+                  + " history behind them.");
+        if (!on) {
+            info(src, "That is the default for a market a dedicated server serves, and"
+                    + " has no effect on a market your friends take turns hosting.");
+            info(src, "You cannot host a market you have not archived — there would be"
+                    + " nothing to send anyone who joined.");
+        }
+        info(src, "/trade archive " + (on ? "off" : "on") + " to change it."
+                + " It takes effect on the next connect.");
+        return 1;
+    }
+
+    /**
+     * Turning it on does not fetch the history — the next connect does.
+     *
+     * Saying so matters more than it looks. Somebody switches this on precisely because
+     * they want to be able to host, and between the switch and the reconnect they still
+     * cannot; a message that implied otherwise would send them to a Host button that is
+     * still greyed with no explanation of why.
+     */
+    private static int setArchive(CommandContext<FabricClientCommandSource> ctx, boolean on) {
+        FabricClientCommandSource src = ctx.getSource();
+        MarketState market = marketOrComplain(src);
+        if (market == null) return 0;
+
+        Settings settings = MarketStateHolder.settings();
+        if (settings == null) {
+            info(src, "No settings are loaded, so there is nowhere to remember this.");
+            return 0;
+        }
+        settings.setArchives(market.marketId(), on);
+        head(src, "Archiving '" + market.marketName() + "' is now " + (on ? "on" : "off"));
+        if (on) {
+            info(src, "The history is not here yet. Connect once and the host will send"
+                    + " what this copy is missing; until then it is still a snapshot.");
+        } else {
+            info(src, "Events already written stay on disk. Nothing new is added, and"
+                    + " this copy stops being one of the ones keeping the market alive.");
+        }
         return 1;
     }
 

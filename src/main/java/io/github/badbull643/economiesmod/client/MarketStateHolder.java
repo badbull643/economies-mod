@@ -817,8 +817,16 @@ public class MarketStateHolder {
             // precisely what let a duplicate sequence number get appended before.
             log = new EventLog(logPathFor(currentWorldDir));
 
+            // Whether to archive this market if the host turns out to be a dedicated
+            // server. A question rather than an answer, because it is asked about the
+            // host's market id during the handshake — which is the only id that is
+            // certain to exist. Somebody joining a big server for the first time holds
+            // no market at all, and they are precisely who this feature is for.
+            java.util.function.Predicate<UUID> archive =
+                    id -> settings == null || settings.archives(id);
+
             MarketClient c = new MarketClient(userId, displayName, keys, log, persist,
-                    peerCache, myHostPort);
+                    peerCache, myHostPort, archive);
             c.setOnRejected(onRejected);
             c.setOnProposalRefused(MarketStateHolder::noteRefusedProposal);
             c.setOnApplied(APPLIED);
@@ -1395,6 +1403,37 @@ public class MarketStateHolder {
         return s != null && s.marketId() != null;
     }
 
+    /**
+     * Whether this machine holds the history behind the market it is showing.
+     *
+     * It usually does, and on a rotating host it always does. What makes this a question
+     * is step 4 of the compaction note: a client of a dedicated market keeps a snapshot
+     * and no history by default, so its state can be a hundred thousand events ahead of
+     * a log that holds nothing at all.
+     *
+     * Hosting is what this gates, and the reason is not tidiness. A host serves a joiner
+     * by reading raw lines out of its log; one with no history would accept the
+     * connection and hand over nothing, and the market it advertised would be a market
+     * nobody could actually join. The Host button is already greyed while a dedicated
+     * server is serving this market — but that check is deliberately live-only, so the
+     * moment the box stops being discovered the button comes back, which is exactly the
+     * moment a snapshot-only replica must not take it.
+     *
+     * Being false is not damage and not an error. It is what somebody chose by not
+     * archiving a market that a server was looking after.
+     */
+    public static boolean hasFullHistory() {
+        MarketState s = get();
+        if (s == null || s.marketId() == null) return false;
+        if (localLog == null) return false;
+        long onDisk = localLog.lastSeq();
+        if (onDisk <= 0) return false;
+        // Behind what we know is the same problem in weaker form: we would serve a
+        // market shorter than the one we are looking at.
+        long weKnow = client != null ? Math.max(onDisk, client.lastSeq()) : onDisk;
+        return onDisk >= weKnow;
+    }
+
     /** The name of the market in this world's log, or null if there isn't one. */
     public static String marketName() {
         MarketState s = get();
@@ -1535,6 +1574,16 @@ public class MarketStateHolder {
     }
 
     public static void startHosting(Path worldDir, int port, UUID userId, String playerName) {
+        // Asked here as well as by the button that greys itself, because a greyed control
+        // with a live handler behind it is this file's oldest recurring defect and has
+        // caused three of the entries in the session log's §0. The button can also be
+        // reached by a confirmation overlay that does not re-check.
+        if (!hasFullHistory() && hasMarket()) {
+            onRejected.accept("this copy of the market is a snapshot without its history,"
+                    + " so it cannot serve anybody — turn on archiving for this market"
+                    + " and reconnect once to fetch it");
+            return;
+        }
         currentWorldDir = worldDir;
         myHostPort = port;
         disconnectIfConnected();
