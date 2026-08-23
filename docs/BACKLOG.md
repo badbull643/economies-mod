@@ -10,19 +10,17 @@ doing it, because that is the number that decides when it is worth a session.*
 
 ---
 
-## 1. Split-point discovery, and forked-market recovery
+## 1. ~~Split-point discovery, and forked-market recovery~~ — DONE 2026-08-22, and the rest refused 2026-08-23
 
-**Design: [`design/fork-rebase.md`](design/fork-rebase.md). Nothing built.**
+**Design: [`design/fork-rebase.md`](design/fork-rebase.md).** The note recommends
+split-point discovery, then refund-only, then *"A, if C turns out not to be enough"*. Both
+were built. C turned out to be enough, and the audit below is why the third step is
+refused rather than deferred.
 
 A friend group that all started on one host, later split into two groups, and both kept
-trading, cannot come back together without one side discarding everything it did since
-the split. Migration is refused for the same market id — deliberately, in two places —
-so the balance-preserving path is closed to precisely the people who share the most
-history. A group that had never met can migrate; a group that split cannot.
-
-**Cost of not doing it:** a reset deletes fills, credits, and every item deposited since
-the split. Those items already left the player's Minecraft inventory, so it is real
-destruction rather than a ledger entry. Nothing hands them back.
+trading, could not come back together without one side discarding everything it did since
+the split. Migration is refused for the same market id — deliberately, in two places — so
+the balance-preserving path was closed to precisely the people who share the most history.
 
 **~~Do first: split-point discovery.~~ DONE 2026-08-22.** `MarketClient.findSplitPoint`
 answers the question nothing could: the last sequence number two chains still agree on.
@@ -33,30 +31,76 @@ O(n log n) disk on the path that already annoys people with long logs. `splitPoi
 
 The FORK banner now reads *"you parted after event N, and everything either of you did
 since is on one branch only"* rather than naming a point of disagreement that could have
-meant four events or four hundred. `Divergence.splitAt` carries it, `-1` when it could not
-be found out, and asking is a separate round trip so a failure costs the detail rather
-than the refusal.
+meant four events or four hundred. All three paths that detect a fork ask for it — see
+item 7, which took two more sittings to finish.
 
 **~~Next: refund-only.~~ DONE 2026-08-22.** `BranchDiff.depositsOnlyAfter` works out what
 a reset destroys that nothing can restore — items deposited since the split, which left a
 Minecraft inventory and whose only record is about to be deleted — and `resetLog` queues
-them back to the inventory. `X3`, `X3b`, and `E19` for the live half.
+them back to the inventory. `X3`, `X3b`, and `E19` for the live half, which ran correctly
+on three separate forks.
 
 Bounded twice, because this ends in items appearing in a world and the only unacceptable
 direction is too many: by **what went in since the split**, netted against withdrawals, so
 pre-split holdings (which return with the shared history) and already-withdrawn goods are
 never handed over again; and by **what the ledger still says they hold**, counting goods
-reserved in resting sells, so somebody who deposited and then *sold* gets nothing — they
-hold credits, the buyer holds the goods. It can under-refund and cannot over-refund.
+reserved in resting sells. It can under-refund and cannot over-refund.
 
-**Then** a full rebase, if refund-only turns out not to be enough — and it may well be
-enough, since items were the only part of a reset that was unrecoverable. Never a merge:
-matching is order-dependent, so interleaving two branches produces fills nobody
-experienced. The design note explains why at length.
+---
 
-**What is still lost to a reset:** credits earned since the split, and fills. Both are
-ledger entries with no existence outside it, so "restoring" them means choosing an
-arithmetic rather than returning a thing — which is the rebase question, not this one.
+### The rebase is refused, not deferred
+
+*Audited 2026-08-23 against what a reset now actually costs. Refused is a different state
+from unbuilt; read this before arguing with it.*
+
+A rebase replays the losing branch's post-split events as fresh proposals. Taken event by
+event, against the code as it now stands:
+
+| What it would replay | Already handled |
+|---|---|
+| `Deposit`, `DepositAndList` | Items go back to the player's inventory |
+| `PlaceOrder` | Listed as a checklist to re-place by hand |
+| `CancelOrder` | Names an order that does not exist on the winning branch; a rebase drops it too |
+| Fills | Cannot be replayed by anything — they are consequences, not proposals |
+| Credits earned since the split | Cannot be restored by anything — see below |
+
+**Two of those are impossible rather than unbuilt.**
+
+*Credits earned are minting.* You earned them because somebody on your branch paid you.
+On the surviving branch that person never paid, so crediting you invents money nothing on
+the chain accounts for — which breaks the one invariant the signed chain exists for.
+
+*Fills would be different fills.* Your sell rested at 7 because nobody on your branch was
+buying; on theirs somebody has a bid at 7. The design note refuses a true merge for
+exactly this reason and a rebase has the same problem in weaker form.
+
+**So the whole remaining value of a rebase is automation** — replaying deposits and orders
+without the player clicking. And for orders that is worse than what exists: an order
+re-placed automatically into a different book **can fill immediately at a price nobody
+agreed to**. The checklist makes that a decision; a rebase makes it a side effect of
+recovery. The design note already says the reporting — telling somebody which of their
+forty events became thirty-one, and why — is most of A's work, which is a session spent
+on a mechanism whose own failure mode is trading on somebody's behalf.
+
+### The one residual, recorded rather than fixed
+
+Deposit something after the split, **sell it on the losing branch**, then reset. The
+refund is capped by what the ledger says you still hold, and you hold credits, not goods.
+So nothing comes back, the credits die with the branch, and those items are destroyed —
+they left a Minecraft inventory and no history anywhere says they exist.
+
+That is the only case left where a reset destroys something outside the ledger, and the
+bound causing it is deliberate: if somebody else stayed on the losing branch and kept
+hosting it, they still hold those goods in a live market, and refunding the seller would
+duplicate them. Under-refunding cannot create items; the alternative can.
+
+Worth knowing how reachable it is before anybody spends a session on it. Across every fork
+run on 2026-08-22, **no post-split deposit was ever sold before the reset** — they either
+rested or crossed the depositor's own pre-split bids. The gap is real and nobody has
+walked into it.
+
+**Never a merge.** Matching is order-dependent, so interleaving two branches produces
+fills nobody experienced. See the design note, and the Not-on-this-list section below.
 
 ---
 
@@ -308,3 +352,8 @@ the thing after the next thing.
 three are refused with reasons in the design notes above, and refused is a different
 state from deferred. If any of them shows up in a future plan, read why it was turned
 down before arguing with it.
+
+**A rebase of a forked branch**, as of 2026-08-23, for the same treatment and a newer
+reason: refund-only turned out to be enough. Everything a rebase could still restore is
+either a ledger entry with no existence outside it, or a trade the player never made. The
+audit is under item 1 and the one residual it leaves is named there.
