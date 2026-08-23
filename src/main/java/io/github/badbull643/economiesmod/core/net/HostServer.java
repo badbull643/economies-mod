@@ -307,7 +307,7 @@ public class HostServer {
         }
 
         System.out.println("[host] serving '" + state.marketName() + "' ("
-                + state.marketId() + ") — replayed " + log.lastSeq() + " events");
+                + state.marketId() + ") — " + loaded.describe());
 
         warnIfGrantDisagrees();
     }
