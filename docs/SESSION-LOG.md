@@ -15,8 +15,8 @@ nothing else about it, this section is enough to start work from.*
 
 **The build is green, the tree is clean, and nothing is half-finished.** There is no
 in-progress edit to pick up. The roadmap finished some time ago; everything since has been
-inspection, play-testing, and the defects both turned up — twenty-seven of them, in §0.
-The backlog has four open items and the next one is item 5.
+inspection, play-testing, and the defects both turned up — twenty-seven of them, in §0 —
+and then log compaction, which is backlog item 2 and is three-fifths built.
 
 ### Check it still holds
 
@@ -25,9 +25,13 @@ The backlog has four open items and the next one is item 5.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `572 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
+Expect `646 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
 since 2026-08-23, so a failure here that passes there — or the reverse — is about the
 machine rather than the code, and is worth chasing as such.
+
+*`coreTests` was 572 before 2026-08-23; L7–L12 are the compaction work. Nothing in CI
+launches Minecraft and nothing in CI measures speed, so the numbers in
+`docs/design/log-compaction.md` are the one claim here that will rot without warning.*
 
 **Where the code is.** Branch `trust-model-and-migration`. Don't trust a number written in
 this header — the count has been wrong here twice. Ask git:
@@ -59,16 +63,39 @@ There is one other branch worth knowing about: `claude/practical-diffie-e9fbf4` 
 
 ### What to do next
 
-**Backlog item 5, splitting `MarketScreen`.** 4,293 lines, and the evidence is now much
-stronger than the line count ever was: four separate lists in that file stacked content
-downwards with no scroll and lost the far end of it, and **every one was found by a person
-looking at a screen rather than by a test**. Split by component, never by layer — a layer
-split makes §4's defect structural. Item 6 says to read item 5 first, so these two go in
-order.
+**Backlog item 2's steps 1–3 are done (2026-08-23); step 4 is next.** Read
+`docs/design/log-compaction.md`, which was rewritten that day against measurements and
+disagrees with what everything older says about this. A 100,000-event load went **4208 ms
+→ 190 ms**, and the old code could not open that market in a 128 MB heap at all.
 
-The other two open items are **8** (host rules a group can agree once, as defaults rather
-than enforcement) and **2** (log compaction, which genuinely wants a market that has been
-lived in rather than a decision).
+Three things worth carrying forward from it. A load was 45% `String.format("%02x")` and
+44% parsing the file four separate times, and **1% rebuilding `MarketState` — which was
+the only thing the snapshot this note recommended would have removed**; the measurement
+changed what got built. *25,000 events is not a large-server number, it is a
+market-that-lasted-a-season number*, which is why this jumped item 5. And a snapshot is
+kept honest by a **shape fingerprint** reflected off `MarketState`, so adding a field
+discards every old snapshot without anybody remembering to — because the serialiser going
+stale is the only failure here that produces a wrong balance.
+
+**Step 4** is snapshot-only clients on dedicated markets, and it is a design question
+before it is code: `MarketClient` still replays its whole local log on every connect, and
+whether a client of a dedicated server should hold that log at all is the open part.
+
+**Item 5, splitting `MarketScreen`, is next after it.** 4,293 lines, and the evidence is
+much stronger than the line count ever was: four separate lists in that file stacked
+content downwards with no scroll and lost the far end of it, and **every one was found by
+a person looking at a screen rather than by a test**. Split by component, never by layer —
+a layer split makes §4's defect structural. Item 6 says to read item 5 first, so those two
+go in order.
+
+The other open item is **8** (host rules a group can agree once, as defaults rather than
+enforcement).
+
+**And one open decision came out of item 2 that is larger than item 2.** Option B — a host
+handing out state — is refused for rotating mode and was never priced for a dedicated
+server, where a new joiner must otherwise download and verify ~511 MB of a year-old
+hundred-player market before playing. Nothing older in this file treats that as open. It
+is.
 
 ### What is waiting on a person, not on code
 
@@ -930,9 +957,13 @@ grant finally has a control — see §7.
   finished, so nothing else says "this is known about and not done" — and without such a
   file an unbuilt thing cannot be told apart from an overlooked one. §0.10 was exactly
   that failure in miniature: a feature nobody had noticed was switched off.
-- **Log compaction unbuilt**, deliberately. `docs/design/log-compaction.md` has the full
-  pass; its recommendation is build option A only, when it is worth a session of its own.
-  Backlog item 2.
+- ~~**Log compaction unbuilt**, deliberately.~~ **Built 2026-08-23**, except for the part
+  that is a trust decision. `docs/design/log-compaction.md` was rewritten against
+  measurements first, and the old recommendation here ("build option A only") survived
+  only in corrected form: rebuilding `MarketState` is 1% of a load, so the snapshot saves
+  far less than assumed, and two cheap fixes nobody had considered were worth 3× on their
+  own. A 100,000-event load is 190 ms against 4208 ms. Backlog item 2; step 4 is next and
+  step 5 is open.
 - ~~**A forked market cannot be recovered from**, only reset away from.~~ **Closed
   2026-08-23.** A reset now says where the two branches parted and hands back the items
   deposited since, which were the only thing it destroyed that no history could recreate.
