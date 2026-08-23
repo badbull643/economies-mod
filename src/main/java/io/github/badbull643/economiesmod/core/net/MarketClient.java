@@ -68,7 +68,19 @@ public class MarketClient {
         // captured before the grant, the replay picked it up, and this client believed
         // it was one event behind state it already held — so the host re-sent that
         // event, and the grant was applied to this replica twice.
-        EventApplier.Replayed replayed = EventApplier.replayWithHead(log);
+        //
+        // Through load rather than a bare replay, so this path gets the snapshot too.
+        // It is the third of the three that walk the whole log and the only one that
+        // runs every session rather than once per world: on a market with a dedicated
+        // server, every player pays it every time they connect. Nothing else changes —
+        // load returns state, position and hash from one walk exactly as replayWithHead
+        // did, which is the property the paragraph above is about.
+        //
+        // It also verifies, which this path did not. The events were each validated as
+        // they arrived, so the chain should hold; if it does not, that is disk damage
+        // rather than dishonesty, and the answer is the same as before — carry on with
+        // what replayed. The verdict is deliberately not acted on here.
+        EventApplier.Replayed replayed = EventApplier.load(log);
         this.state = replayed.state;
         this.appliedSeq = replayed.headSeq;
         this.lastHash = replayed.headHash;
