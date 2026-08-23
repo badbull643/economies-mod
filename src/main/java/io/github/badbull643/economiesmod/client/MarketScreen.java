@@ -786,8 +786,15 @@ public class MarketScreen extends Screen {
         // should not — which is what a comment beside the Migrate button has claimed
         // this does since before it did any of it.
         boolean servedByBox = dedicatedServesThisMarket();
+        // And greyed when this machine has the market but not its history. A snapshot-only
+        // replica of a dedicated market would bind a port, advertise the market, and have
+        // no lines to send anybody who joined. servedByBox does not cover it: that check
+        // is live-only, so it goes false the moment the server stops being discovered,
+        // which is precisely when somebody would reach for this button.
+        boolean canServeIt = MarketStateHolder.hasFullHistory();
         if (hostButton != null) {
-            hostButton.active = hostButton.visible && has && !hosting && !servedByBox;
+            hostButton.active = hostButton.visible && has && !hosting && !servedByBox
+                    && canServeIt;
         }
 
         // Only one of these can ever be the right thing to press: connect() stops

@@ -36,7 +36,40 @@ public class MarketClient {
     private volatile long lastSeq = 0;
     private volatile String lastHash = "0";
     private final PlayerKeys keys;
-    private final boolean persist;
+
+    /**
+     * Whether events we accept are written to our own log.
+     *
+     * Not final, and settled at the handshake rather than at construction, because it
+     * depends on something only the host can tell us — see {@link #archiveDedicated} and
+     * the rule in the handshake. {@code hostDedicated} arrives on the Sync message
+     * before a single synced line is applied, so the decision is always made before
+     * anything could be written under the wrong one.
+     */
+    private volatile boolean persist;
+
+    /**
+     * Whether to keep the full history of a market a dedicated server serves.
+     *
+     * Off by default, and that is the whole of step 4 of the compaction note. A replica
+     * carries the log for two reasons: so this machine can serve the market if the
+     * hardware it lives on goes away, and so the host's arithmetic can be checked. On a
+     * dedicated market with a hundred players the first is satisfied by a handful of
+     * copies rather than a hundred, and the second is satisfied by the snapshot plus the
+     * handshake — every event was validated as it arrived and the head is compared
+     * against the host's chain on every connect.
+     *
+     * So the default is a snapshot and no history, and anybody who wants to be one of
+     * the copies that keeps the market alive says so per market. A rotating host is
+     * untouched: there the replica is how hosting rotates at all.
+     *
+     * Asked about a market id rather than answered up front, because the market that
+     * matters is the host's and not ours. A player joining a big server for the first
+     * time holds no market at all, and that is exactly the case this feature exists for
+     * — deciding from what we already have would archive the whole history for precisely
+     * the person it was meant to spare.
+     */
+    private final java.util.function.Predicate<UUID> archiveDedicated;
 
     /** Called when a proposal is rejected, so the UI can report it. */
     private Consumer<String> onRejected = reason -> {};
@@ -53,11 +86,27 @@ public class MarketClient {
     public MarketClient(UUID userId, String displayName, PlayerKeys keys,
                         EventLog log, boolean persist, PeerCache peerCache,
                         int myHostPort) throws IOException {
+        this(userId, displayName, keys, log, persist, peerCache, myHostPort, id -> true);
+    }
+
+    /**
+     * The same, saying whether to archive a market a dedicated server serves.
+     *
+     * The shorter constructor answers "yes", which is what every existing caller meant
+     * and what the tests want: a client that keeps everything behaves exactly as it did
+     * before step 4. Only the live client passes false, and only then does the snapshot
+     * become this replica's memory of the market.
+     */
+    public MarketClient(UUID userId, String displayName, PlayerKeys keys,
+                        EventLog log, boolean persist, PeerCache peerCache,
+                        int myHostPort, java.util.function.Predicate<UUID> archiveDedicated)
+                        throws IOException {
         this.userId = userId;
         this.displayName = displayName;
         this.keys = keys;
         this.log = log;
         this.persist = persist;
+        this.archiveDedicated = archiveDedicated;
         this.peerCache = peerCache;
         this.myHostPort = myHostPort;
         // All three from one read of the log, not from the log's cached idea of where it
@@ -229,6 +278,21 @@ public class MarketClient {
 
         Message.Sync sync = (Message.Sync) reply;
         hostDedicated = sync.dedicated;
+
+        // Settled here, before a single synced line is applied, because this is the
+        // first moment the answer exists — whether the host is dedicated is something
+        // only the host can say, and it says it on this message. Deciding later would
+        // mean having already written events under a rule that had not been chosen.
+        //
+        // Only ever narrows what gets written: a caller that asked not to persist
+        // (a host's self-connect) still does not.
+        UUID theirs = sync.marketId == null ? null : UUID.fromString(sync.marketId);
+        if (persist && hostDedicated && !archiveDedicated.test(theirs)) {
+            persist = false;
+            System.out.println("[client] " + sync.marketName + " is served by a dedicated"
+                    + " server, so this copy keeps a snapshot rather than the whole"
+                    + " history — /trade archive on to keep all of it");
+        }
 
         // The host already refused a mismatch, but check our own copy too — a client
         // should not adopt events into a log whose identity it did not agree to.
@@ -612,6 +676,12 @@ public class MarketClient {
             if (channel != null) {
                 try { channel.close(); } catch (IOException ignored) {}
             }
+            // Here as well as in disconnect(), because this is the end that happens to
+            // somebody rather than the one they choose — the host went away, or sent
+            // something we refused. A replica keeping no history has nothing else to
+            // remember the session by, and the ending it did not ask for is exactly the
+            // one where losing it would be most annoying.
+            keepWhatWeLearned();
             onStateChanged.run();
         }
     }
@@ -764,6 +834,32 @@ public class MarketClient {
         connected = false;
         if (channel != null) {
             try { channel.close(); } catch (IOException ignored) {}
+        }
+        keepWhatWeLearned();
+    }
+
+    /**
+     * Writes down the state this session reached, for a replica that is not keeping the
+     * history it was built from.
+     *
+     * Only for the snapshot-only case. When the log is being written, the ordinary rule
+     * applies and the next load writes its own snapshot off the log; here there will be
+     * no log to write one from, so this is the only record that this replica ever knew
+     * anything, and without it a client of a dedicated market would re-download the
+     * whole market every session — which is worse than what it replaced.
+     *
+     * Best effort by design. A snapshot that fails to write costs a full sync next time
+     * and must never cost a disconnection, and one lost to a crash is simply an older
+     * head that the handshake tops up from.
+     */
+    private void keepWhatWeLearned() {
+        if (persist) return;                 // the log is the record; nothing to do
+        if (appliedSeq <= 0) return;
+        if (state.marketId() == null) return;
+        try {
+            MarketSnapshot.save(log, state, appliedSeq, lastHash);
+        } catch (Exception e) {
+            System.err.println("[client] could not keep a snapshot of this market: " + e);
         }
     }
 

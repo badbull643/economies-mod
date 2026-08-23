@@ -355,10 +355,34 @@ server, every player pays it every time they join. It verifies now as well, whic
 not; the verdict is deliberately not acted on, since each event was validated as it
 arrived and a break there is disk damage rather than dishonesty.
 
-**The half that is left is the decision**: whether a client of a dedicated market should
-hold the log at all, or keep only a snapshot and leave archiving to whoever opts in. The
-`persist` flag already exists and is already the lever — it is `true` for every remote
-connect and `false` only for a host's self-connect. Two cautions:
+**And the rest, later the same day.** A client of a dedicated market keeps a snapshot and
+stops writing history; `/trade archive on` makes this machine one of the copies that keeps
+the market alive. Settled on the handshake, which is the first moment the answer exists,
+and before a single synced line is applied.
+
+*Three things this turned out to need that the plan did not mention.*
+
+**The snapshot's validity was anchored to the log**, so "stop keeping the log" would have
+rejected every snapshot and re-downloaded the whole market every session — worse than what
+it replaced. An **empty** log is now "nothing here to check against" and the snapshot is
+taken on its own authority; a **short** log is still "we disagree" and refused. The check
+does not disappear, it moves to the handshake, which sends our head and hash and gets
+refused or told about a fork if the host's chain says otherwise. Both directions are
+pinned in `coreTests` L14 and verified failing.
+
+**A replica with no history must never host.** `dedicatedServesThisMarket()` greys Host
+while the box is up — but it is live-only, so the button returns the moment the server
+stops being discovered, which is exactly when a snapshot-only replica would reach for it.
+It would bind a port, advertise a market and have no lines to send anybody who joined.
+`MarketStateHolder.hasFullHistory()` gates the button *and* `startHosting`, because a
+greyed control with a live handler behind it has caused three entries in §0 already.
+
+**The question is asked about the host's market, not ours.** Deciding from the market this
+machine already holds would archive everything for somebody joining a big server for the
+first time — the exact person the feature exists for, since they hold no market at all.
+
+The `persist` flag was already the lever — `true` for every remote connect and `false`
+only for a host's self-connect. Two cautions, both still live:
 
 - It must be gated on **the same predicate that greys Host**. "Can I ever host this market"
   and "do I keep its log" are one question, and asking it twice is §4 — which §0.19 counts
