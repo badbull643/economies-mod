@@ -8,8 +8,17 @@ is right.*
 
 ## Start here
 
-**The build is green and the tree is clean.** Nothing is half-finished; there is no
-in-progress edit to pick up.
+*Written 2026-08-23 as a cold handoff. If you have just opened this project and know
+nothing else about it, this section is enough to start work from.*
+
+### The state in one paragraph
+
+**The build is green, the tree is clean, and nothing is half-finished.** There is no
+in-progress edit to pick up. The roadmap finished some time ago; everything since has been
+inspection, play-testing, and the defects both turned up — twenty-seven of them, in §0.
+The backlog has four open items and the next one is item 5.
+
+### Check it still holds
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
@@ -20,9 +29,8 @@ Expect `572 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. CI runs the same nine on ever
 since 2026-08-23, so a failure here that passes there — or the reverse — is about the
 machine rather than the code, and is worth chasing as such.
 
-**Where the code is.** Branch `trust-model-and-migration`, ahead of its remote and 0
-behind. Don't trust that sentence for a number — the count has been wrong in this header
-twice. Ask git:
+**Where the code is.** Branch `trust-model-and-migration`. Don't trust a number written in
+this header — the count has been wrong here twice. Ask git:
 
 ```
 git rev-list --left-right --count origin/trust-model-and-migration...HEAD
@@ -30,32 +38,68 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 ```
 
 `origin/main` carries commits this branch does not, and they are all merge commits *of
-this branch*, so nothing on `main` is missing from here. The branch has been pushed
-before and merged to `main` through PR #6. Local `main` is far behind `origin/main`;
-nothing depends on that.
+this branch*, so nothing on `main` is missing from here. Local `main` is far behind
+`origin/main`; nothing depends on that. **This branch has run to well over forty commits
+without a PR** — merging is a decision nobody has made rather than a task nobody has done,
+and the longer it runs the more it becomes a leap rather than a step.
 
-**What to read, in order.**
+There is one other branch worth knowing about: `claude/practical-diffie-e9fbf4` holds a
+443-line `MigrationCapTest` rescued from an abandoned worktree. See §9.
 
-1. **§4 below** — one paragraph, and it predicted most of two sessions' worth of bugs.
+### What to read, in order
+
+1. **§4 below** — one paragraph, and it predicted most of three sessions' worth of bugs.
    If you read nothing else, read that.
-2. **§0** — an inspection that found seventeen defects behind 437 passing checks, then
-   what a play session found on top. Long, but it is the current state of the code.
+2. **§0** — twenty-seven defects found behind 437 passing checks, by reading and then by
+   playing. Long, and it is the current state of the code rather than history.
 3. **`docs/BACKLOG.md`** — everything deliberately not built, in the order worth doing,
-   each saying what it costs to keep not doing it. This is where the next work is.
-4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
-   re-check because their code moved afterwards or is newer than the sitting.
+   each saying what it costs to keep not doing it. **This is where the next work is.**
+4. **`docs/testing/group-e.md`** — the live checklist, and the only thing standing between
+   a green CI tick and a claim that this works. Nothing in CI launches Minecraft.
 
-**What is being worked on right now:** nothing. The last things finished were backlog item
-4 — CI, and the port race that had to be fixed before it — and clearing §9, which turned
-up a 443-line test suite in a worktree the log had called safe to remove.
+### What to do next
 
-Still a person at a keyboard: `E9` and `E23` in `docs/testing/group-e.md`, which the
-author has said they will run later. Nothing in CI launches Minecraft.
+**Backlog item 5, splitting `MarketScreen`.** 4,293 lines, and the evidence is now much
+stronger than the line count ever was: four separate lists in that file stacked content
+downwards with no scroll and lost the far end of it, and **every one was found by a person
+looking at a screen rather than by a test**. Split by component, never by layer — a layer
+split makes §4's defect structural. Item 6 says to read item 5 first, so these two go in
+order.
 
-**Before starting the dedicated server again**, read §9: its market was deleted so the
-config and the log would stop describing different economies, and the restart that
-recreates it is the only moment `--creator-key` can be passed. Without it that market's
-policy is frozen for good.
+The other two open items are **8** (host rules a group can agree once, as defaults rather
+than enforcement) and **2** (log compaction, which genuinely wants a market that has been
+lived in rather than a decision).
+
+### What is waiting on a person, not on code
+
+- **`E9` and `E23`** in `docs/testing/group-e.md`, which the author has said they will run.
+- **`E13`, `E14`, `E17`, `E17b`, `E19b`, `E21`, `E22`** are marked unrun because there is
+  only log evidence for `E18`, `E19` and `E20`. The author believes most were run; the
+  file deliberately understates rather than claiming something unverified. **Ask before
+  trusting either reading.**
+- **The first CI run has never executed anywhere.** If it goes red on `Assemble` rather
+  than on the suites, that is the toolchain and not the code — the steps are split so the
+  two can be told apart.
+
+### Three decisions nobody has made
+
+- **`--creator-key` on the next dedicated-server start.** Its market was deleted so the
+  config and the log would stop describing different economies, and the restart that
+  recreates it is the *only* moment this can be chosen. Without it the box is its own
+  creator and that market's policy is frozen for good. §9, and §7 for why.
+- **`server-identity.key` is tracked, unencrypted**, along with all of `run/`, because
+  `.gitignore` was removed on purpose. Raised and reaffirmed before — but this branch is
+  now pushed to GitHub. **If that repository is public, so is the key.**
+- **Whether to port anything from `MigrationCapTest`.** `depositCapTest` is six checks and
+  `admissionTest` twenty-five, and between them they never read a `MigrateBalance`.
+
+### The one habit worth copying
+
+Every engine fix in this log was verified to **fail with the fix disabled** before being
+trusted. It has repeatedly caught tests that could not fail — a check against a default
+config where the field was null anyway, a ceiling compared as a substring where
+`1000000` contains `10000`. A test written and passed first time is a test that has not
+been checked.
 
 ---
 
@@ -765,8 +809,8 @@ admissionTest 25   depositCapTest 6   attestationTest 12   hostTrustTest 16
 splitPointTest 27
 ```
 
-*(437 across seven suites when this section was written; the extra 57 checks and the
-eighth suite belong to §0.)*
+*(Seven suites totalling 437 when this section was written. Nine suites and 685 checks
+now; the difference belongs to §0 and the sittings after it.)*
 
 Every engine change below was verified to **fail** with its fix disabled before being
 trusted, per the project's existing discipline. Three failed the first time for a reason
@@ -796,9 +840,13 @@ Disconnect not stopping hosting, and a migration guard that turned away the seco
 to leave a shared market. **Most of those were introduced by fixes made earlier the same
 day**, which is the thing to carry forward from this list rather than any item on it.*
 
-*Two items want a five-minute re-check, because their code moved at 13:58 after the
-sitting ended — `docs/testing/group-e.md` names exactly which and why. Nothing else has
-changed since it was run.*
+*[2026-08-23] **And then most of it changed again.** Nine more live items were added or
+rewritten across two further sittings — `E17`, `E17b`, `E18`, `E19`, `E19b`, `E20`, `E21`,
+`E22`, `E23` — because the sittings kept finding defects and the fixes kept needing their
+own checks. `E18`, `E19` and `E20` were run and are correct, verified against the world
+logs afterwards. `E9` and `E23` are outstanding by agreement. The rest are marked unrun
+because nothing evidences them either way, which understates what was actually done —
+`docs/testing/group-e.md` is the file to fix that in, not this one.*
 
 *The paragraph above is what this looked like beforehand. Worth leaving: "zero live
 minutes" was the right thing to have been worried about, and the ratio held — a day of
