@@ -3950,6 +3950,86 @@ public class MarketTests {
                     EventApplier.load(new EventLog(junk)).headSeq, full.headSeq);
         }
 
+        section("L13: a snapshot gets written when it is worth writing, and not before");
+        {
+            // This was missed entirely by L10 and L11, which both call save() and
+            // loadIfValid() directly. Nothing exercised the decision to write one, so
+            // nothing noticed that the first write was tested against STRIDE rather than
+            // MIN_EVENTS — which made MIN_EVENTS decide nothing, invisibly, because the
+            // two constants ship equal. Found by a person lowering MIN_EVENTS to try the
+            // feature and getting no snapshot and no reason why.
+            // Shrunk so the end-to-end half can watch a file appear without building
+            // five thousand signed events. Restored below whatever happens.
+            long[] wasThresholds = MarketSnapshot.thresholdsForTesting(50, 20);
+            try {
+            long min = MarketSnapshot.minEvents();
+            long stride = MarketSnapshot.stride();
+
+            check("nothing below the minimum",
+                    MarketSnapshot.worthWriting(min - 1, -1) ? 1 : 0, 0);
+            check("the first one lands at the minimum",
+                    MarketSnapshot.worthWriting(min, -1) ? 1 : 0, 1);
+            check("the first one does not wait for a stride",
+                    MarketSnapshot.worthWriting(min, 0) ? 1 : 0, 1);
+            check("an existing one is left alone until the log moves a stride",
+                    MarketSnapshot.worthWriting(min + stride - 1, min) ? 1 : 0, 0);
+            check("and replaced once it has",
+                    MarketSnapshot.worthWriting(min + stride, min) ? 1 : 0, 1);
+            check("a short log is never snapshotted, whatever sits beside it",
+                    MarketSnapshot.worthWriting(min - 1, 1) ? 1 : 0, 0);
+
+            // And the same decision through the real path, on a real log.
+            Path p = scratch("test-snapshot-policy.jsonl");
+            Files.deleteIfExists(p);
+            Files.deleteIfExists(pathOfSnapshot(p));
+            EventLog log = new EventLog(p);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            grant(log, live, BOB, 1000);
+
+            EventApplier.load(new EventLog(p));
+            check("a four-event market writes no snapshot",
+                    Files.exists(pathOfSnapshot(p)) ? 1 : 0, 0);
+
+            // Past the minimum, through EventApplier.load, with no snapshot present.
+            while (log.lastSeq() < MarketSnapshot.minEvents()) {
+                apply(log, live, deposit(BOB, IRON, 1));
+            }
+            EventApplier.Replayed wrote = EventApplier.load(new EventLog(p));
+            check("reaching the minimum writes one",
+                    Files.exists(pathOfSnapshot(p)) ? 1 : 0, 1);
+
+            MarketSnapshot.Restored back = MarketSnapshot.loadIfValid(new EventLog(p));
+            check("the one it wrote is usable", back != null ? 1 : 0, 1);
+            if (back != null) {
+                check("and it is at the head it was written from", back.seq, wrote.headSeq);
+                check("and it restores what a replay builds",
+                        describeState(back.state).equals(describeState(wrote.state))
+                                ? 1 : 0, 1);
+            }
+
+            // A damaged chain must never get one — a snapshot of a state nobody should
+            // be using is a way to keep using it.
+            Path bad = scratch("test-snapshot-nodamage.jsonl");
+            Files.deleteIfExists(bad);
+            Files.deleteIfExists(pathOfSnapshot(bad));
+            List<String> lines = new ArrayList<>(Files.readAllLines(p));
+            int at = lineOf(lines, "Deposit");
+            lines.set(at, lines.get(at).replace("\"quantity\":1", "\"quantity\":2"));
+            Files.write(bad, lines);
+            EventApplier.Replayed broken = EventApplier.load(new EventLog(bad));
+            check("the tampered fixture is seen as damaged",
+                    broken.chainBrokenAt != -1 ? 1 : 0, 1);
+            check("a damaged chain is never snapshotted",
+                    Files.exists(pathOfSnapshot(bad)) ? 1 : 0, 0);
+            } finally {
+                MarketSnapshot.thresholdsForTesting(wasThresholds[0], wasThresholds[1]);
+            }
+            check("the shipped thresholds are put back",
+                    MarketSnapshot.minEvents(), 5000);
+        }
+
         section("L12: the shape fingerprint sees the fields it has to see");
         {
             List<String> shape = MarketSnapshot.shapeLines();

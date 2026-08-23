@@ -440,10 +440,10 @@ public class EventApplier {
                                       MarketSnapshot.Restored from) {
         if (result.chainBrokenAt != -1) return;
         if (result.state.marketId() == null) return;
-        if (result.headSeq < MarketSnapshot.MIN_EVENTS) return;
-
-        long since = from == null ? result.headSeq : result.headSeq - from.seq;
-        if (since < MarketSnapshot.STRIDE) return;
+        // When, and only when — MarketSnapshot owns the thresholds and how they combine.
+        if (!MarketSnapshot.worthWriting(result.headSeq, from == null ? -1 : from.seq)) {
+            return;
+        }
 
         try {
             MarketSnapshot.save(log, result.state, result.headSeq, result.headHash);
