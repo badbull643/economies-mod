@@ -107,8 +107,8 @@ fills nobody experienced. See the design note, and the Not-on-this-list section 
 ## 2. Log compaction — and what a long log actually costs
 
 **Design: [`design/log-compaction.md`](design/log-compaction.md), rewritten 2026-08-23
-against measurements. Steps 1, 2 and 3 built the same day, and half of 4. What remains is
-a decision rather than code — see step 4 and step 5 below.**
+against measurements. Steps 1 to 4 built the same day. What remains is step 5, which is a
+trust decision rather than code.**
 
 **Read the design note rather than this entry.** What was here before said "build option A
 only" and gave a cost model that measurement contradicts — it is summarised below only so
@@ -118,8 +118,8 @@ The log only grows, and five call sites walk all of it: `loadLocal`, the `HostSe
 constructor, the `MarketClient` constructor, and `BranchDiff` twice — which `resetCost()`
 calls twice more, so opening the reset dialog is four full walks from a UI thread.
 
-**The measured plan, in order.** Items 1 and 2 are done, as of 2026-08-23; both were
-cheap, correct under every open question below, and absent from the original note.
+**The measured plan, in order.** Steps 1 to 4 are done, as of 2026-08-23. The first two
+were cheap, correct under every open question below, and absent from the original note.
 
 1. **~~Stream `readFrom`~~ — DONE.** It materialised every event into an `ArrayList`
    before its caller saw one, about 1 KB of heap each. `EventLog.forEach` is the
@@ -134,9 +134,13 @@ cheap, correct under every open question below, and absent from the original not
    ms**, twenty-two times where this started. Note what it actually saved: not `apply`,
    which is 1% of a load, but verifying and parsing the prefix — and the last full pass
    left was the `EventLog` constructor finding its own head, which is deferred now.
-4. **Snapshot-only clients on dedicated markets**, with opt-in archiving. *The client
-   load path uses the snapshot as of 2026-08-23; what is left is whether it should keep
-   the log at all, which is a decision rather than code.*
+4. **~~Snapshot-only clients on dedicated markets~~ — DONE.** A client of a market a
+   dedicated server serves keeps a snapshot and stops writing history; `/trade archive on`
+   makes this machine one of the copies that keeps the market alive. Three things it
+   needed that the plan did not say: an empty log now validates a snapshot on its own
+   authority (a short one still does not), a replica with no history is barred from
+   hosting, and the archive question is asked about the host's market rather than ours —
+   otherwise a first-time joiner archives everything, and they are who this is for.
 5. **First-join onboarding at scale**, which is open — see below.
 
 **Cost of not doing it:** 25,000 events is not a large-server number, it is a

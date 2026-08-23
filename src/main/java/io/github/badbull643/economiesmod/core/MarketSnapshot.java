@@ -356,6 +356,20 @@ public final class MarketSnapshot {
             }
 
             String onDisk = log.hashAtSeqFast(b.seq);
+            if (onDisk == null && log.headSeqOnDisk() == 0) {
+                // No log at all beside it. That is a client of a dedicated market, which
+                // keeps a snapshot and does not archive the history — see the persist
+                // rule in MarketClient. There is nothing here to contradict the snapshot
+                // and nothing to check it against, so it is taken on the authority it
+                // was written with: this replica computed it, from a chain it verified.
+                //
+                // The check does not disappear, it moves. The handshake sends our head
+                // sequence and hash, and a host whose chain says otherwise refuses us or
+                // reports a fork. So a snapshot that has drifted from the market is
+                // caught the moment we next speak to anybody — which for a market with
+                // no local history is the only moment it could matter.
+                return new Restored(rebuild(b), b.seq, b.chainHash);
+            }
             if (onDisk == null || !onDisk.equals(b.chainHash)) {
                 System.out.println("[economiesmod] snapshot describes a chain this log no"
                         + " longer has — replaying in full");

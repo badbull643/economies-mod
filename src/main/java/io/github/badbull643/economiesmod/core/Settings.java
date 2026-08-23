@@ -40,6 +40,20 @@ public class Settings {
         /** Above this many notifications a minute, fills are batched into one summary
          *  rather than dropped — a market-maker on a busy host loses detail, not news. */
         int notifyMaxPerMinute = 20;
+
+        /**
+         * Market ids whose whole history this machine keeps even though a dedicated
+         * server serves them.
+         *
+         * A list of the exceptions rather than a single switch, because the decision is
+         * about a market and not about a player: somebody can be the archive for the
+         * server they care about without carrying every public market they ever visit.
+         *
+         * Empty by default, which is the default of step 4 — a client of a dedicated
+         * market keeps a snapshot. A rotating host is not affected and is not listed
+         * here; there the history is how hosting rotates at all.
+         */
+        java.util.List<String> archiveMarkets = new java.util.ArrayList<>();
     }
 
     private final Path file;
@@ -68,6 +82,33 @@ public class Settings {
     public boolean notifyChat() { return record.notifyChat; }
     public boolean notifyActionBar() { return record.notifyActionBar; }
     public int notifyMaxPerMinute() { return record.notifyMaxPerMinute; }
+
+    /**
+     * Whether to keep the full history of this market when a dedicated server serves it.
+     *
+     * A null market id answers true: not knowing which market this is, is not a reason
+     * to throw a history away. Everything that decides to stop persisting has to get a
+     * definite no out of this, never a shrug.
+     */
+    public boolean archives(java.util.UUID marketId) {
+        if (marketId == null) return true;
+        return record.archiveMarkets != null
+                && record.archiveMarkets.contains(marketId.toString());
+    }
+
+    public void setArchives(java.util.UUID marketId, boolean on) {
+        if (marketId == null) return;
+        if (record.archiveMarkets == null) {
+            record.archiveMarkets = new java.util.ArrayList<>();
+        }
+        String id = marketId.toString();
+        if (on) {
+            if (!record.archiveMarkets.contains(id)) record.archiveMarkets.add(id);
+        } else {
+            record.archiveMarkets.remove(id);
+        }
+        save();
+    }
 
     public void setHostPort(int port) {
         if (port < 1024 || port > 65535 || port == record.hostPort) return;
