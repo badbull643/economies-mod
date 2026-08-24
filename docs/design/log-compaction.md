@@ -392,15 +392,45 @@ only for a host's self-connect. Two cautions, both still live:
   snapshot and verified head hash, so divergence stays detectable, but this deserves the
   same audit B got rather than a shrug.
 
-**5. First-join onboarding at scale.** The open question in B. Nothing above solves it, and
-at a hundred players it is the largest cost in the system.
+**~~5. First-join onboarding at scale.~~ Closed 2026-08-24 — it was two engineering
+faults, not a trust question.**
+
+This was written as the largest cost in the system and as B's open question. It was
+neither. Asking *how much does this actually matter for a large market* turned up the
+answer, and the answer was in the code rather than in the trust model.
+
+**Both ends built the whole market in memory to move it.** The host read the entire log
+into a `List<String>` before sending a byte — measured at 63.6 MB held for a 57.7 MB log,
+550 ms before anything went out, and most of a gigabyte per arriving player on a year of a
+full server. The client did the same in reverse, gathering every frame before applying
+any, in a Minecraft heap with the game already in it. A large first join did not fail
+because of what it cost to verify; it failed because neither side could hold it. Both
+stream now, bounded by the chunk budget, so a 500 MB history costs what a 57 MB one does.
+
+**What is left is a download**, once, of a history the joiner will then discard on a
+dedicated market — a few minutes, and no worse than a resource pack. An interrupted one
+resumes from where it stopped rather than starting again, which is what the client's
+change bought in exchange for giving up all-or-nothing.
+
+**So B stays refused, everywhere, and this is closed rather than open.** Not because the
+trade was weighed and rejected a second time, but because the pressure that would have
+forced it was two materialisation bugs. Closed on the same reasoning the Dropped section
+gives for sub-unit prices: leaving it open means re-arguing it every time somebody reads
+this file, and there is nothing left here to argue from.
+
+If a real market ever does press against the download — a genuinely large history, on a
+connection where minutes matter — that is a new observation and this can be argued again
+from it. Two things to look at first, before the trust model: the wire is uncompressed
+(2.2× available, measured, and no format change), and two-thirds of every line is
+signature and hash.
 
 ---
 
 ## Refused, deferred, and open
 
 - **Built:** steps 1, 2 and 3, on 2026-08-23.
-- **Refused:** C, in this architecture. D. B **for rotating mode**.
+- **Refused:** C, in this architecture. D. B, now everywhere rather than only for rotating
+  mode — see step 5.
 - **Deferred:** nothing. Everything not refused is in the plan.
 - ~~**Known and left alone:** `MarketClient`.~~ **Done 2026-08-23.** It goes through
   `EventApplier.load` like the other two, so the one load path that runs every session
@@ -410,9 +440,11 @@ at a hundred players it is the largest cost in the system.
 - **Also known:** a snapshot is written on load and not while a session runs, so a long
   sitting still replays its whole tail next time. `STRIDE` bounds that at 5,000 events,
   which is under a tenth of a second.
-- **Open, and genuinely undecided:** B for a dedicated server — what a brand-new player
-  does in front of a large market they cannot afford to verify. Also whether the log's
-  storage format is worth revisiting, given that two-thirds of it is signature and hash.
+- **Open:** nothing in this note. B for a dedicated server was the last of it, and closed
+  2026-08-24 once the pressure behind it turned out to be two materialisation faults
+  rather than the cost of verifying. Whether the log's storage format is worth revisiting
+  — two-thirds of it is signature and hash — is the thing to look at first if a real
+  market ever does press against the download.
 
 ---
 

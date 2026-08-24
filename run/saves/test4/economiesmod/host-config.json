@@ -1,0 +1,21 @@
+{
+  "maxConnections": 64,
+  "outboundQueueDepth": 256,
+  "maxDepositUnitsPerWindow": 0,
+  "depositWindowMinutes": 60,
+  "requireAttestation": false,
+  "refuseCreativeWorlds": false,
+  "refuseCheatWorlds": false,
+  "maxDepositUnitsPerPlayHour": 0,
+  "maxDepositMultipleOfHandled": 0,
+  "maxMigratedCredits": 0,
+  "admission": "open",
+  "allow": [],
+  "deny": [],
+  "banOnWorldChange": false,
+  "welcomeGrant": 100,
+  "listingFee": 0,
+  "stipendAmount": 0,
+  "acceptsMigration": true,
+  "maxWelcomeGrant": 500
+}

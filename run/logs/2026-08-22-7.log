@@ -1,0 +1,16 @@
+[00:00:27] [Server thread/INFO] (Minecraft) Saving and pausing game...
+[00:00:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[test4]'/minecraft:overworld
+[00:00:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[test4]'/minecraft:the_nether
+[00:00:27] [Server thread/INFO] (Minecraft) Saving chunks for level 'ServerLevel[test4]'/minecraft:the_end
+[00:00:45] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting under the rules in D:\EconomiesMod\EconomiesMod\run\saves\test4\economiesmod\host-config.json
+[00:00:45] [market-host-start/INFO] (Minecraft) [STDOUT]: [host] serving 'newQ' (20a5d9ac-6341-4ee2-8893-189229900d58) — replayed 123 events
+[00:00:45] [market-host-start/INFO] (Minecraft) [STDERR]: [host] welcome grant mismatch: this market grants 1000, and welcomeGrant is set to 100 — the configured figure is not used here. The amount is the market's, recorded when it was created, so every host of it hands out the same one; this setting only chooses whether this server issues grants at all, and only sets the amount for a market it creates itself. Newcomers will receive 1000. To hand out 100, create a market with that figure (delete server-market.jsonl first — that discards this market's history).
+[00:00:45] [market-host/INFO] (Minecraft) [STDOUT]: [host] listening on port 25556
+[00:00:45] [market-host-start/INFO] (Minecraft) [STDOUT]: [client] hello: lastSeq=123 appliedSeq=123 persist=false
+[00:00:45] [market-client/INFO] (Minecraft) [STDOUT]: [host] connection from /127.0.0.1:56654
+[00:00:45] [market-client/INFO] (Minecraft) [STDOUT]: [host] Alice reports 0.2h in a survival world (f938c5d8f57212fc)
+[00:00:45] [market-client/INFO] (Minecraft) [STDOUT]: [keys] registered new identity 10920508-d5d8-3eed-93d2-92f193afe7d7
+[00:00:45] [market-client/INFO] (Minecraft) [STDOUT]: [host] synced 0 events to /127.0.0.1:56654
+[00:00:45] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] connected to localhost:25556 at seq 123
+[00:00:45] [market-host-start/INFO] (Minecraft) [STDOUT]: [economiesmod] hosting on port 25556
+[00:00:45] [market-client/INFO] (Minecraft) [STDOUT]: [host] /127.0.0.1:56654 synced and live (1 connected)
