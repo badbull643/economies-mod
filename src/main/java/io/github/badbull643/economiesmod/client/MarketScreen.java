@@ -1375,30 +1375,18 @@ public class MarketScreen extends Screen {
     /**
      * The vanilla tooltip frame — near-black fill, violet gradient edge.
      *
-     * Minecraft has one panel look and this is it, so anything the mod draws itself
-     * uses it rather than inventing a flat modern box that sits oddly beside the
-     * vanilla buttons right next to it.
+     * Moved to {@link Panels} when the inventory listings panel needed the same look. The
+     * colours are still used directly by the tab bar below, which draws its own shape out
+     * of them rather than a box, so they are imported rather than re-declared: two
+     * definitions of this violet is how the tabs and the panel they sit on start
+     * disagreeing after somebody adjusts one.
      */
-    /** The tooltip frame's own colours, shared with the tab bar so the two agree. */
-    private static final int PANEL_BG = 0xF0100010;
-    private static final int PANEL_EDGE_TOP = 0x505000FF;
-    private static final int PANEL_EDGE_BOTTOM = 0x5028007F;
+    private static final int PANEL_BG = Panels.PANEL_BG;
+    private static final int PANEL_EDGE_TOP = Panels.PANEL_EDGE_TOP;
+    private static final int PANEL_EDGE_BOTTOM = Panels.PANEL_EDGE_BOTTOM;
 
     private void vanillaPanel(MatrixStack m, int x, int y, int w, int h) {
-        final int bg = PANEL_BG;
-        final int edgeTop = PANEL_EDGE_TOP;
-        final int edgeBottom = PANEL_EDGE_BOTTOM;
-
-        fill(m, x - 3, y - 4, x + w + 3, y - 3, bg);
-        fill(m, x - 3, y + h + 3, x + w + 3, y + h + 4, bg);
-        fill(m, x - 3, y - 3, x + w + 3, y + h + 3, bg);
-        fill(m, x - 4, y - 3, x - 3, y + h + 3, bg);
-        fill(m, x + w + 3, y - 3, x + w + 4, y + h + 3, bg);
-
-        fillGradient(m, x - 3, y - 2, x - 2, y + h + 2, edgeTop, edgeBottom);
-        fillGradient(m, x + w + 2, y - 2, x + w + 3, y + h + 2, edgeTop, edgeBottom);
-        fillGradient(m, x - 3, y - 3, x + w + 3, y - 2, edgeTop, edgeTop);
-        fillGradient(m, x - 3, y + h + 2, x + w + 3, y + h + 3, edgeBottom, edgeBottom);
+        Panels.vanillaPanel(m, x, y, w, h);
     }
 
     /** A titled empty box. The border makes the layout legible before the content exists. */
