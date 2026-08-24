@@ -194,6 +194,9 @@ public class MarketClient {
     public MarketState state() { return state; }
     public boolean isConnected() { return connected; }
 
+    /** Whether this client is writing what it receives to its own log. */
+    public boolean keepsHistory() { return persist; }
+
     /**
      * Whether the host we synced from calls itself a dedicated server.
      *
