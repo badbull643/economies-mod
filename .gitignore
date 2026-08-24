@@ -1,0 +1,19 @@
+# Identity keys, and nothing else.
+#
+# This project deliberately tracks build/ and run/ — that decision was made on
+# purpose and reaffirmed, and this file is not a reversal of it. It is the one
+# exception that decision never considered: these files are unencrypted PKCS#8
+# private keys, and this repository is public.
+#
+# Three of them were published — the dedicated server's identity and the Alice
+# and Bob dev identities — from `b1f35e7` until 2026-08-24. The server key was
+# rotated, because it had signed nothing that survives: its market was deleted
+# and the next start generates a new one. The two dev identities were not, and
+# that is a decision rather than an oversight: they unlock nothing but make-
+# believe markets in run/saves, and rotating them would make this machine a
+# stranger to its own test worlds, since a second key for a registered user is
+# refused by design.
+#
+# A private key in git history cannot be recalled. Rotating is what makes a
+# published one worthless; this file is what stops the next one being published.
+*.key

@@ -15,8 +15,14 @@ nothing else about it, this section is enough to start work from.*
 
 **The build is green, the tree is clean, and nothing is half-finished.** There is no
 in-progress edit to pick up. The roadmap finished some time ago; everything since has been
-inspection, play-testing, and the defects both turned up — twenty-seven of them, in §0 —
-and then log compaction, which is backlog item 2 and is three-fifths built.
+inspection, play-testing, and the defects both turned up — twenty-seven in §0, eleven more
+in §10 — plus backlog items 2 and 8, both now built.
+
+**Feature work is essentially done.** What remains in the backlog is one refactor (item 5,
+`MarketScreen`) and one small visibility gap that waits on it (item 6). Nothing missing
+stops the mod being used. The real remaining gap is evidence, not code: no market has ever
+been played long enough to get big, so the stipend interval, the fee levels and the price
+behaviour are all still guesses — see §8.
 
 ### Check it still holds
 
@@ -25,13 +31,15 @@ and then log compaction, which is backlog item 2 and is three-fifths built.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `646 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
+Expect `735 / 15 / 5 / 16 / 51 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
 since 2026-08-23, so a failure here that passes there — or the reverse — is about the
 machine rather than the code, and is worth chasing as such.
 
-*`coreTests` was 572 before 2026-08-23; L7–L12 are the compaction work. Nothing in CI
-launches Minecraft and nothing in CI measures speed, so the numbers in
+*`coreTests` was 572 four days before this line; L7–L18 are items 2 and 8, and X3c is §11.
+Nothing in CI launches Minecraft and nothing in CI measures speed, so the numbers in
 `docs/design/log-compaction.md` are the one claim here that will rot without warning.*
+**They rotted, and it took four days** — §11 has the measurement and the correction is in
+the note itself.
 
 **Where the code is.** Branch `trust-model-and-migration`. Don't trust a number written in
 this header — the count has been wrong here twice. Ask git:
@@ -52,50 +60,47 @@ There is one other branch worth knowing about: `claude/practical-diffie-e9fbf4` 
 
 ### What to read, in order
 
-1. **§4 below** — one paragraph, and it predicted most of three sessions' worth of bugs.
+1. **§4 below** — one paragraph, and it predicted most of four sessions' worth of bugs.
    If you read nothing else, read that.
-2. **§0** — twenty-seven defects found behind 437 passing checks, by reading and then by
+2. **§10's "What actually went wrong"** — eleven defects that turned out to be one
+   mistake, and the mechanical step that would have caught them. Shorter than §0 and the
+   more useful of the two if you are about to change something load-bearing.
+3. **§0** — twenty-seven defects found behind 437 passing checks, by reading and then by
    playing. Long, and it is the current state of the code rather than history.
-3. **`docs/BACKLOG.md`** — everything deliberately not built, in the order worth doing,
+4. **`docs/BACKLOG.md`** — everything deliberately not built, in the order worth doing,
    each saying what it costs to keep not doing it. **This is where the next work is.**
-4. **`docs/testing/group-e.md`** — the live checklist, and the only thing standing between
+5. **`docs/testing/group-e.md`** — the live checklist, and the only thing standing between
    a green CI tick and a claim that this works. Nothing in CI launches Minecraft.
 
 ### What to do next
 
-**Backlog item 2's steps 1–3 are done (2026-08-23); step 4 is next.** Read
-`docs/design/log-compaction.md`, which was rewritten that day against measurements and
-disagrees with what everything older says about this. A 100,000-event load went **4208 ms
-→ 190 ms**, and the old code could not open that market in a 128 MB heap at all.
+**Items 2 and 8 are done. Item 5 is the next work, and it is a refactor rather than a
+feature.** `MarketScreen`, now **4,718 lines** — it grew during the sessions that were
+meant to be reducing the reasons it is a problem. The evidence is much stronger than the
+line count ever was: four separate lists in that file stacked content downwards with no
+scroll and lost the far end, and **every one was found by a person looking at a screen
+rather than by a test**. Split by component, never by layer — a layer split makes §4's
+defect structural. Item 6 says to read item 5 first, so those two go in order.
 
-Three things worth carrying forward from it. A load was 45% `String.format("%02x")` and
-44% parsing the file four separate times, and **1% rebuilding `MarketState` — which was
-the only thing the snapshot this note recommended would have removed**; the measurement
-changed what got built. *25,000 events is not a large-server number, it is a
-market-that-lasted-a-season number*, which is why this jumped item 5. And a snapshot is
-kept honest by a **shape fingerprint** reflected off `MarketState`, so adding a field
-discards every old snapshot without anybody remembering to — because the serialiser going
-stale is the only failure here that produces a wrong balance.
+**Before writing any code, two things are worth more than the head start.**
 
-**Step 4** is snapshot-only clients on dedicated markets, and it is a design question
-before it is code: `MarketClient` still replays its whole local log on every connect, and
-whether a client of a dedicated server should hold that log at all is the open part.
+*Nothing from either session has been played except in pieces.* Item 8 in particular has
+never run in Minecraft at all: `/trade hostrules publish` on a real market, then hosting
+that market from a second world, is fifteen minutes and is the only thing that would
+establish it works. Five play sessions across items 2 and 4 found eleven defects that
+seven hundred checks did not.
 
-**Item 5, splitting `MarketScreen`, is next after it.** 4,293 lines, and the evidence is
-much stronger than the line count ever was: four separate lists in that file stacked
-content downwards with no scroll and lost the far end of it, and **every one was found by
-a person looking at a screen rather than by a test**. Split by component, never by layer —
-a layer split makes §4's defect structural. Item 6 says to read item 5 first, so those two
-go in order.
+*And read §10 before changing anything load-bearing.* The mechanical step it names —
+**grep every reader of an invariant before changing it** — is what would have prevented
+most of those eleven, and `MarketScreen` is exactly the kind of change where it applies:
+every one of the four geometry defects was a reader of a layout assumption that moved.
 
-The other open item is **8** (host rules a group can agree once, as defaults rather than
-enforcement).
-
-**And one open decision came out of item 2 that is larger than item 2.** Option B — a host
-handing out state — is refused for rotating mode and was never priced for a dedicated
-server, where a new joiner must otherwise download and verify ~511 MB of a year-old
-hundred-player market before playing. Nothing older in this file treats that as open. It
-is.
+**The decision that looked open and was not.** Step 5 of the compaction note — what a
+brand-new player does in front of a market too large to verify — is **closed**, and the
+reason is worth carrying: it was never a trust question. Both ends built the whole market
+in memory to move it, so a large first join failed on memory long before verification
+mattered. Both stream now. If a real market ever presses against the download that is a
+new observation to argue from, but nothing forces it today.
 
 ### What is waiting on a person, not on code
 
@@ -107,6 +112,32 @@ is.
 - **The first CI run has never executed anywhere.** If it goes red on `Assemble` rather
   than on the suites, that is the toolchain and not the code — the steps are split so the
   two can be told apart.
+- **Item 8 has never run in Minecraft.** `/trade hostrules publish`, then host the same
+  market from a second world and check the rules were taken up. Everything about it is
+  covered by `coreTests` L17/L18 and `admissionTest` A10, and none of that is a person
+  looking at the thing.
+- **Item 2's live half is done** — five sessions, and the last of them confirmed the Host
+  button greyed on a slot holding a snapshot and no history, which is the check the whole
+  of step 4 rests on.
+
+### Housekeeping nobody has done
+
+- ~~**Eighteen commits are unpushed**~~ — three, as of 2026-08-24, on a branch now well
+  past sixty without a PR. The push happened; the PR still has not. The paragraph above
+  about merging becoming a leap rather than a step has only got truer. *Do not trust this
+  line either: `git rev-list --left-right --count origin/<branch>...HEAD` is the only
+  version of it that cannot be stale.*
+- **`run/saves/test5/economiesmod/market.jsonl.snapshot.json` carries `"logless": true`**,
+  written by a self-connect before that was fixed. Harmless while its log is intact; if
+  that log were ever deleted it would hand the market back instead of resetting it.
+  Deleting the snapshot costs one slow load.
+- ~~**`smoke-market.jsonl`** sits untracked in the repository root, left by a play
+  session.~~ It is tracked now, which is worse rather than better: it was committed
+  rather than decided about, the same way the two predecessor logs below were.
+- **`docs/EconomiesMod-PROJECT-LOG.md` and `docs/EconomiesMod-SESSION-LOG-2026-08-16b.md`**
+  were committed by a careless `git add -A` in `1c94e59` rather than by a decision. They
+  look like genuine predecessors of this file; nobody has said whether they should be
+  tracked.
 
 ### Three decisions nobody has made
 
@@ -114,9 +145,9 @@ is.
   config and the log would stop describing different economies, and the restart that
   recreates it is the *only* moment this can be chosen. Without it the box is its own
   creator and that market's policy is frozen for good. §9, and §7 for why.
-- **`server-identity.key` is tracked, unencrypted**, along with all of `run/`, because
-  `.gitignore` was removed on purpose. Raised and reaffirmed before — but this branch is
-  now pushed to GitHub. **If that repository is public, so is the key.**
+- ~~**`server-identity.key` is tracked, unencrypted.** If that repository is public, so is
+  the key.~~ **It was public. Answered 2026-08-24** — and it was three keys, not one. See
+  §12.
 - **Whether to port anything from `MigrationCapTest`.** `depositCapTest` is six checks and
   `admissionTest` twenty-five, and between them they never read a `MigrateBalance`.
 
@@ -957,7 +988,13 @@ grant finally has a control — see §7.
   finished, so nothing else says "this is known about and not done" — and without such a
   file an unbuilt thing cannot be told apart from an overlooked one. §0.10 was exactly
   that failure in miniature: a feature nobody had noticed was switched off.
-- ~~**Log compaction unbuilt**, deliberately.~~ **Built 2026-08-23**, except for the part
+- ~~**Log compaction unbuilt**, deliberately.~~ **Built, 2026-08-23 to 24.** Steps 1 to 4
+  of the design note: streaming reads, one-pass loads, MarketSnapshot, and snapshot-only
+  clients on dedicated markets. Step 5 is a trust decision recommended for closing as
+  refused — see §10 and "What to do next". The old text below is kept because its
+  reasoning is still how the decision was reached.
+
+  - ~~**Log compaction unbuilt**, deliberately.~~ **Built 2026-08-23**, except for the part
   that is a trust decision. `docs/design/log-compaction.md` was rewritten against
   measurements first, and the old recommendation here ("build option A only") survived
   only in corrected form: rebuilding `MarketState` is 1% of a load, so the snapshot saves
@@ -996,6 +1033,13 @@ grant finally has a control — see §7.
   consistency rather than security. What is worth building is making them **agreeable
   once** — published as defaults each host adopts, never as replicated enforcement. That
   is backlog item 8, and this bullet is a decision now rather than an oversight.
+
+  **Built 2026-08-24.** `Event.HostDefaults`, published by the creator and read by nothing
+  in `EventApplier.validate`; `ServerConfig.adopt` fills in only what a host has not set
+  for itself; `HostServer`'s constructor is the single place that asks.
+  `/trade hostrules` reads it, `/trade hostrules publish` writes it. The gap this bullet
+  described — a group's economy being only as protected as its most permissive host — is
+  closed for anyone who publishes, and unchanged for anyone who does not.
 - **The play-hour rule is kept but off**, with the reasoning on the config field. It
   weighs a rolling window against a lifetime, and is a rate limit applied to a stock.
 
@@ -1028,7 +1072,9 @@ is worth a session" is in `docs/BACKLOG.md` instead, and is not repeated here �
 of the same items is §4 again, in prose.*
 
 - Whether the stipend's interval of 50 is right. It is a guess, and nothing has watched a
-  real session. Fills only accrue while somebody is hosting and connected — there is no
+  real session. **Still true, and now the largest open thing in the project** — feature
+  work is essentially finished and the evidence is not. Fills only accrue while somebody
+  is hosting and connected, so a small group produces them slowly. Fills only accrue while somebody is hosting and connected — there is no
   offline trading — so a small group produces them slowly.
 - ~~Whether the welcome-grant ceiling should come down.~~ **Decided and done,
   2026-08-22** — 10,000 for somebody hosting from their game, the compiled 1,000,000 kept
@@ -1040,6 +1086,9 @@ of the same items is §4 again, in prose.*
   this treated the symptom; and no real market has been seen pressing against the price
   floor. See the Dropped section there for the one constraint worth keeping.
 - Whether `MarketScreen` gets split — backlog item 5.
+- ~~Whether host rules can be agreed once without travelling.~~ **Built 2026-08-24**, as
+  backlog item 8 describes: published by the creator, adopted by a host for anything it
+  has not set itself, enforced by nothing. `/trade hostrules`.
 - ~~Whether host rules should travel with the market.~~ **Decided 2026-08-23: no.** They
   cannot — a time-windowed cap would judge a client-set timestamp, the world checks weigh
   evidence no replica receives, and a deployment-dependent default forks the market when
@@ -1092,8 +1141,351 @@ out to be is worth more than the fact that it is gone.*
   `--creator-key` with a player's key, and that player's uuid in `creatorUserId`, leaves
   the policy changeable from the Market screen afterwards.
 
-- **`server-identity.key` is tracked, unencrypted**, along with the rest of `run/`, because
-  `.gitignore` was removed on purpose. Raised before and reaffirmed, so this is not a new
-  objection — but CI now exists and this branch is pushed to GitHub, so the question is no
-  longer theoretical. If that repository is public, so is the key. Worth answering
-  deliberately rather than by default.
+- ~~**`server-identity.key` is tracked, unencrypted**, along with the rest of `run/`,
+  because `.gitignore` was removed on purpose. Raised before and reaffirmed, so this is
+  not a new objection — but CI now exists and this branch is pushed to GitHub, so the
+  question is no longer theoretical. If that repository is public, so is the key. Worth
+  answering deliberately rather than by default.~~ **Answered 2026-08-24, and the answer
+  was yes — see §12.** The entry is left because of how it aged: it was written as a
+  conditional twice, by somebody who could have spent thirty seconds establishing which
+  branch of the condition was true. **A question you can answer is not an open question.**
+
+---
+
+## 10. The compaction session, and one root cause wearing eleven faces
+
+*2026-08-23 to 2026-08-24. Backlog items 2 and 8 built; eighteen commits. Read §4 first,
+then this. The single most useful paragraph is "What actually went wrong" below, and it is
+the answer to a question asked partway through — **why do these regressions keep coming
+back?** — which turned out to be a better question than anything else asked that day.*
+
+### What got built
+
+**Item 2, log compaction.** The design note recommended a snapshot on an unmeasured cost
+model. Measuring it changed what got built, and the note was rewritten before any code
+moved. A world load parsed the file **four** times — the `EventLog` constructor finding
+its last entry, `verifyChain`, `damageReason` verifying again, and the replay — and the
+profile was 45% `String.format("%02x")`, 44% that repeated parsing, and **1% rebuilding
+`MarketState`, which is the only part a snapshot removes.**
+
+So the cheap half came first: one hash function instead of two byte-identical copies with
+a hex lookup table, `EventLog.forEach` walking one entry at a time, and
+`EventApplier.verifyAndReplay` doing in one pass what took four. Then `MarketSnapshot`.
+A 100,000-event load, end to end:
+
+```
+  before                4208 ms
+  after the cheap fixes 1135 ms
+  with a snapshot        190 ms      — 22x
+```
+
+The old code cannot open that market in a 128 MB heap at all; the new one opens it in 64.
+
+**Item 8, host rules a group agrees once.** `Event.HostDefaults`, published by the creator,
+recorded in the log, read by **nothing** in `EventApplier.validate`. A host adopts what it
+has not set for itself. `/trade hostrules publish`.
+
+### What actually went wrong, and it is one thing
+
+Eleven defects came out of five play sessions. Seven were mine, two pre-existed, and two
+were latent code that only became wrong because of a change of mine. That is not bad luck,
+and they are not eleven mistakes.
+
+**I changed a load-bearing invariant — "the log is the complete record of this replica" —
+and then went looking for problems in the new code instead of in everything that depended
+on the old assumption.** Every one of these is that same mistake seen from a different
+angle:
+
+| What broke | What it read from the log |
+| --- | --- |
+| Market unnameable in the switcher | the name, from genesis |
+| Client locked out from its second session | the market id, in `Hello` |
+| Turning archiving on built a fragment | `appendRaw`'s gap check against a primed head |
+| Deleting a log stopped resetting a market | "no log ⇒ no market" |
+| A self-connect wrote a logless snapshot | `persist == false` meaning one thing |
+| **The Host gate always said yes** | `lastSeq()`, primed from state |
+
+That last one is the sharpest: `EventApplier.load` primes `lastSeq()` from the snapshot, so
+a nought-byte log answers **9**. The gate written specifically to stop a historyless
+replica hosting asked exactly that, and said yes to the only case it existed for. Measured
+on a real slot before it was fixed.
+
+**Why the project's own discipline did not catch it.** "Verify it fails with the fix
+disabled" proves a test *can* fail. It says nothing about behaviour nobody wrote a test
+for, and every one of these lived in a path that had none. The discipline is orthogonal to
+this failure mode. What would have caught them is mechanical and was skipped: **before
+changing an invariant, grep every reader of it and ask what each does under the new case.**
+Running that search afterwards found the live Host-gate bug in about thirty seconds.
+
+### The other pattern, which cost more time than the defects
+
+**Three of the eleven were things that worked and could not be seen working.** The snapshot
+load printed an identical line either way; `MIN_EVENTS` silently decided nothing because
+the first write was tested against `STRIDE`; and `/trade archive on` said "the history is
+not here yet" after the history had arrived. Each one made a live test read as a failure
+when the feature was fine.
+
+§0.22 recorded the general form — *a guard that makes failure safe also makes it silent*.
+This is its mirror: **a mechanism invisible when it works cannot be watched working**, and
+a feature whose failure is silent needs its success to be loud or nobody can tell the two
+apart from outside.
+
+### Things that earned their keep
+
+**The shape fingerprint.** `MarketSnapshot` reflects over `MarketState`'s declared fields
+and refuses a snapshot written against a different shape. Item 8 added one field and moved
+it from `6400af1f2bdcd673` to `c7efb9da38c778ba` on its own, discarding every older
+snapshot with nobody thinking about it. What it cannot catch is a serialiser written
+incomplete *today* — and that happened immediately: `MarketSnapshot` did not know the new
+field, and the round-trip test passed anyway because its fixture published no rules. The
+fixture publishes them now.
+
+**Live testing, again.** Five sessions, eleven defects, none of which 700-odd checks found.
+Every one lived in the seam between a component and a person using it. §3's lesson holds
+and has now been paid for twice.
+
+### Two mistakes in tests worth copying the fix for
+
+A check that asserted the opposite of its own label, and passed. And an "ordinary case"
+check whose client never set the guard being tested, so removing the guard left it green.
+Both were caught by trialling — and both are the same shape as §0.18's null-field check
+and substring ceiling. **A check that cannot fail is worse than no check, because it is
+counted.**
+
+And one in this session's own feature work: the first draft of the item 8 tests asked
+`apply` whether events were refused, so three refusals passed that were never refused. The
+rules live in `validate`. That is §0.2's distinction, made while writing tests *for* rules
+that had just been put in `validate`.
+
+---
+
+## 11. The two walks behind a button, and a number that had already rotted
+
+*2026-08-24. One loose end, flagged by the author and never closed: `BranchDiff` still
+walked the log four times per reset dialog, two of them materialising it, on the client
+thread. Small, and it only bites on a large market. What it turned up on the way is worth
+more than the fix.*
+
+### What was wrong, and it is item 2's own problem statement
+
+`docs/design/log-compaction.md` opens by naming **five** call sites that walk the whole
+log. The plan fixed three. The other two were `BranchDiff`, and they were missed for a
+reason worth naming: **they are behind a button rather than on a load path**, so every
+measurement taken that session — all of which timed a world opening — was blind to them.
+The note listed them and then stopped thinking about them in the same breath.
+
+Four walks per `resetCost()`, and eight across a confirmed reset, because `resetLog()`
+deliberately calls it a second time so the confirmation and the action are one
+computation. That second call is right and stays.
+
+The sharpest detail is that two of the four *looked* partial and were not. Each did
+`readFrom(0)` and then broke out of the loop at the split point — but `readFrom`
+materialises the entire log into an `ArrayList` before the caller sees its first event, so
+the break skipped iteration over a list that had already been built. A walk that stops
+early and a walk that reads everything and then stops looking are the same code shape and
+opposite costs.
+
+### The fix
+
+`EventApplier.inspect` — `load` without the two things a load path does and a question
+must not: priming the log's head from the state it built, and writing a snapshot. Both
+would be wrong here, and the first is exactly the primed-`lastSeq` shape that let a
+historyless replica offer to host (§10). The two prefix walks stream now: one stops at the
+split, the other steps over everything below it as lines.
+
+```
+  before        2500 ms      and OutOfMemoryError in a 64 MB heap
+  after         1800 ms      1937 ms in a 64 MB heap
+```
+
+The heap column is the real result. The old code could not open a 100,000-event market's
+reset dialog in 64 MB at all, and "slower" and "fails hard" are not the same complaint.
+
+### The guard, which is the part that is not about speed
+
+Taking the head from a snapshot and the prefix from the log is **two sources of truth
+where there was one** — §4, in a change made to fix something else. A snapshot stays valid
+in two cases where the log is not the whole story: a replica keeping no history at all,
+and a damaged line *below* the snapshot point, which the hash check never looks at. In
+either case "resting now" knows about events "resting at the split" never saw, and every
+order in between is offered back for re-placing while the host still holds it. That is the
+duplicate `BranchDiff` exists to prevent, produced by a performance change.
+
+`logCoversHead` is false in both cases and both methods refuse to answer when it is. Which
+means `BranchDiff` now depends on that field being settled by **a walk that stops where
+the parsing does, rather than by a count of lines** — a property of how it is computed and
+not of what it is called. That is written into `BranchDiff` where anyone making it cheaper
+would have to read it, which is §10's mechanical step applied forwards for once rather
+than after the fact.
+
+*The measurements above are from before the second half of this session. With
+`logCoversHead` no longer costing a pass over the file, one `resetCost()` on the same
+market is **930 ms** with a snapshot beside it and 1655 ms without.*
+
+### The number that had already rotted
+
+Measuring the fix meant measuring `EventApplier.load`, and the headline figure of the
+whole compaction session is **wrong by 4×**:
+
+```
+  100,000 events, no snapshot      1178 ms       (the note says 1135 — still right)
+  100,000 events, with a snapshot  740-900 ms    (the note says 190)
+```
+
+One line explains it. `replayTail` asks `log.headSeqOnDisk()` to settle `logCoversHead`,
+and that is `forEach(0, …)` — a parse of every line in the file, which is exactly what a
+snapshot exists to skip. It arrived in `07a8b68`, the fix for the Host gate, *after* the
+numbers were taken. Nobody was careless: the question it answers is real, and nothing in
+the change said it cost a full pass.
+
+The note's own last section predicted this — *"nothing in CI will notice if these numbers
+rot"* — and the Start-here section repeated it four days ago as the one claim in this
+project that would rot without warning. It took four days. **A measurement with no test
+behind it is a claim with a date on it**, and the date is when it was taken rather than
+when it stops being true.
+
+### What `logCoversHead` costs, decided and built
+
+*This section was an open decision for about an hour. Reading the four call sites closed
+it, and the answer was not any of the three options the question was framed around.*
+
+**It costs nothing now, and is asked of the snapshot rather than of the file.** A snapshot
+accepted against the log's own hash has a log under it by definition; only the logless
+kind does not, and `MarketSnapshot.Restored` carries which it is. `load` on a
+100,000-event market is **174–221 ms** with a snapshot again, against 740–900 before and
+1196 with no snapshot. The design note's 190 ms is a true statement once more.
+
+**The framing was wrong, and this is the part worth carrying.** I described the choice as
+trading strictness for speed: the full pass answered *can this replica read its own
+history*, and cheap versions answer *does the file have enough lines*. Both true, and it
+does not follow that the field was strict — `walkLog` reports `covered = true` for a
+damaged log as well, because a walk that stops at a bad line reports the state it built
+and covers it trivially. **Only one of the two paths was strict, by accident, and the
+whole codebase paid for it on every load.** Reading what the field is *for* — its own
+javadoc, and the refusal message it produces — settles it in a way that arguing about the
+trade-off could not: it exists so a snapshot-only replica cannot offer to host a history
+it does not have. That is one question, and it is free.
+
+The accident was not even a good one. When it fired, the Host button greyed with *"turn on
+archiving for this market and reconnect once to fetch it"* — advice for somebody who chose
+to keep no history, given to somebody whose file is corrupt.
+
+**The readability question is real, and moved to the two places that need it.**
+`BranchDiff` asks it of the walk it was already doing, which is free and — unlike the
+version folded into `logCoversHead` — a check that can actually fail. `startHosting` asks
+it once, at the click, because hosting is when a broken chain gets handed to somebody who
+will verify it. That check costs a pass over the file and could not live on the button:
+`hostButton.active` is set from a render path, and a parse per frame is not a trade
+anybody would make. So the button can be live and the click refuse, which this file
+usually treats as a defect — argued rather than assumed, in the comment there, on the
+grounds that the case is rare and the message says exactly what is wrong.
+
+**What it gives up**, stated so nobody has to find it: a damaged prefix under a valid
+snapshot is no longer noticed at world load. It was only ever noticed as a greyed button
+with the wrong explanation; the state on screen is right either way, since the snapshot is
+bound to the chain hash at its own sequence number; and the moment it can do harm is the
+moment it is now checked. `coreTests` pins that deliberately — *"and the load calls that
+covered, because it is"* — so if the strict meaning ever creeps back, a check goes red
+rather than a load quietly getting slower.
+
+### The live check, which found two defects the gate did not have
+
+*`E24` in `docs/testing/group-e.md`, run 2026-08-24.* The refusal fired first time and the
+reason was exactly right — in the console. **On screen there was nothing**, and both
+reasons for that were older and larger than the thing being tested.
+
+**The reason was thrown away one statement after it was written.** `startHosting` reports
+refusals through `onRejected`, which writes the screen's status field; the thread that
+called it then set that same field to `"Failed to start host"` unconditionally. So every
+refusal that path can produce reached the player as a generic failure — **including the
+snapshot-without-history one, which means the Host gate from the compaction session has
+never once shown its explanation in game.** It was verified by the button greying, which
+is a different thing from clicking through to the refusal.
+
+`onConnect`, forty lines above it in the same file, already said this in a comment: *"Only
+report success here. Failures already went through onRejected with the actual reason and
+what to do about it."* Two threads doing one job, one corrected and one not. §4's shape,
+and the correction went where the bug was seen rather than everywhere it lived.
+
+**Both refusal messages were too long to be read.** The footer draws one trimmed line,
+about 50–70 characters depending on GUI scale; both messages ran past 150 and were cut off
+mid-sentence, losing the half that says what to do. Short form on screen, reasoning to the
+console. One of the two was mine, written the same day, in a codebase whose §0 records *a
+warning running off the panel edge* as a defect found by looking at a screen.
+
+**And the run itself went wrong in a way worth copying.** The first attempt was made
+against the control by mistake — the world had been swapped back to the undamaged log —
+and hosting succeeded, which read as the check failing. Nothing in the game distinguishes
+the two: same market, same screen, same everything. The console line `restored a snapshot
+at event N` and the state of line 2 are the only difference, and `E24` now makes confirming
+that a step of its own. **A check whose setup is invisible from inside the thing being
+checked needs a way to prove which case it is in.**
+
+### Three trials, and what the third one caught
+
+Every guard here was tried with itself removed, and one of the three did not fail.
+
+The `logCoversHead` guard in `ordersOnlyAfter` passed with the guard torn out, because the
+prefix guard catches the historyless replica too on its way past — a walk that reads
+nothing cannot reach the split. Not redundant, though: **at a fork with nothing shared
+there is no split to fall short of**, the walk is trivially complete at zero, and that
+guard is the only thing between a snapshot-only replica and offering back every order in
+the market. A check for exactly that input is in `X3c` now, and the guard fails without it.
+
+The same trial on `depositsOnlyAfter` showed a guard that could not fire under any input,
+so it is gone rather than kept for symmetry — with a line saying why its sibling has one.
+**A guard that cannot fire is the same defect as a check that cannot fail**, one step
+earlier: it implies a protection that is not there, and the next person reads it as
+covering something.
+
+---
+
+## 12. Three published private keys, and a conditional nobody resolved
+
+*2026-08-24.*
+
+`https://github.com/badbull643/economies-mod` is **public**. It took one fetch to
+establish, and this file had carried the question as an "if" since the branch was first
+pushed — twice, in two sections, each time noting that the answer mattered. Nobody looked.
+That is the whole lesson here and it is worth more than the fix: **a question you can
+answer in thirty seconds is not an open question, it is an unasked one.**
+
+It was also not one key. Tracked, and present in `origin/main`:
+
+```
+server-identity.key
+run/config/economiesmod-identity-Alice.key
+run/config/economiesmod-identity-Bob.key
+```
+
+All three are unencrypted PKCS#8 private keys, published since `b1f35e7` — a commit called
+"update 12 - with Jar", which is what a `git add -A` looks like a year later.
+
+**What was done, and what deliberately was not.**
+
+- **All three untracked**, behind a `.gitignore` that matches `*.key` and nothing else. It
+  is not a reversal of the decision to track `build/` and `run/`: it is the exception that
+  decision never considered.
+- **`server-identity.key` rotated** — deleted, and the next server start generates a new
+  one through `PlayerKeys.loadOrCreate`. This was free *today* and only today: it had
+  signed nothing that survives, because the market it created was deleted on 2026-08-23,
+  and after a bootstrap rotating it means abandoning the market.
+- **Alice and Bob were not rotated**, on purpose. They unlock nothing but make-believe
+  markets in `run/saves` on one machine, and a second key for an already-registered user
+  is refused by design — so rotating them would make this machine a stranger to its own
+  test worlds in exchange for nothing.
+- **No history rewrite.** A private key in public history cannot be recalled; rotation is
+  what makes a published one worthless. A rewrite would break every clone and the branch
+  relationship to buy nothing on top of that.
+
+**The part that would have cost something.** The next dedicated-server bootstrap is the
+one moment `--creator-key` can be chosen, and the creator is the only identity that can
+ever set a market's policy. Bootstrapping with one of these keys would have produced a
+market whose policy was **both frozen and forgeable** — anybody with a copy of a public
+repository could sign its rates. That is the version of this that had teeth, and it was
+two decisions away from happening by default.
+
+**Still true and still tracked:** `known-keys.json` and the peer caches, which hold public
+keys and are meant to be readable. And `server-market.jsonl`, which does not exist now but
+did once, in the repository root, tracked — so the next bootstrap should move `logFile`
+somewhere ignored before a live market's every trade is committed to a public repo.
