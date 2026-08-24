@@ -21,6 +21,35 @@ import java.util.UUID;
  *
  * Kept in core so the arithmetic can be tested without Minecraft. The caller supplies
  * the identity; working out whose keyboard this is belongs to the client.
+ *
+ * <h2>How this reads the log, and the one rule both methods obey</h2>
+ *
+ * Each question needs two things: the state at the head, and one part of the log walked.
+ * The head comes from {@link EventApplier#inspect}, so a market with a snapshot pays for
+ * the tail rather than for its whole history; the walks hold one event at a time rather
+ * than materialising the log into a list. Both matter here more than in most places,
+ * because all of it runs from a button handler on the client thread while somebody is
+ * waiting to read a confirmation dialog.
+ *
+ * <b>The rule that buys is this: the two must describe the same history.</b> Taking the
+ * head from a snapshot and the rest from the log is two sources where there was one, and
+ * a snapshot stays valid in two cases where the log is not the whole story — a replica
+ * that keeps no history at all, and a log with a line below the snapshot point that this
+ * build cannot parse, which the hash check never looks at. Either one leaves "resting
+ * now" knowing about events that "resting at the split" never saw, and every order in
+ * between would be offered back for re-placing while the host still holds it. That is
+ * the duplicate this class exists to avoid.
+ *
+ * The two cases are asked separately, because they are two questions and only one of
+ * them is anybody else's to answer. {@link EventApplier.Replayed#logCoversHead} is the
+ * historyless replica, and it is free. The unreadable prefix is asked here, of the walk
+ * this class was going to do anyway: if it did not reach the split, and the head knows
+ * about events beyond where it stopped, the two halves are describing different amounts
+ * of history and neither answer is worth giving.
+ *
+ * Both refusals answer nothing, and nothing is the safe answer — this can under-offer
+ * and must never over-offer. {@code depositsOnlyAfter} needs only the first of the two,
+ * and says at its own walk why.
  */
 public final class BranchDiff {
 
@@ -44,13 +73,36 @@ public final class BranchDiff {
         List<Order> out = new ArrayList<>();
         if (log == null || userId == null) return out;
 
-        MarketState shared = new MarketState();
-        for (SequencedEvent se : log.readFrom(0)) {
-            if (se.seq > sharedThroughSeq) break;
-            EventApplier.apply(shared, se);
-        }
+        // Asked first, because its answer decides whether the walk below means anything.
+        // A client of a dedicated market keeps a snapshot and no history: it has orders
+        // resting and no record of when they were placed, so all of them would look like
+        // they arrived after the split. See the rule on this class.
+        EventApplier.Replayed head = EventApplier.inspect(log);
+        if (!head.logCoversHead) return out;
+        MarketState now = head.state;
 
-        MarketState now = EventApplier.replay(log);
+        // Stops as soon as it is past the split rather than reading to the end — and
+        // stopping is what makes it partial. Reading the log into a list first, as this
+        // did, meant the whole file was parsed and held before the boundary was even
+        // looked at, so the early exit saved nothing at all.
+        MarketState shared = new MarketState();
+        final long[] reached = { 0 };
+        log.forEach(0, se -> {
+            if (se.seq > sharedThroughSeq) return false;
+            EventApplier.apply(shared, se);
+            reached[0] = se.seq;
+            return true;
+        });
+
+        // The second half of the rule, and the half that costs nothing to ask because
+        // this walk has just answered it. A walk stops at the first line it cannot
+        // parse; a snapshot is checked by the hash at its own sequence number and never
+        // looks below it, so one damaged line early in the log invalidates neither. Then
+        // this walk ends at the damage and the head state does not, and the orders in
+        // the gap are exactly the ones somebody would be invited to place a second time.
+        // Stopping short because the log simply ends earlier is ordinary and fine, which
+        // is what the min() is for.
+        if (reached[0] < Math.min(sharedThroughSeq, head.headSeq)) return out;
 
         Set<Long> beforeTheSplit = restingIds(shared, userId);
         for (String itemId : now.activeItems()) {
@@ -106,11 +158,32 @@ public final class BranchDiff {
         Map<String, Long> out = new TreeMap<>();
         if (log == null || userId == null) return out;
 
-        Map<String, Long> net = new TreeMap<>();
-        for (SequencedEvent se : log.readFrom(0)) {
-            if (se.seq <= sharedThroughSeq) continue;
+        EventApplier.Replayed head = EventApplier.inspect(log);
+
+        // No guard on logCoversHead here, and its absence is deliberate rather than
+        // forgotten. A replica with no history has nothing for the walk below to read, so
+        // this answers nothing on its own; adding the check would be a guard that cannot
+        // fire, which this file's suite treats as worse than no guard because it is
+        // counted. The sibling above needs it for one input this cannot reach — a fork
+        // with nothing shared — and the check that pins that says so.
+        //
+        // Stepped over as lines rather than parsed as events: everything at or below the
+        // split belongs to the shared history and is not this branch's to hand back.
+        // That skips without looking, which is safe for this question and is not for
+        // every question — see forEachAfter, where the callers that can live with it are
+        // named.
+        //
+        // And it is why there is no second guard here to match the one in
+        // ordersOnlyAfter. A damaged line below the split is a part of the file this walk
+        // was never going to read, so it cannot make the netting wrong; both bounds below
+        // only ever shrink what comes back; and the state the second bound reads is the
+        // snapshot's, which is complete whether or not the prefix parses. On a damaged
+        // log this now hands back what somebody is actually owed, where before it handed
+        // back less because the replay stopped where the parsing did.
+        final Map<String, Long> net = new TreeMap<>();
+        log.forEachAfter(sharedThroughSeq, se -> {
             Event e = se.event;
-            if (e == null || !userId.equals(e.userId)) continue;
+            if (e == null || !userId.equals(e.userId)) return true;
 
             if (e instanceof Event.Deposit) {
                 Event.Deposit d = (Event.Deposit) e;
@@ -122,9 +195,10 @@ public final class BranchDiff {
                 Event.Withdraw w = (Event.Withdraw) e;
                 net.merge(w.itemId, -w.quantity, Long::sum);
             }
-        }
+            return true;
+        });
 
-        MarketState now = EventApplier.replay(log);
+        MarketState now = head.state;
         for (Map.Entry<String, Long> entry : net.entrySet()) {
             long putIn = entry.getValue();
             if (putIn <= 0) continue;                   // took more back out than in

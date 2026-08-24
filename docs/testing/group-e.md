@@ -894,3 +894,55 @@ Then confirm the thing it must not break, which is the whole reason the mark exi
   no source"* once, and the file is deleted. Marks written before provenance cannot be
   withdrawn by anybody, so they are dropped rather than trusted
 - Confirm the next poll rebuilds it, and that it is discarded **once** and not every load
+
+## E24. Hosting a log that stops being readable
+
+**Run 2026-08-24, and it found two defects that had nothing to do with the gate itself.**
+
+A snapshot is bound to the chain hash at its own sequence number and never looks below
+it, so a log with a line this build cannot parse, under a valid snapshot, loads perfectly:
+the market on screen is right, there is no damage banner, and `logCoversHead` says the
+state is backed by a log — which it is. What is wrong is the file, and it only matters at
+the moment somebody serves it, because a joiner verifies what it is sent and a chain that
+breaks partway is a fork waiting to happen. So `startHosting` asks, and the Host button
+beside it does not: the button is set from a render path and cannot afford a pass over the
+file per frame.
+
+**This case cannot be reached by playing.** Snapshots are not written below 5,000 events
+and the thresholds are not reachable from the game, so the fixture has to be built. A
+scratch class that generates a 6,000-event market, loads it once so the snapshot is
+written, and then damages one line **keeping the line count intact** — that is what leaves
+the snapshot valid and the file unreadable.
+
+- Build the fixture, drop `market.jsonl` and `market.jsonl.snapshot.json` into a throwaway
+  world's `economiesmod/` directory, and keep a pristine copy of the log for the control
+- **Before pressing anything, confirm which log you are on.** The console says `restored a
+  snapshot at event N`, and line 2 of the file is junk. This matters more than it sounds:
+  the check and its control are indistinguishable from inside the game, and the first
+  attempt at this item was run against the control by mistake and read as a failure
+- Open the Market screen. **The Host button must be live, not greyed** — half the point is
+  that the cheap question says covered, because it is
+- Press Host. The footer must say `Rejected: log damaged after event 1 — reset before
+  hosting`, and the console must carry the long form: a snapshot standing in for the
+  history, what serving it would do to a joiner, and what to do instead
+- **Control:** put the pristine log back, reopen, press Host → it hosts normally. Note
+  that opening a world appends to its log, so the two files diverge after the first
+  session; refresh the control copy rather than assuming it still matches
+
+**What it turned up.** The gate was right the first time it ran. Everything else about it
+was not:
+
+- **The reason was overwritten one line after it was set.** `startHosting` reports refusals
+  through `onRejected`, which writes the screen's status field; the thread that called it
+  then set that same field to `"Failed to start host"` unconditionally. Every refusal this
+  path can produce arrived as a generic failure — including the snapshot-without-history
+  one, which means the Host gate built in the compaction session had **never once shown
+  its explanation in game**. `onConnect` forty lines above had already been fixed for
+  exactly this, with a comment explaining why
+- **Both messages were too long to be read.** The footer draws one trimmed line, roughly
+  50–70 characters depending on GUI scale. Both refusals ran to 150 or more and were cut
+  off mid-sentence, losing the half that says what to do. Short form on screen, reasoning
+  to the console
+
+Neither would have been found by checking that the gate refuses. They were found by
+looking at the screen while it refused.
