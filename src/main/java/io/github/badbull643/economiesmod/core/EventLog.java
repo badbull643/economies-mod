@@ -120,8 +120,13 @@ public class EventLog {
      * cached head going stale against state built later; here the head and the state
      * come from the same walk and cannot disagree — which is what EventApplier.Replayed
      * exists to keep together.
+     *
+     * The other caller is a client that has deliberately thrown its position away — one
+     * that holds a snapshot of a market it has just been told to archive, and is about
+     * to ask for the history from the beginning. It sets this to zero for the same
+     * reason: so the log object and the state agree about where this replica is.
      */
-    void headIs(long seq, String hash) {
+    public void headIs(long seq, String hash) {
         synchronized (this) {
             this.lastSeq = seq;
             this.lastHash = hash;
