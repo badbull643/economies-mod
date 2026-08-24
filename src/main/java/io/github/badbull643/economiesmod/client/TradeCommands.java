@@ -2,6 +2,7 @@ package io.github.badbull643.economiesmod.client;
 
 import com.google.gson.JsonElement;
 import com.mojang.brigadier.context.CommandContext;
+import io.github.badbull643.economiesmod.core.Event;
 import io.github.badbull643.economiesmod.core.MarketState;
 import io.github.badbull643.economiesmod.core.Settings;
 import io.github.badbull643.economiesmod.core.Order;
@@ -52,7 +53,9 @@ import java.util.UUID;
  * with a double-click guard. A command would put a market-destroying action one typo
  * from execution with none of that.
  *
- * <b>hostconfig write is the exception, and it writes a file rather than the market.</b>
+ * <b>Two commands here are not queries, and both are argued rather than assumed.</b>
+ *
+ * <b>hostconfig write writes a file rather than the market.</b>
  * The rule above is about the ledger — an append-only chain with no undo, where a wrong
  * command costs somebody their items. A host-config.json costs nothing: it takes effect
  * only when hosting next starts, every value in it can be edited back by hand, and it
@@ -62,6 +65,16 @@ import java.util.UUID;
  * and the file they live in is one nothing creates, in a directory the game never names
  * until you have already hosted once. A setting nobody can find is a setting that does
  * not exist, which is how the free-order allowance shipped switched permanently off.
+ *
+ * <b>hostrules publish is the second exception, and it does write to the ledger.</b> The
+ * rule above is about a chain with no undo where a wrong command costs somebody their
+ * items. This event moves no balance, creates and destroys nothing, is read by no rule
+ * anywhere, and publishing again replaces it entirely — so what it costs to get wrong is
+ * a figure future hosts start from until somebody corrects it. That is a message rather
+ * than a market. It lives here rather than on the Market screen because that screen is
+ * 4,700 lines and backlog item 6 defers adding to it until item 5 has split it; the
+ * alternative was shipping a feature reachable from nowhere, which is the same mistake
+ * the paragraph above exists to describe.
  */
 public final class TradeCommands {
 
@@ -90,6 +103,10 @@ public final class TradeCommands {
                                 .then(ClientCommandManager.literal("write")
                                         .executes(TradeCommands::hostConfigWrite))
                                 .executes(TradeCommands::hostConfig))
+                        .then(ClientCommandManager.literal("hostrules")
+                                .then(ClientCommandManager.literal("publish")
+                                        .executes(TradeCommands::publishHostRules))
+                                .executes(TradeCommands::hostRules))
                         .then(ClientCommandManager.literal("archive")
                                 .then(ClientCommandManager.literal("on")
                                         .executes(c -> setArchive(c, true)))
@@ -105,8 +122,110 @@ public final class TradeCommands {
         info(src, "/trade orders — your resting orders");
         info(src, "/trade price <item> — the book for one item");
         info(src, "/trade hostconfig — the rules this world hosts under");
+        info(src, "/trade hostrules — the rules this market's group agreed once");
         info(src, "/trade archive — whether this copy keeps the market's whole history");
         info(src, "Trading itself is on the market screen (M).");
+        return 1;
+    }
+
+    /**
+     * What host rules this market's group has agreed, and what this host does with them.
+     *
+     * Reading half. The publishing half below is the second command in this class that
+     * does not only read, and the first that touches the ledger at all — see its own
+     * note for why that line is drawn where it is.
+     */
+    private static int hostRules(CommandContext<FabricClientCommandSource> ctx) {
+        FabricClientCommandSource src = ctx.getSource();
+        MarketState market = marketOrComplain(src);
+        if (market == null) return 0;
+
+        Event.HostDefaults published = market.hostDefaults();
+        head(src, "Host rules published by '" + market.marketName() + "'");
+        if (published == null) {
+            info(src, "None. Every host of this market starts from its own settings, so"
+                    + " a friend who has never opened the file hosts with no caps at all.");
+            info(src, "/trade hostrules publish writes this host's rules into the market,"
+                    + " for every future host to start from.");
+            return 1;
+        }
+
+        describe(src, "deposit cap per window", published.maxDepositUnitsPerWindow);
+        describe(src, "deposit window (minutes)", published.depositWindowMinutes);
+        describe(src, "migrated-credit cap", published.maxMigratedCredits);
+        describe(src, "welcome-grant ceiling", published.maxWelcomeGrant);
+        describe(src, "accepts migration", published.acceptsMigration);
+        describe(src, "admission", published.admission);
+        describe(src, "allow", published.allow);
+        describe(src, "deny", published.deny);
+
+        info(src, "These are defaults, not rules. A host takes up whatever it has not set"
+                + " for itself, and is free to disagree with all of it.");
+        info(src, "/trade hostconfig shows what is actually in force here.");
+        return 1;
+    }
+
+    private static void describe(FabricClientCommandSource src, String label, Object value) {
+        info(src, "  " + label + ": " + (value == null ? "not set by the group" : value));
+    }
+
+    /**
+     * Publishes this host's rules into the market, for every future host to start from.
+     *
+     * <b>The second exception to "every command here reads", and the first that writes
+     * to the ledger.</b> The class note above refuses lifecycle verbs because they mutate
+     * a chain with no undo and can cost somebody their items. This event can do neither:
+     * it moves no balance, creates and destroys nothing, is enforced by no rule anywhere,
+     * and publishing again replaces it completely. What it costs to get wrong is that
+     * future hosts start from a figure somebody has to correct — which is a message, not
+     * a market.
+     *
+     * It is here rather than on the Market screen because that screen is 4,700 lines and
+     * backlog item 6 defers adding to it until item 5 has split it. The alternative was
+     * shipping a feature reachable from nowhere, which is exactly how the free-order
+     * allowance spent its entire life switched off.
+     */
+    private static int publishHostRules(CommandContext<FabricClientCommandSource> ctx) {
+        FabricClientCommandSource src = ctx.getSource();
+        MarketState market = marketOrComplain(src);
+        if (market == null) return 0;
+
+        UUID me = me();
+        if (me == null) return 0;
+        if (market.creator() == null || !market.creator().equals(me)) {
+            info(src, "Only the market's creator can publish its host rules.");
+            return 0;
+        }
+
+        Path file = hostConfigFileOrComplain(src);
+        if (file == null) return 0;
+        ServerConfig cfg = hostRulesOrComplain(src, file);
+        if (cfg == null) return 0;
+
+        // From the same object /trade hostconfig prints, so what somebody read a moment
+        // ago is what goes into the market. Two ways of working out "the rules here"
+        // would be one description of a setting living next to the setting.
+        Event.HostDefaults rules = new Event.HostDefaults();
+        rules.userId = me;
+        rules.maxDepositUnitsPerWindow = cfg.maxDepositUnitsPerWindow;
+        rules.depositWindowMinutes = cfg.depositWindowMinutes;
+        rules.maxMigratedCredits = cfg.maxMigratedCredits;
+        rules.maxWelcomeGrant = cfg.maxWelcomeGrant();
+        rules.acceptsMigration = cfg.acceptsMigration();
+        rules.admission = cfg.admission;
+        rules.allow = cfg.allow == null ? null : new java.util.ArrayList<>(cfg.allow);
+        rules.deny = cfg.deny == null ? null : new java.util.ArrayList<>(cfg.deny);
+
+        MarketStateHolder.Submission sent = MarketStateHolder.submit(rules);
+        if (sent != null && !sent.pending && !sent.accepted) {
+            info(src, "Could not publish: "
+                    + (sent.reason == null ? "the host refused it" : sent.reason));
+            return 0;
+        }
+        head(src, "Published this host's rules to '" + market.marketName() + "'");
+        info(src, "Every future host of this market starts from these, for anything they"
+                + " have not set for themselves. Nothing is enforced by them.");
+        info(src, "/trade hostrules to see what the market now carries.");
         return 1;
     }
 

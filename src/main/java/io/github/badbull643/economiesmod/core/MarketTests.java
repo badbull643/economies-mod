@@ -3783,6 +3783,24 @@ public class MarketTests {
             pol.stipendEveryFills = 50;
             apply(log, live, pol);
 
+            // Host rules the group has agreed, which the market carries but nothing
+            // enforces. In the fixture because a snapshot that dropped them would lose
+            // what every future host of this market starts from, silently — and the
+            // shape fingerprint cannot catch that, since it stops a stale snapshot being
+            // read and says nothing about a serialiser written incomplete today.
+            Event.HostDefaults rules = new Event.HostDefaults();
+            rules.userId = ALICE;
+            rules.maxDepositUnitsPerWindow = 640L;
+            rules.depositWindowMinutes = 30;
+            rules.maxMigratedCredits = 5000L;
+            rules.maxWelcomeGrant = 250L;
+            rules.acceptsMigration = Boolean.FALSE;
+            rules.admission = ServerConfig.ALLOWLIST;
+            rules.allow = java.util.Arrays.asList(ALICE.toString(), BOB.toString());
+            apply(log, live, rules);
+            check("the fixture publishes host rules",
+                    live.hostDefaults() != null ? 1 : 0, 1);
+
             apply(log, live, deposit(ALICE, IRON, 500));
             apply(log, live, deposit(ALICE, WOOD, 300));
 
@@ -4285,6 +4303,116 @@ public class MarketTests {
                     MarketSlots.slotHolding(world, UUID.randomUUID(), null) == null ? 1 : 0, 1);
         }
 
+        section("L17: host rules a group agrees once — defaults, never enforcement");
+        {
+            Path p = scratch("test-hostrules.jsonl");
+            Files.deleteIfExists(p);
+            Files.deleteIfExists(pathOfSnapshot(p));
+            EventLog log = new EventLog(p);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+
+            // Through validate, not apply. apply enforces none of these — the rules live
+            // where a host asks them before appending, which is the distinction §0.2 was
+            // written about, and asking the wrong one is how a check that cannot fail
+            // gets written. The first draft of this section did exactly that and passed
+            // three refusals that were never refused.
+            Event.HostDefaults byBob = new Event.HostDefaults();
+            byBob.userId = BOB;
+            byBob.maxWelcomeGrant = 10L;
+            check("somebody else may not publish the group's rules",
+                    hostRulesRefusal(live, byBob) != null ? 1 : 0, 1);
+
+            Event.HostDefaults bad = new Event.HostDefaults();
+            bad.userId = ALICE;
+            bad.admission = "allow-list";      // the misspelling §0.18 warns about
+            check("an admission mode no host understands is refused",
+                    hostRulesRefusal(live, bad) != null ? 1 : 0, 1);
+
+            Event.HostDefaults negative = new Event.HostDefaults();
+            negative.userId = ALICE;
+            negative.maxDepositUnitsPerWindow = -1L;
+            check("a negative cap is refused",
+                    hostRulesRefusal(live, negative) != null ? 1 : 0, 1);
+
+            Event.HostDefaults good = new Event.HostDefaults();
+            good.userId = ALICE;
+            good.maxDepositUnitsPerWindow = 640L;
+            good.maxWelcomeGrant = 250L;
+            good.acceptsMigration = Boolean.FALSE;
+            check("the creator may publish them",
+                    hostRulesRefusal(live, good) == null ? 1 : 0, 1);
+            apply(log, live, good);
+            check("and the market carries them",
+                    live.hostDefaults() != null ? 1 : 0, 1);
+
+            // The property that keeps this defaults rather than enforcement: publishing
+            // a ceiling of 250 does not stop the market's own grant of 1000 being valid.
+            // If it did, one host would refuse what another accepted and hosting could
+            // fork the market — which is why this was refused as *travelling* rules.
+            check("the market's own policy is untouched by them",
+                    live.welcomeGrant(), ServerConfig.DEFAULT_WELCOME_GRANT);
+            Event.Deposit stillFine = deposit(ALICE, IRON, 5000);
+            stillFine.marketId = live.marketId();
+            SequencedEvent depositSe = new SequencedEvent();
+            depositSe.seq = live.hostDefaults() == null ? 5 : 6;
+            depositSe.event = stillFine;
+            check("and nothing validates against them",
+                    EventApplier.validate(live, depositSe).accepted ? 1 : 0, 1);
+        }
+
+        section("L18: a host takes up published rules only where it has not spoken");
+        {
+            Event.HostDefaults published = new Event.HostDefaults();
+            published.maxDepositUnitsPerWindow = 640L;
+            published.depositWindowMinutes = 30;
+            published.maxMigratedCredits = 5000L;
+            published.maxWelcomeGrant = 250L;
+            published.acceptsMigration = Boolean.FALSE;
+            published.admission = ServerConfig.ALLOWLIST;
+            published.allow = java.util.Arrays.asList(ALICE.toString());
+
+            ServerConfig silent = ServerConfig.friendGroup(25555);
+            silent.adopt(published);
+            check("a host that set nothing takes the group's deposit cap",
+                    silent.maxDepositUnitsPerWindow, 640);
+            check("and its window", silent.depositWindowMinutes, 30);
+            check("and its migration cap", silent.maxMigratedCredits, 5000);
+            check("and its grant ceiling", silent.maxWelcomeGrant(), 250);
+            check("and its migration answer", silent.acceptsMigration() ? 1 : 0, 0);
+            check("and its admission mode",
+                    ServerConfig.ALLOWLIST.equals(silent.admission) ? 1 : 0, 1);
+            check("with the list that makes the mode usable", silent.allow.size(), 1);
+
+            // The half that matters more: an operator who has decided keeps their answer.
+            ServerConfig opinionated = ServerConfig.friendGroup(25555);
+            opinionated.maxDepositUnitsPerWindow = 64;
+            opinionated.maxWelcomeGrant = 9999L;
+            opinionated.acceptsMigration = Boolean.TRUE;
+            opinionated.adopt(published);
+            check("a local deposit cap survives", opinionated.maxDepositUnitsPerWindow, 64);
+            check("a local grant ceiling survives", opinionated.maxWelcomeGrant(), 9999);
+            check("a local migration answer survives",
+                    opinionated.acceptsMigration() ? 1 : 0, 1);
+            check("and what it did not set is still filled in",
+                    opinionated.maxMigratedCredits, 5000);
+
+            // Adopting an allowlist with nobody on it would lock a host out of its own
+            // market, so the mode and its list move together or not at all.
+            Event.HostDefaults modeOnly = new Event.HostDefaults();
+            modeOnly.admission = ServerConfig.ALLOWLIST;
+            ServerConfig lonely = ServerConfig.friendGroup(25555);
+            lonely.adopt(modeOnly);
+            check("an allowlist with no list is still adopted as a mode",
+                    ServerConfig.ALLOWLIST.equals(lonely.admission) ? 1 : 0, 1);
+            check("but the config says why that is unusable",
+                    lonely.problem() != null ? 1 : 0, 1);
+
+            check("adopting nothing changes nothing", ServerConfig.friendGroup(25555)
+                    .maxDepositUnitsPerWindow, 0);
+        }
+
         section("L12: the shape fingerprint sees the fields it has to see");
         {
             List<String> shape = MarketSnapshot.shapeLines();
@@ -4378,6 +4506,12 @@ public class MarketTests {
         sb.append("stipendEveryFills=").append(s.stipendEveryFills()).append('\n');
         sb.append("fillsEver=").append(s.fillsEver()).append('\n');
         sb.append("registeredCount=").append(s.registeredCount()).append('\n');
+        Event.HostDefaults hd = s.hostDefaults();
+        sb.append("hostDefaults=").append(hd == null ? "none"
+                : hd.maxDepositUnitsPerWindow + "/" + hd.depositWindowMinutes
+                  + "/" + hd.maxMigratedCredits + "/" + hd.maxWelcomeGrant
+                  + "/" + hd.acceptsMigration + "/" + hd.admission
+                  + "/" + hd.allow + "/" + hd.deny).append('\n');
 
         List<UUID> users = new ArrayList<>(s.registeredUsers());
         java.util.Collections.sort(users);
@@ -4583,6 +4717,23 @@ public class MarketTests {
         se.seq = 2;
         se.event = mp;
 
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
+    /**
+     * Why publishing these host rules would be refused, or null if it would be allowed.
+     *
+     * Asks validate, because that is where the rules are. apply takes an event that has
+     * already been judged and settles it — so a test that asked apply whether something
+     * was allowed would be told yes about everything, which is what the first draft of
+     * L17 did.
+     */
+    private static String hostRulesRefusal(MarketState state, Event.HostDefaults rules) {
+        rules.marketId = state.marketId();
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 99;
+        se.event = rules;
         EventApplier.Result r = EventApplier.validate(state, se);
         return r.accepted ? null : r.reason;
     }

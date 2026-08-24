@@ -75,7 +75,16 @@ public class ServerConfig {
     public long maxDepositUnitsPerWindow = 0;
 
     /** How far back the deposit cap counts. */
-    public int depositWindowMinutes = 60;
+    public int depositWindowMinutes = DEFAULT_DEPOSIT_WINDOW_MINUTES;
+
+    /**
+     * The compiled window, named because adopt() has to recognise it.
+     *
+     * "The operator has not chosen a window" is expressed here as "it still equals the
+     * compiled one", so that value has to be a thing with a name rather than a literal
+     * repeated in two places.
+     */
+    public static final int DEFAULT_DEPOSIT_WINDOW_MINUTES = 60;
 
     // ─────────── world attestation ───────────
     //
@@ -191,6 +200,66 @@ public class ServerConfig {
 
     public static final String OPEN = "open";
     public static final String ALLOWLIST = "allowlist";
+
+    /**
+     * Takes on the host rules a market's creator published, where this host has not
+     * spoken for itself.
+     *
+     * The whole of backlog item 8's payoff, and the precedence is the entire design:
+     * <b>a local setting always wins.</b> Published rules fill in what the operator left
+     * alone, so a friend rotating in picks up the group's caps instead of having none —
+     * and anybody who has opened their own file keeps exactly what they wrote there.
+     *
+     * "Has not spoken" is decided per field, and the fields differ in how they say it.
+     * {@code acceptsMigration} and {@code maxWelcomeGrant} are boxed, so null is silence.
+     * The rest carry a compiled default that doubles as off, so silence is a value equal
+     * to that default — which is imperfect and deliberately so: an operator who sets a
+     * cap to exactly the compiled default gets the group's figure instead. That is a
+     * strictly better outcome than the alternative reading, where a group's caps are
+     * ignored by every host that never touched the file, which is the failure this
+     * exists to fix.
+     *
+     * Nothing here can fail or refuse. A market whose published rules this build does
+     * not understand hosts on its own settings, exactly as it would have before.
+     */
+    public void adopt(Event.HostDefaults published) {
+        if (published == null) return;
+
+        if (acceptsMigration == null) acceptsMigration = published.acceptsMigration;
+        if (maxWelcomeGrant == null) maxWelcomeGrant = published.maxWelcomeGrant;
+
+        if (maxDepositUnitsPerWindow == 0 && published.maxDepositUnitsPerWindow != null) {
+            maxDepositUnitsPerWindow = published.maxDepositUnitsPerWindow;
+        }
+        if (depositWindowMinutes == DEFAULT_DEPOSIT_WINDOW_MINUTES
+                && published.depositWindowMinutes != null) {
+            depositWindowMinutes = published.depositWindowMinutes;
+        }
+        if (maxMigratedCredits == 0 && published.maxMigratedCredits != null) {
+            maxMigratedCredits = published.maxMigratedCredits;
+        }
+        // Admission is a pair — a mode and the list it reads — so they move together or
+        // a host adopts "allowlist" with nobody on it and locks its own market out.
+        if (OPEN.equalsIgnoreCase(admission) && (allow == null || allow.isEmpty())
+                && published.admission != null && isAdmissionMode(published.admission)) {
+            admission = published.admission;
+            if (published.allow != null) allow = new ArrayList<>(published.allow);
+        }
+        if ((deny == null || deny.isEmpty()) && published.deny != null) {
+            deny = new ArrayList<>(published.deny);
+        }
+    }
+
+    /**
+     * Whether this is a mode a host understands.
+     *
+     * One place, because the list is now asked in two: a config file being checked, and
+     * a set of host rules the creator is publishing into the log. Two copies would drift
+     * and a market could carry a mode no host accepts.
+     */
+    public static boolean isAdmissionMode(String mode) {
+        return OPEN.equalsIgnoreCase(mode) || ALLOWLIST.equalsIgnoreCase(mode);
+    }
 
     /** Identities admitted when admission is "allowlist". Ignored when open. */
     public List<String> allow = new ArrayList<>();
@@ -682,7 +751,7 @@ public class ServerConfig {
         // A misspelt mode must not quietly read as "open". An operator who typed
         // "allowlist " or "allow-list" and got an open server would have no way to tell
         // from the outside until the wrong person connected.
-        if (!OPEN.equalsIgnoreCase(admission) && !ALLOWLIST.equalsIgnoreCase(admission)) {
+        if (!isAdmissionMode(admission)) {
             return "admission must be \"" + OPEN + "\" or \"" + ALLOWLIST
                     + "\", not \"" + admission + "\"";
         }
