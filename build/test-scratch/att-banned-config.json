@@ -1,5 +1,5 @@
 {
-  "port": 56880,
+  "port": 25523,
   "maxConnections": 64,
   "outboundQueueDepth": 256,
   "maxDepositUnitsPerWindow": 0,
@@ -9,6 +9,7 @@
   "refuseCheatWorlds": true,
   "maxDepositUnitsPerPlayHour": 0,
   "maxDepositMultipleOfHandled": 0,
+  "maxMigratedCredits": 0,
   "admission": "open",
   "allow": [],
   "deny": [
@@ -19,5 +20,9 @@
   "dedicated": false,
   "hostUserId": "00000000-0000-0000-0000-0000000000ff",
   "logFile": "server-market.jsonl",
-  "welcomeGrant": 1000
+  "welcomeGrant": 1000,
+  "listingFee": 0,
+  "stipendAmount": 0,
+  "acceptsMigration": true,
+  "maxWelcomeGrant": 10000
 }

@@ -107,8 +107,8 @@ fills nobody experienced. See the design note, and the Not-on-this-list section 
 ## 2. Log compaction — and what a long log actually costs
 
 **Design: [`design/log-compaction.md`](design/log-compaction.md), rewritten 2026-08-23
-against measurements. Steps 1 to 4 built the same day. What remains is step 5, which is a
-trust decision rather than code.**
+against measurements. All five steps are resolved: 1 to 4 built, and 5 closed once it
+turned out to be two memory faults rather than the trust question it was written as.**
 
 **Read the design note rather than this entry.** What was here before said "build option A
 only" and gave a cost model that measurement contradicts — it is summarised below only so
@@ -118,8 +118,9 @@ The log only grows, and five call sites walk all of it: `loadLocal`, the `HostSe
 constructor, the `MarketClient` constructor, and `BranchDiff` twice — which `resetCost()`
 calls twice more, so opening the reset dialog is four full walks from a UI thread.
 
-**The measured plan, in order.** Steps 1 to 4 are done, as of 2026-08-23. The first two
-were cheap, correct under every open question below, and absent from the original note.
+**The measured plan, in order.** All five are resolved — 1 to 4 built on 2026-08-23, 5
+closed on 2026-08-24. The first two were cheap, correct under every open question, and
+absent from the original note.
 
 1. **~~Stream `readFrom`~~ — DONE.** It materialised every event into an `ArrayList`
    before its caller saw one, about 1 KB of heap each. `EventLog.forEach` is the
@@ -141,7 +142,13 @@ were cheap, correct under every open question below, and absent from the origina
    authority (a short one still does not), a replica with no history is barred from
    hosting, and the archive question is asked about the host's market rather than ours —
    otherwise a first-time joiner archives everything, and they are who this is for.
-5. **First-join onboarding at scale**, which is open — see below.
+5. **~~First-join onboarding at scale~~ — CLOSED 2026-08-24.** It was not a trust
+   question. Both ends built the whole market in memory to move it — the host 63.6 MB for
+   a 57.7 MB log, the client the same again in a Minecraft heap — so a large first join
+   failed on memory long before anything about verification mattered. Both stream now,
+   bounded by the chunk budget. What remains is a download, once, of a history a
+   dedicated market's client then discards, and an interrupted one resumes. **Option B
+   stays refused everywhere**, and this is closed rather than open so nobody re-argues it.
 
 **Cost of not doing it:** 25,000 events is not a large-server number, it is a
 market-that-lasted-a-season number — 83 days for fifteen people, 25 for fifty. Every
