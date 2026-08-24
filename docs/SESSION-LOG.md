@@ -75,6 +75,10 @@ There is one other branch worth knowing about: `claude/practical-diffie-e9fbf4` 
 
 ### What to read, in order
 
+0. **`docs/HANDBOOK.md`** if you do not know the mod at all — what it does, how to use it,
+   and how it works, in that order. It is the only file here written for somebody who has
+   not read the others, and it is the one to send anybody new. Everything below assumes
+   the shape of the thing is already familiar.
 1. **§4 below** — one paragraph, and it predicted most of four sessions' worth of bugs.
    If you read nothing else, read that.
 2. **§10's "What actually went wrong"** — eleven defects that turned out to be one
