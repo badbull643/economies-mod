@@ -325,6 +325,7 @@ public class MarketClient {
         UUID theirs = sync.marketId == null ? null : UUID.fromString(sync.marketId);
         if (persist && hostDedicated && !archiveDedicated.test(theirs)) {
             persist = false;
+            snapshotInsteadOfHistory = true;
             System.out.println("[client] " + sync.marketName + " is served by a dedicated"
                     + " server, so this copy keeps a snapshot rather than the whole"
                     + " history — /trade archive on to keep all of it");
@@ -341,6 +342,7 @@ public class MarketClient {
         // /trade archive on then does the fetch properly on the next connect.
         if (persist && appliedSeq > 0 && log.headSeqOnDisk() < appliedSeq) {
             persist = false;
+            snapshotInsteadOfHistory = true;
             System.out.println("[client] this copy holds a snapshot of " + sync.marketName
                     + " and not its history, so new events are not being written to a"
                     + " log that could never verify — /trade archive on, then reconnect,"
@@ -906,14 +908,32 @@ public class MarketClient {
      * head that the handshake tops up from.
      */
     private void keepWhatWeLearned() {
-        if (persist) return;                 // the log is the record; nothing to do
+        // Only when *we* turned writing off, which is the snapshot-only case. persist is
+        // also false for a host's self-connect, and that is a completely different
+        // situation: the log is right there, being written by the HostServer this client
+        // is talking to. Treating the two the same wrote a logless snapshot beside a
+        // full history — and a logless snapshot is precisely the one that stands without
+        // its log, so deleting that log would have handed the market back. The flag this
+        // reads is set in one place, by the rule that stops the writing.
+        if (!snapshotInsteadOfHistory) return;
         if (appliedSeq <= 0) return;
         if (state.marketId() == null) return;
+        // Both disconnect() and the reader loop's finally reach here, and on a world
+        // shutdown both run. Once is enough, and twice raced over the same temporary
+        // file — one call moved it into place while the other was still writing it.
+        if (!snapshotKept.compareAndSet(false, true)) return;
         try {
             MarketSnapshot.save(log, state, appliedSeq, lastHash, true);
         } catch (Exception e) {
             System.err.println("[client] could not keep a snapshot of this market: " + e);
         }
     }
+
+    /** Set only by the rule that stops this replica writing history. See above. */
+    private volatile boolean snapshotInsteadOfHistory = false;
+
+    /** So the two paths that end a session do not both write the same file. */
+    private final java.util.concurrent.atomic.AtomicBoolean snapshotKept =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
 }
