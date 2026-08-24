@@ -1422,6 +1422,11 @@ public class MarketStateHolder {
      * Being false is not damage and not an error. It is what somebody chose by not
      * archiving a market that a server was looking after.
      */
+    /** How many events are actually on disk here, as opposed to how far our state got. */
+    public static long localHeadSeq() {
+        return localLog == null ? 0 : localLog.lastSeq();
+    }
+
     public static boolean hasFullHistory() {
         MarketState s = get();
         if (s == null || s.marketId() == null) return false;
