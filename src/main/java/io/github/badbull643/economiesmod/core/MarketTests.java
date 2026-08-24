@@ -623,15 +623,17 @@ public class MarketTests {
             Files.deleteIfExists(file);
             UUID marketA = UUID.randomUUID();
             UUID marketB = UUID.randomUUID();
+            String alice = ALICE.toString();
+            String bob = BOB.toString();
 
             MarketHighWater hw = new MarketHighWater(file);
             check("nothing seen yet", hw.seenFor(marketA), 0);
 
-            hw.observe(marketA, 40);
+            hw.observe(marketA, 40, alice);
             check("records what it saw", hw.seenFor(marketA), 40);
 
-            hw.observe(marketA, 12);
-            check("never moves backwards", hw.seenFor(marketA), 40);
+            hw.observe(marketA, 12, bob);
+            check("somebody else being lower moves nothing", hw.seenFor(marketA), 40);
 
             // Survives a restart — the whole point, since the peer that knew the market
             // was further along is usually offline by the time someone hosts stale.
@@ -639,15 +641,45 @@ public class MarketTests {
 
             check("says nothing about a market it hasn't seen", hw.seenFor(marketB), 0);
 
+            // The claim belongs to whoever made it, and comes down when they do. Alice
+            // said 40; Alice now says 20, on our chain, which withdraws the 40 — she is
+            // reporting where she is, not setting a record. This is the case that made
+            // provenance necessary: a mark taken honestly from a peer, invalidated by
+            // the reader's own later fork away from the chain it described, with nothing
+            // able to notice because the number had no source.
+            hw.observe(marketA, 20, alice);
+            check("its own reporter can bring it down", hw.seenFor(marketA), 20);
+            check("and that survives a reload too",
+                    new MarketHighWater(file).seenFor(marketA), 20);
+
+            // Raising is still anybody's to do.
+            hw.observe(marketA, 55, bob);
+            check("anyone may raise it", hw.seenFor(marketA), 55);
+            hw.observe(marketA, 10, alice);
+            check("but only its holder may lower it", hw.seenFor(marketA), 55);
+            hw.observe(marketA, 30, bob);
+            check("and the holder is whoever last raised it", hw.seenFor(marketA), 30);
+
             // A different market resets it, so a fresh market isn't judged against an
             // old one's height.
-            hw.observe(marketB, 3);
+            hw.observe(marketB, 3, alice);
             check("switching market resets", hw.seenFor(marketB), 3);
             check("old market forgotten", hw.seenFor(marketA), 0);
 
             hw.clear();
             check("cleared with the market it described",
                     new MarketHighWater(file).seenFor(marketB), 0);
+
+            // A file from before provenance cannot be reasoned about — there is nobody
+            // to withdraw it — so it is dropped rather than trusted. Every file that
+            // exists today is one of these, and one of them is why this exists.
+            Path legacy = scratch("test-highwater-l6-legacy.json");
+            Files.write(legacy, ("{\"marketId\":\"" + marketA + "\",\"seq\":129}")
+                    .getBytes("UTF-8"));
+            check("a mark with no source is discarded",
+                    new MarketHighWater(legacy).seenFor(marketA), 0);
+            check("and the file goes with it, so it is discarded once",
+                    Files.exists(legacy) ? 1 : 0, 0);
         }
 
         section("M1: net position counts what's locked in resting orders");
@@ -3374,6 +3406,17 @@ public class MarketTests {
             String warning = hostFor(disagrees, file).grantMismatchWarning();
             check("a mismatch is reported", warning != null ? 1 : 0, 1);
 
+            // And names the log this host actually opened. Only the dedicated launcher
+            // derives its config and its log path together; a world hosting from the
+            // Market screen is handed the log separately and leaves config.logFile at
+            // its compiled default, so this told a player to delete server-market.jsonl
+            // — a file from another deployment, holding somebody else's market. Seen in
+            // a real session, hosting a world's own market.
+            check("and names the log this host opened",
+                    warning.contains(file.toString()) ? 1 : 0, 1);
+            check("not the one the config happens to name",
+                    warning.contains(disagrees.logFile) ? 0 : 1, 1);
+
             // Zero is the opt-out from issuing grants at all, not an operator who got
             // the number wrong, so it must not be reported as one.
             ServerConfig off = ServerConfig.friendGroup(25555);
@@ -3518,6 +3561,757 @@ public class MarketTests {
                             MarketState.MAX_LISTING_FEE + 1) != null ? 1 : 0, 1);
         }
 
+        section("L7: the hash is pinned to a literal, because changing it is undetectable");
+        {
+            // Every other suite writes its logs with the same build that reads them, so
+            // a hash function that changed would agree with itself everywhere and pass
+            // all of them — while silently invalidating every log already on disk. That
+            // is not hypothetical: the hex encoding was rewritten on 2026-08-23 for
+            // speed, and nothing in the suites could have told a faithful rewrite from
+            // a subtly different one.
+            //
+            // This value was computed under the old spelling and the new one and found
+            // equal. If this check fails, the log format has changed: every existing
+            // market stops verifying, and that is a migration rather than a bug fix.
+            Event.Deposit d = new Event.Deposit();
+            d.itemId = "minecraft:iron_ingot";
+            d.quantity = 64;
+            d.userId = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+            d.marketId = UUID.fromString("00000000-0000-0000-0000-0000000000b1");
+            d.clientEventId = "fixed-client-event-id";
+            d.timestamp = 1700000000000L;
+
+            SequencedEvent se = new SequencedEvent();
+            se.seq = 7;
+            se.prevHash = "aaaabbbbccccddddeeeeffff00001111222233334444555566667777888899990";
+            se.eventType = "Deposit";
+            se.event = d;
+            se.signature = "fixed-signature-not-verified-here";
+
+            check("hash of a fixed event is unchanged",
+                    EventLog.recomputeHash(se).equals(
+                            "a17d532f82df541ed3796435a0b2a151aaf5fc5b8b3a3e2f01dd18bd09ac666d")
+                            ? 1 : 0, 1);
+            check("hash is 64 lowercase hex characters",
+                    EventLog.recomputeHash(se).matches("[0-9a-f]{64}") ? 1 : 0, 1);
+            // The old spelling built its hex with String.format("%02x"), which pads.
+            // A table-driven version that dropped the leading zero of a low byte would
+            // still look like a hash, so check a digest that contains one.
+            SequencedEvent low = new SequencedEvent();
+            low.seq = 1;
+            low.prevHash = EventLog.GENESIS_HASH;
+            low.eventType = "Deposit";
+            low.event = d;
+            low.signature = "s";
+            check("a hash with a low byte in it is still 64 characters",
+                    EventLog.recomputeHash(low).length(), 64);
+        }
+
+        section("L8: verifyAndReplay says exactly what verifying and replaying said");
+        {
+            // One pass replaced two on every load path. The two must not disagree, and
+            // the awkward half is a damaged log: verifyChain stops at the break while
+            // the replay carried on applying, and the UI depends on that combination —
+            // it shows the market it is about to offer to reset.
+            Path good = scratch("test-onepass-good.jsonl");
+            Files.deleteIfExists(good);
+            EventLog log = new EventLog(good);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            grant(log, live, BOB, 500);
+            apply(log, live, deposit(ALICE, IRON, 100));
+            apply(log, live, placeOrder(ALICE, IRON, 5, 10, false));
+            apply(log, live, placeOrder(BOB, IRON, 5, 10, true));
+            // The comparison below is worthless if nothing traded — two empty states
+            // agree perfectly. Pin the fixture itself before comparing anything.
+            check("the fixture actually filled", live.itemBalances().getBalance(BOB, IRON), 10);
+            check("the fixture actually moved credits",
+                    live.wallets().getBalance(BOB), 450);
+
+            EventLog reread = new EventLog(good);
+            long separateBroken = reread.verifyChain();
+            EventApplier.Replayed separate = EventApplier.replayWithHead(reread);
+            EventApplier.Replayed merged = EventApplier.verifyAndReplay(new EventLog(good));
+
+            check("same verdict on a whole chain", merged.chainBrokenAt, separateBroken);
+            check("same head seq", merged.headSeq, separate.headSeq);
+            check("same head hash",
+                    merged.headHash.equals(separate.headHash) ? 1 : 0, 1);
+            check("same credits for the buyer",
+                    merged.state.wallets().getBalance(BOB),
+                    separate.state.wallets().getBalance(BOB));
+            check("same credits for the seller",
+                    merged.state.wallets().getBalance(ALICE),
+                    separate.state.wallets().getBalance(ALICE));
+            check("same goods on the books",
+                    merged.state.itemBalances().getBalance(BOB, IRON),
+                    separate.state.itemBalances().getBalance(BOB, IRON));
+            check("a plain replay claims nothing about the chain",
+                    separate.chainBrokenAt, -1);
+
+            // Now break the chain in the middle and check both paths still agree.
+            Path broken = scratch("test-onepass-broken.jsonl");
+            Files.deleteIfExists(broken);
+            Files.write(broken, Files.readAllLines(good));
+            List<String> lines = Files.readAllLines(broken);
+            int at = lineOf(lines, "Deposit");
+            lines.set(at, lines.get(at).replace("\"quantity\":100", "\"quantity\":101"));
+            Files.write(broken, lines);
+
+            long brokenSeparate = new EventLog(broken).verifyChain();
+            EventApplier.Replayed brokenReplay = EventApplier.replayWithHead(new EventLog(broken));
+            EventApplier.Replayed brokenMerged = EventApplier.verifyAndReplay(new EventLog(broken));
+
+            check("the tamper is actually detected", brokenSeparate != -1 ? 1 : 0, 1);
+            check("same break reported", brokenMerged.chainBrokenAt, brokenSeparate);
+            check("a break does not stop the replay", brokenMerged.headSeq, brokenReplay.headSeq);
+            check("damageReasonFor agrees with damageReason",
+                    new EventLog(broken).damageReasonFor(brokenSeparate)
+                            .equals(new EventLog(broken).damageReason()) ? 1 : 0, 1);
+        }
+
+        section("L9: streaming a log and listing it are the same walk");
+        {
+            Path p = scratch("test-stream.jsonl");
+            Files.deleteIfExists(p);
+            EventLog log = new EventLog(p);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            apply(log, live, deposit(ALICE, IRON, 10));
+            apply(log, live, deposit(ALICE, IRON, 20));
+
+            EventLog reread = new EventLog(p);
+            List<SequencedEvent> listed = reread.readFrom(0);
+            final List<Long> streamed = new ArrayList<>();
+            reread.forEach(0, se -> {
+                streamed.add(se.seq);
+                return true;
+            });
+            check("same number of entries", streamed.size(), listed.size());
+            check("same order",
+                    streamed.get(streamed.size() - 1).longValue(),
+                    listed.get(listed.size() - 1).seq);
+
+            // fromSeq filters the same way it always did.
+            check("fromSeq skips what is below it",
+                    reread.readFrom(3).size(), listed.size() - 2);
+
+            // Returning false stops the walk — which hashAt and hashesAt rely on to
+            // avoid reading the rest of a long log to learn nothing.
+            final long[] seen = { 0 };
+            reread.forEach(0, se -> {
+                seen[0]++;
+                return false;
+            });
+            check("returning false stops after one entry", seen[0], 1);
+
+            check("hashAt matches the entry it names",
+                    reread.hashAt(2).equals(listed.get(1).hash) ? 1 : 0, 1);
+            check("hashAt past the end is null", reread.hashAt(9999) == null ? 1 : 0, 1);
+            check("hashAt(0) is the genesis hash",
+                    reread.hashAt(0).equals(EventLog.GENESIS_HASH) ? 1 : 0, 1);
+            check("rawLineFor finds the line it names",
+                    EventLog.parseLine(reread.rawLineFor(2)).seq, 2);
+            check("rawLineFor past the end is null",
+                    reread.rawLineFor(9999) == null ? 1 : 0, 1);
+
+            // forEachAfter skips the prefix by counting lines instead of parsing them.
+            // It must agree with the walk that does parse them.
+            for (long after = 0; after <= 4; after++) {
+                final List<Long> slow = new ArrayList<>();
+                final List<Long> fast = new ArrayList<>();
+                final long a = after;
+                reread.forEach(a + 1, se -> { slow.add(se.seq); return true; });
+                reread.forEachAfter(a, se -> { fast.add(se.seq); return true; });
+                check("forEachAfter(" + after + ") matches forEach(" + (after + 1) + ")",
+                        fast.equals(slow) ? 1 : 0, 1);
+            }
+            for (long seq = 0; seq <= 5; seq++) {
+                String slow = reread.hashAt(seq);
+                String fast = reread.hashAtSeqFast(seq);
+                check("hashAtSeqFast(" + seq + ") matches hashAt",
+                        slow == null ? (fast == null ? 1 : 0) : (slow.equals(fast) ? 1 : 0), 1);
+            }
+
+            // The counting rests on entry N being line N. When that stops being true the
+            // fast walk has to notice and fall back, not quietly return the wrong events.
+            Path gappy = scratch("test-stream-gappy.jsonl");
+            Files.deleteIfExists(gappy);
+            List<String> kept = new ArrayList<>(Files.readAllLines(p));
+            kept.remove(1);                      // drop seq 2, so line k now holds seq k+1
+            Files.write(gappy, kept);
+            EventLog broken = new EventLog(gappy);
+            final List<Long> viaFast = new ArrayList<>();
+            final List<Long> viaSlow = new ArrayList<>();
+            broken.forEachAfter(2, se -> { viaFast.add(se.seq); return true; });
+            broken.forEach(3, se -> { viaSlow.add(se.seq); return true; });
+            check("a log whose lines and seqs disagree falls back to the honest walk",
+                    viaFast.equals(viaSlow) ? 1 : 0, 1);
+            check("and the fallback returns the right entries",
+                    viaFast.isEmpty() ? -1 : viaFast.get(0).longValue(), 3);
+        }
+
+        section("L10: a snapshot restores exactly what a full replay builds");
+        {
+            // The check this whole feature rests on. A snapshot is a second way to set
+            // state, and the failure it can produce is a wrong balance that nothing
+            // reports — so this compares every observable of a restored market against a
+            // full replay of the same log, on a log deliberately built to contain the
+            // things a serialiser gets wrong: partially filled resting orders, several
+            // orders queued at one price, a cancel, a withdrawal, a policy change, a
+            // migration and a stipend.
+            Path p = scratch("test-snapshot-rich.jsonl");
+            Files.deleteIfExists(p);
+            EventLog log = new EventLog(p);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            register(log, live, CAROL);
+            grant(log, live, ALICE, 100000);
+            grant(log, live, BOB, 100000);
+            grant(log, live, CAROL, 100000);
+
+            // A policy change, which is the event that has silently wiped fields before.
+            Event.MarketPolicy pol = new Event.MarketPolicy();
+            pol.userId = ALICE;
+            pol.taxBps = 100;
+            pol.grantAmount = live.welcomeGrant();
+            pol.listingFee = 2;
+            pol.listingFreeOrders = 3;
+            pol.stipendAmount = 20;
+            pol.stipendEveryFills = 50;
+            apply(log, live, pol);
+
+            apply(log, live, deposit(ALICE, IRON, 500));
+            apply(log, live, deposit(ALICE, WOOD, 300));
+
+            // Two asks queued at the SAME price — the order between them is who gets
+            // filled first, and a serialiser that writes a price level as a JSON object
+            // loses it silently.
+            apply(log, live, placeOrder(ALICE, IRON, 7, 40, false));
+            apply(log, live, placeOrder(ALICE, IRON, 7, 25, false));
+            apply(log, live, placeOrder(ALICE, IRON, 9, 30, false));
+            apply(log, live, placeOrder(ALICE, WOOD, 3, 100, false));
+
+            // A bid that eats the first ask and part of the second, so a resting order
+            // is left holding a volume no event mentions.
+            apply(log, live, placeOrder(BOB, IRON, 7, 50, true));
+
+            // Resting bids at two levels, from two people.
+            apply(log, live, placeOrder(BOB, IRON, 4, 15, true));
+            apply(log, live, placeOrder(CAROL, IRON, 4, 11, true));
+            apply(log, live, placeOrder(CAROL, IRON, 2, 8, true));
+
+            // A cancel, so a book has had something removed from it.
+            long toCancel = -1;
+            for (Order o : live.peekBook(IRON).restingBids()) {
+                if (o.userID().equals(CAROL) && o.value() == 2) toCancel = o.orderId();
+            }
+            apply(log, live, cancelOrder(CAROL, IRON, toCancel, true));
+
+            // A withdrawal, which is the only thing that writes the withdrawn map.
+            Event.Withdraw wd = withdraw(BOB, IRON, 20);
+            apply(log, live, wd);
+
+            // A migration, which writes three separate sets.
+            UUID otherMarket = UUID.fromString("00000000-0000-0000-0000-00000000f00d");
+            Event.MigrateBalance mb = new Event.MigrateBalance();
+            mb.userId = ALICE;
+            mb.fromMarketId = otherMarket;
+            mb.fromMarketName = "somewhere else";
+            mb.fromHeadSeq = 12;
+            mb.fromHeadHash = "deadbeef";
+            mb.beneficiary = CAROL;
+            mb.credits = 250;
+            mb.items = new java.util.LinkedHashMap<>();
+            mb.items.put(WOOD, 40L);
+            mb.foreignParticipants = java.util.Arrays.asList(BOB, CAROL);
+            apply(log, live, mb);
+
+            check("the fixture has a partly-filled resting order",
+                    restingVolumeAt(live, IRON, 7, false), 15);
+            check("the fixture has a migration in it",
+                    live.hasMigrated(otherMarket, CAROL) ? 1 : 0, 1);
+            check("the fixture withdrew something", live.withdrawnBy(BOB, IRON), 20);
+            check("the fixture traded", live.fillsEver() > 0 ? 1 : 0, 1);
+
+            // Replay the log from scratch — this is the answer a snapshot has to match.
+            EventApplier.Replayed full = EventApplier.verifyAndReplay(new EventLog(p));
+            check("the fixture's chain is whole", full.chainBrokenAt, -1);
+
+            // Write a snapshot of it and read it back through the real file path.
+            EventLog snapLog = new EventLog(p);
+            MarketSnapshot.save(snapLog, full.state, full.headSeq, full.headHash);
+            MarketSnapshot.Restored restored = MarketSnapshot.loadIfValid(snapLog);
+            check("the snapshot was accepted", restored != null ? 1 : 0, 1);
+
+            if (restored != null) {
+                check("restored at the same seq", restored.seq, full.headSeq);
+                String a = describeState(full.state);
+                String b = describeState(restored.state);
+                check("every observable matches a full replay", a.equals(b) ? 1 : 0, 1);
+                if (!a.equals(b)) System.out.println(firstDifference(a, b));
+
+                // Spot-checks with their own names, so a failure says what broke rather
+                // than only that something did.
+                check("credits survive",
+                        restored.state.wallets().getBalance(BOB),
+                        full.state.wallets().getBalance(BOB));
+                check("goods survive",
+                        restored.state.itemBalances().getBalance(BOB, IRON),
+                        full.state.itemBalances().getBalance(BOB, IRON));
+                check("the partly-filled order keeps its remaining volume",
+                        restingVolumeAt(restored.state, IRON, 7, false), 15);
+                check("queue order at one price is preserved",
+                        firstOrderIdAt(restored.state, IRON, 7, false),
+                        firstOrderIdAt(full.state, IRON, 7, false));
+                check("fillsEver survives", restored.state.fillsEver(), full.state.fillsEver());
+                check("the migration guard survives",
+                        restored.state.hasMigratedIn(CAROL) ? 1 : 0, 1);
+                check("the second-grant guard survives",
+                        restored.state.isAccountedElsewhere(BOB) ? 1 : 0, 1);
+                check("the per-branch migration guard survives",
+                        restored.state.hasMigrated(otherMarket, CAROL) ? 1 : 0, 1);
+                check("withdrawals survive", restored.state.withdrawnBy(BOB, IRON), 20);
+                check("trade history survives",
+                        restored.state.trades().countFor(IRON),
+                        full.state.trades().countFor(IRON));
+            }
+
+            // Carrying on from a snapshot must land where a full replay lands.
+            apply(log, live, deposit(ALICE, IRON, 7));
+            apply(log, live, placeOrder(ALICE, IRON, 11, 5, false));
+
+            EventApplier.Replayed viaSnapshot = EventApplier.load(new EventLog(p));
+            EventApplier.Replayed viaReplay = EventApplier.verifyAndReplay(new EventLog(p));
+            check("a tail replay reaches the same head", viaSnapshot.headSeq, viaReplay.headSeq);
+            check("a tail replay reaches the same hash",
+                    viaSnapshot.headHash.equals(viaReplay.headHash) ? 1 : 0, 1);
+            check("a tail replay reaches the same state",
+                    describeState(viaSnapshot.state).equals(describeState(viaReplay.state))
+                            ? 1 : 0, 1);
+        }
+
+        section("L11: a snapshot that no longer describes its log is refused");
+        {
+            Path p = scratch("test-snapshot-stale.jsonl");
+            Files.deleteIfExists(p);
+            EventLog log = new EventLog(p);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            grant(log, live, BOB, 500);
+            apply(log, live, deposit(ALICE, IRON, 10));
+
+            EventApplier.Replayed full = EventApplier.verifyAndReplay(new EventLog(p));
+            MarketSnapshot.save(new EventLog(p), full.state, full.headSeq, full.headHash);
+            check("a fresh snapshot is accepted",
+                    MarketSnapshot.loadIfValid(new EventLog(p)) != null ? 1 : 0, 1);
+
+            // Rewrite history and re-chain it, which is the case the hash binding is for.
+            Path rewritten = scratch("test-snapshot-rewritten.jsonl");
+            Files.deleteIfExists(rewritten);
+            Files.write(rewritten, Files.readAllLines(p));
+            Files.copy(pathOfSnapshot(p), pathOfSnapshot(rewritten),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            List<String> lines = Files.readAllLines(rewritten);
+            int at = lineOf(lines, "Deposit");
+            String edited = lines.get(at).replace("\"quantity\":10", "\"quantity\":99");
+            SequencedEvent se = EventLog.parseLine(edited);
+            lines.set(at, edited.replace("\"hash\":\"" + se.hash + "\"",
+                    "\"hash\":\"" + EventLog.recomputeHash(se) + "\""));
+            Files.write(rewritten, lines);
+            check("a re-chained edit invalidates the snapshot",
+                    MarketSnapshot.loadIfValid(new EventLog(rewritten)) == null ? 1 : 0, 1);
+
+            // Truncation below the snapshot point leaves no hash to match.
+            Path shortened = scratch("test-snapshot-short.jsonl");
+            Files.deleteIfExists(shortened);
+            List<String> fewer = new ArrayList<>(Files.readAllLines(p));
+            fewer.remove(fewer.size() - 1);
+            Files.write(shortened, fewer);
+            Files.copy(pathOfSnapshot(p), pathOfSnapshot(shortened),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            check("a truncated log invalidates the snapshot",
+                    MarketSnapshot.loadIfValid(new EventLog(shortened)) == null ? 1 : 0, 1);
+
+            // A snapshot from a build whose MarketState was shaped differently.
+            Path reshaped = scratch("test-snapshot-reshaped.jsonl");
+            Files.deleteIfExists(reshaped);
+            Files.write(reshaped, Files.readAllLines(p));
+            String body = new String(Files.readAllBytes(pathOfSnapshot(p)),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            Files.write(pathOfSnapshot(reshaped),
+                    body.replace("\"shape\":\"" + MarketSnapshot.shapeFingerprint() + "\"",
+                            "\"shape\":\"0000000000000000\"")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            check("a different MarketState shape invalidates the snapshot",
+                    MarketSnapshot.loadIfValid(new EventLog(reshaped)) == null ? 1 : 0, 1);
+
+            // Garbage in the file must cost a slow load, never a crash.
+            Path junk = scratch("test-snapshot-junk.jsonl");
+            Files.deleteIfExists(junk);
+            Files.write(junk, Files.readAllLines(p));
+            Files.write(pathOfSnapshot(junk),
+                    "{not json at all".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            check("an unreadable snapshot is refused rather than thrown",
+                    MarketSnapshot.loadIfValid(new EventLog(junk)) == null ? 1 : 0, 1);
+            check("and the market still loads",
+                    EventApplier.load(new EventLog(junk)).headSeq, full.headSeq);
+        }
+
+        section("L13: a snapshot gets written when it is worth writing, and not before");
+        {
+            // This was missed entirely by L10 and L11, which both call save() and
+            // loadIfValid() directly. Nothing exercised the decision to write one, so
+            // nothing noticed that the first write was tested against STRIDE rather than
+            // MIN_EVENTS — which made MIN_EVENTS decide nothing, invisibly, because the
+            // two constants ship equal. Found by a person lowering MIN_EVENTS to try the
+            // feature and getting no snapshot and no reason why.
+            // Shrunk so the end-to-end half can watch a file appear without building
+            // five thousand signed events. Restored below whatever happens.
+            long[] wasThresholds = MarketSnapshot.thresholdsForTesting(50, 20);
+            try {
+            long min = MarketSnapshot.minEvents();
+            long stride = MarketSnapshot.stride();
+
+            check("nothing below the minimum",
+                    MarketSnapshot.worthWriting(min - 1, -1) ? 1 : 0, 0);
+            check("the first one lands at the minimum",
+                    MarketSnapshot.worthWriting(min, -1) ? 1 : 0, 1);
+            check("the first one does not wait for a stride",
+                    MarketSnapshot.worthWriting(min, 0) ? 1 : 0, 1);
+            check("an existing one is left alone until the log moves a stride",
+                    MarketSnapshot.worthWriting(min + stride - 1, min) ? 1 : 0, 0);
+            check("and replaced once it has",
+                    MarketSnapshot.worthWriting(min + stride, min) ? 1 : 0, 1);
+            check("a short log is never snapshotted, whatever sits beside it",
+                    MarketSnapshot.worthWriting(min - 1, 1) ? 1 : 0, 0);
+
+            // And the same decision through the real path, on a real log.
+            Path p = scratch("test-snapshot-policy.jsonl");
+            Files.deleteIfExists(p);
+            Files.deleteIfExists(pathOfSnapshot(p));
+            EventLog log = new EventLog(p);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            grant(log, live, BOB, 1000);
+
+            EventApplier.load(new EventLog(p));
+            check("a four-event market writes no snapshot",
+                    Files.exists(pathOfSnapshot(p)) ? 1 : 0, 0);
+
+            // Past the minimum, through EventApplier.load, with no snapshot present.
+            while (log.lastSeq() < MarketSnapshot.minEvents()) {
+                apply(log, live, deposit(BOB, IRON, 1));
+            }
+            EventApplier.Replayed wrote = EventApplier.load(new EventLog(p));
+            check("reaching the minimum writes one",
+                    Files.exists(pathOfSnapshot(p)) ? 1 : 0, 1);
+
+            MarketSnapshot.Restored back = MarketSnapshot.loadIfValid(new EventLog(p));
+            check("the one it wrote is usable", back != null ? 1 : 0, 1);
+            if (back != null) {
+                check("and it is at the head it was written from", back.seq, wrote.headSeq);
+                check("and it restores what a replay builds",
+                        describeState(back.state).equals(describeState(wrote.state))
+                                ? 1 : 0, 1);
+            }
+
+            // A damaged chain must never get one — a snapshot of a state nobody should
+            // be using is a way to keep using it.
+            Path bad = scratch("test-snapshot-nodamage.jsonl");
+            Files.deleteIfExists(bad);
+            Files.deleteIfExists(pathOfSnapshot(bad));
+            List<String> lines = new ArrayList<>(Files.readAllLines(p));
+            int at = lineOf(lines, "Deposit");
+            lines.set(at, lines.get(at).replace("\"quantity\":1", "\"quantity\":2"));
+            Files.write(bad, lines);
+            EventApplier.Replayed broken = EventApplier.load(new EventLog(bad));
+            check("the tampered fixture is seen as damaged",
+                    broken.chainBrokenAt != -1 ? 1 : 0, 1);
+            check("a damaged chain is never snapshotted",
+                    Files.exists(pathOfSnapshot(bad)) ? 1 : 0, 0);
+
+            // A load says which of the two things it did. This is not cosmetic: the
+            // whole feature is invisible when it works, so the console line was
+            // identical either way and a live test could not tell whether the snapshot
+            // had been used at all.
+            check("a full replay says so", wrote.restoredFrom, 0);
+            check("and describes itself as one",
+                    wrote.describe().equals("replayed " + wrote.headSeq + " events")
+                            ? 1 : 0, 1);
+
+            apply(log, live, deposit(BOB, IRON, 1));
+            EventApplier.Replayed viaSnap = EventApplier.load(new EventLog(p));
+            check("a restored load reports where it started from",
+                    viaSnap.restoredFrom, wrote.headSeq);
+            check("and counts only the tail it replayed",
+                    viaSnap.describe().contains("replayed 1 event since") ? 1 : 0, 1);
+            check("and still reaches the real head", viaSnap.headSeq, wrote.headSeq + 1);
+
+            // The client is the third load path and the only one that runs every
+            // session rather than once per world, so it is the one a snapshot is worth
+            // most on — and it was the one left out.
+            //
+            // What this proves and what it does not: it proves a client built over a log
+            // with a snapshot beside it lands exactly where a full replay lands, which
+            // is the property that matters and the one a bad restore would break. It
+            // does not prove the snapshot was used — putting the client back on a bare
+            // replay leaves these two green, because using one is a speed change. That
+            // half rests on the checks above, which show load() restoring, and on the
+            // client calling load().
+            EventApplier.Replayed fullNow = EventApplier.verifyAndReplay(new EventLog(p));
+            io.github.badbull643.economiesmod.core.net.MarketClient asClient =
+                    new io.github.badbull643.economiesmod.core.net.MarketClient(
+                            BOB, "Bob", testKeys(), new EventLog(p), false,
+                            new PeerCache(scratch("test-snapshot-peers.json")), 0);
+            check("a client over a snapshotted log reaches the same seq",
+                    asClient.lastSeq(), fullNow.headSeq);
+            check("and the same state",
+                    describeState(asClient.state()).equals(describeState(fullNow.state))
+                            ? 1 : 0, 1);
+            } finally {
+                MarketSnapshot.thresholdsForTesting(wasThresholds[0], wasThresholds[1]);
+            }
+            // Against what the seam borrowed, not against a number written here. Writing
+            // 5000 in this line made the suite fail the moment somebody lowered the
+            // default to try the feature in game, which is the one time they most need
+            // the suite to still work — and it was checking the wrong thing anyway. What
+            // matters is that the seam puts back whatever it found.
+            check("the thresholds are put back where they were",
+                    MarketSnapshot.minEvents(), wasThresholds[0]);
+            check("and so is the stride", MarketSnapshot.stride(), wasThresholds[1]);
+        }
+
+        section("L14: a snapshot with no log beside it, which is what step 4 leaves behind");
+        {
+            // A client of a dedicated market keeps a snapshot and stops writing history.
+            // Next session there is a snapshot and an empty log, and the snapshot has to
+            // be taken on its own authority — the alternative is re-downloading the whole
+            // market every session, which is worse than what it replaced.
+            long[] was = MarketSnapshot.thresholdsForTesting(10, 10);
+            try {
+                Path full = scratch("test-nolog-source.jsonl");
+                Files.deleteIfExists(full);
+                Files.deleteIfExists(pathOfSnapshot(full));
+                EventLog log = new EventLog(full);
+                MarketState live = new MarketState();
+                seedMarket(log, live);
+                register(log, live, BOB);
+                grant(log, live, ALICE, 5000);
+                grant(log, live, BOB, 5000);
+                apply(log, live, deposit(ALICE, IRON, 40));
+                apply(log, live, placeOrder(ALICE, IRON, 6, 20, false));
+                apply(log, live, placeOrder(BOB, IRON, 6, 20, true));
+                EventApplier.Replayed real = EventApplier.verifyAndReplay(new EventLog(full));
+
+                // The shape a snapshot-only replica is left in: its snapshot, no history.
+                Path bare = scratch("test-nolog-client.jsonl");
+                Files.deleteIfExists(bare);
+                Files.deleteIfExists(pathOfSnapshot(bare));
+                MarketSnapshot.save(new EventLog(bare), real.state, real.headSeq,
+                        real.headHash, true);
+                Files.write(bare, new byte[0]);
+
+                check("the log really is empty", new EventLog(bare).lastSeq(), 0);
+                MarketSnapshot.Restored kept = MarketSnapshot.loadIfValid(new EventLog(bare));
+                check("a snapshot with no log is taken on its own authority",
+                        kept != null ? 1 : 0, 1);
+                if (kept != null) {
+                    check("at the head it was written from", kept.seq, real.headSeq);
+                    check("and it is the same market a full replay builds",
+                            describeState(kept.state).equals(describeState(real.state))
+                                    ? 1 : 0, 1);
+                }
+                EventLog bareLog = new EventLog(bare);
+                EventApplier.Replayed viaLoad = EventApplier.load(bareLog);
+                check("loading it reaches that head too", viaLoad.headSeq, real.headSeq);
+                check("and says it was restored", viaLoad.restoredFrom, real.headSeq);
+
+                // And says the log does not hold what the state was built from. The
+                // obvious way to ask this afterwards — log.lastSeq() — is primed from
+                // the state by the load, so a nought-byte log answers with the state's
+                // head. That is what the Host gate asked, which is why it let a replica
+                // with no history at all offer to serve one. Measured on a real slot:
+                // nought bytes, lastSeq() of nine.
+                check("a restored load knows its log does not cover it",
+                        viaLoad.logCoversHead ? 1 : 0, 0);
+                // On the log object the load used — which is the one the holder keeps as
+                // localLog, and the one the gate was asking.
+                check("the loaded log still gives the misleading answer",
+                        bareLog.lastSeq(), real.headSeq);
+                check("while the file itself says otherwise",
+                        bareLog.headSeqOnDisk(), 0);
+                check("a full replay covers its own head",
+                        EventApplier.load(new EventLog(full)).logCoversHead ? 1 : 0, 1);
+
+                // The distinction that makes this safe: an empty log is "nothing to
+                // check against", a SHORT log is "we disagree" and must be refused.
+                Path shortLog = scratch("test-nolog-short.jsonl");
+                Files.deleteIfExists(shortLog);
+                Files.deleteIfExists(pathOfSnapshot(shortLog));
+                MarketSnapshot.save(new EventLog(shortLog), real.state, real.headSeq,
+                        real.headHash);
+                List<String> firstFew = new ArrayList<>(
+                        Files.readAllLines(full).subList(0, 3));
+                Files.write(shortLog, firstFew);
+                check("a log too short to reach the snapshot is a disagreement, not a gap",
+                        MarketSnapshot.loadIfValid(new EventLog(shortLog)) == null ? 1 : 0, 1);
+
+                // And the distinction the whole rule turns on. An ordinary snapshot —
+                // one written beside a log that was being kept — is NOT usable without
+                // that log. Otherwise deleting a market's log would stop resetting the
+                // market: the snapshot beside it would hand the old market straight
+                // back. Only a replica that deliberately keeps no history says so in
+                // the file, and only that one is taken on its own word.
+                Path deleted = scratch("test-nolog-deleted.jsonl");
+                Files.deleteIfExists(deleted);
+                Files.deleteIfExists(pathOfSnapshot(deleted));
+                MarketSnapshot.save(new EventLog(deleted), real.state, real.headSeq,
+                        real.headHash);            // the ordinary kind, log kept
+                Files.write(deleted, new byte[0]);  // ...and then the log goes missing
+                // A snapshot-only slot still has to be nameable. Its log holds no genesis
+                // to read a name from, and without a fallback the market switcher drew a
+                // row with nothing on it — an entry nobody could tell from any other, in
+                // the control §0.16 exists about.
+                check("a snapshot names its market when the log cannot",
+                        "test market".equals(
+                                MarketSnapshot.marketNameFor(new EventLog(bare))) ? 1 : 0, 1);
+                check("and there is nothing to read when no snapshot is there",
+                        MarketSnapshot.marketNameFor(new EventLog(full)) == null ? 1 : 0, 1);
+
+                // Through the switcher's own question, not just the helper behind it.
+                // Checking only the helper left the fallback in MarketSlots untested —
+                // removing it kept every check green, which makes them the wrong checks.
+                Path world = scratch("nolog-world");
+                Path slotLog = MarketSlots.logPath(world, "market-2");
+                Files.createDirectories(slotLog.getParent());
+                Files.deleteIfExists(slotLog);
+                Files.deleteIfExists(slotLog.resolveSibling(
+                        slotLog.getFileName() + ".snapshot.json"));
+                MarketSnapshot.save(new EventLog(slotLog), real.state, real.headSeq,
+                        real.headHash, true);
+                Files.write(slotLog, new byte[0]);
+                check("the switcher can name a slot that holds only a snapshot",
+                        "test market".equals(MarketSlots.marketNameIn(world, "market-2"))
+                                ? 1 : 0, 1);
+
+                check("deleting a log still resets the market",
+                        MarketSnapshot.loadIfValid(new EventLog(deleted)) == null ? 1 : 0, 1);
+                check("and the market really is gone",
+                        EventApplier.load(new EventLog(deleted)).headSeq, 0);
+            } finally {
+                MarketSnapshot.thresholdsForTesting(was[0], was[1]);
+            }
+        }
+
+        section("L15: who keeps a market's history, and who is allowed to serve it");
+        {
+            Path sf = scratch("test-archive-settings.json");
+            Files.deleteIfExists(sf);
+            Settings s = new Settings(sf);
+            UUID big = UUID.randomUUID();
+            UUID small = UUID.randomUUID();
+
+            check("nothing is archived to begin with", s.archives(big) ? 1 : 0, 0);
+            s.setArchives(big, true);
+            check("saying so is remembered", s.archives(big) ? 1 : 0, 1);
+            check("and only for that market", s.archives(small) ? 1 : 0, 0);
+
+            // Reopened from disk, because a setting that lives only in memory would look
+            // right here and be gone by the session it is for.
+            check("and survives being written and read back",
+                    new Settings(sf).archives(big) ? 1 : 0, 1);
+
+            s.setArchives(big, false);
+            check("and can be turned off again", s.archives(big) ? 1 : 0, 0);
+
+            // A market we cannot name is never an instruction to discard history. Every
+            // caller has to get a definite no out of this, and null is not one.
+            check("an unknown market is archived, not discarded",
+                    s.archives(null) ? 1 : 0, 1);
+        }
+
+        section("L16: one world does not keep the same market in two slots");
+        {
+            // Found by a player adding a market and joining the same server again, which
+            // nothing stopped. Two copies of one market on one machine are two heads that
+            // drift apart, and hosting the older one forks the market with nobody else
+            // involved.
+            Path world = scratch("dup-world");
+            Files.createDirectories(world);
+            Path a = MarketSlots.logPath(world, MarketSlots.DEFAULT);
+            Path b = MarketSlots.logPath(world, "market-2");
+            for (Path p : new Path[]{a, b}) {
+                Files.createDirectories(p.getParent());
+                Files.deleteIfExists(p);
+                Files.deleteIfExists(p.resolveSibling(p.getFileName() + ".snapshot.json"));
+            }
+
+            EventLog logA = new EventLog(a);
+            MarketState liveA = new MarketState();
+            Event.MarketCreated mc = seedMarket(logA, liveA);
+            UUID theMarket = liveA.marketId();
+
+            check("a slot's market is readable", theMarket.equals(
+                    MarketSlots.marketIdIn(world, MarketSlots.DEFAULT)) ? 1 : 0, 1);
+            check("an empty slot holds nothing",
+                    MarketSlots.marketIdIn(world, "market-2") == null ? 1 : 0, 1);
+            check("the slot that does hold it is found when it is not the exception",
+                    MarketSlots.DEFAULT.equals(
+                            MarketSlots.slotHolding(world, theMarket, "market-2"))
+                            ? 1 : 0, 1);
+            check("and the slot itself is never its own duplicate",
+                    MarketSlots.slotHolding(world, theMarket, MarketSlots.DEFAULT) == null
+                            ? 1 : 0, 1);
+
+            // Now make market-2 a snapshot-only copy of the same market, which is the
+            // shape the real one had — the duplicate this must see is the one with no
+            // log to read an identity from.
+            EventApplier.Replayed replayed = EventApplier.verifyAndReplay(new EventLog(a));
+            MarketSnapshot.save(new EventLog(b), replayed.state, replayed.headSeq,
+                    replayed.headHash, true);
+            Files.write(b, new byte[0]);
+            check("a snapshot-only slot still says which market it is",
+                    theMarket.equals(MarketSlots.marketIdIn(world, "market-2")) ? 1 : 0, 1);
+            check("and is found as a duplicate of the first",
+                    "market-2".equals(
+                            MarketSlots.slotHolding(world, theMarket, MarketSlots.DEFAULT))
+                            ? 1 : 0, 1);
+            check("a market nobody holds is found nowhere",
+                    MarketSlots.slotHolding(world, UUID.randomUUID(), null) == null ? 1 : 0, 1);
+        }
+
+        section("L12: the shape fingerprint sees the fields it has to see");
+        {
+            List<String> shape = MarketSnapshot.shapeLines();
+            // Every field MarketSnapshot writes has to be in the fingerprint, or adding
+            // one like it later would not invalidate old snapshots.
+            String all = String.join("\n", shape);
+            check("it covers MarketState's own fields",
+                    all.contains("MarketState.migratedIn") ? 1 : 0, 1);
+            check("it covers the wallet registry's insides",
+                    all.contains("WalletRegistry.balances") ? 1 : 0, 1);
+            check("it covers the order book's insides",
+                    all.contains("OrderBook.asks") ? 1 : 0, 1);
+            check("it covers an order's insides",
+                    all.contains("Order.volume_") ? 1 : 0, 1);
+            check("it covers trade history",
+                    all.contains("TradeHistory.byItem") ? 1 : 0, 1);
+            check("it covers item balances",
+                    all.contains("ItemBalanceRegistry.balances") ? 1 : 0, 1);
+            check("it records types, not just names",
+                    all.contains("java.util.Map<java.util.UUID, java.lang.Long>") ? 1 : 0, 1);
+            check("the fingerprint is stable across calls",
+                    MarketSnapshot.shapeFingerprint()
+                            .equals(MarketSnapshot.shapeFingerprint()) ? 1 : 0, 1);
+            check("static constants are not mistaken for state",
+                    all.contains("TradeHistory.MAX_PER_ITEM") ? 0 : 1, 1);
+        }
+
         System.out.println();
         if (failures == 0) {
             System.out.println("ALL " + checksRun + " CHECKS PASSED");
@@ -3525,6 +4319,114 @@ public class MarketTests {
             System.out.println(failures + " of " + checksRun + " checks FAILED");
         }
         System.exit(failures == 0 ? 0 : 1);
+    }
+
+    private static Path pathOfSnapshot(Path log) {
+        return log.resolveSibling(log.getFileName() + ".snapshot.json");
+    }
+
+    private static long restingVolumeAt(MarketState s, String item, long price, boolean bid) {
+        OrderBook b = s.peekBook(item);
+        if (b == null) return -1;
+        long total = 0;
+        for (Order o : (bid ? b.restingBids() : b.restingAsks())) {
+            if (o.value() == price) total += o.volume();
+        }
+        return total;
+    }
+
+    private static long firstOrderIdAt(MarketState s, String item, long price, boolean bid) {
+        OrderBook b = s.peekBook(item);
+        if (b == null) return -1;
+        for (Order o : (bid ? b.restingBids() : b.restingAsks())) {
+            if (o.value() == price) return o.orderId();
+        }
+        return -1;
+    }
+
+    /** The first line where two state descriptions differ, for a readable failure. */
+    private static String firstDifference(String a, String b) {
+        String[] as = a.split("\n"), bs = b.split("\n");
+        for (int i = 0; i < Math.max(as.length, bs.length); i++) {
+            String x = i < as.length ? as[i] : "(missing)";
+            String y = i < bs.length ? bs[i] : "(missing)";
+            if (!x.equals(y)) {
+                return "         replay: " + x + "\n       restored: " + y;
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Everything a market can be asked, rendered in a fixed order.
+     *
+     * Deliberately built from the <b>public</b> questions rather than from the
+     * collections MarketSnapshot reads, so a field the snapshot drops shows up here as a
+     * difference instead of being invisible to a comparison that made the same omission
+     * twice.
+     */
+    private static String describeState(MarketState s) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("marketId=").append(s.marketId()).append('\n');
+        sb.append("marketName=").append(s.marketName()).append('\n');
+        sb.append("creator=").append(s.creator()).append('\n');
+        sb.append("taxBps=").append(s.taxBps()).append('\n');
+        sb.append("welcomeGrant=").append(s.welcomeGrant()).append('\n');
+        sb.append("listingFee=").append(s.listingFee()).append('\n');
+        sb.append("listingFreeOrders=").append(s.listingFreeOrders()).append('\n');
+        sb.append("stipendAmount=").append(s.stipendAmount()).append('\n');
+        sb.append("stipendEveryFills=").append(s.stipendEveryFills()).append('\n');
+        sb.append("fillsEver=").append(s.fillsEver()).append('\n');
+        sb.append("registeredCount=").append(s.registeredCount()).append('\n');
+
+        List<UUID> users = new ArrayList<>(s.registeredUsers());
+        java.util.Collections.sort(users);
+        java.util.TreeSet<String> items = new java.util.TreeSet<>(s.activeItems());
+        items.addAll(s.trades().tradedItems());
+
+        for (UUID u : users) {
+            sb.append("user ").append(u)
+              .append(" key=").append(s.publicKeyOf(u))
+              .append(" credits=").append(s.wallets().getBalance(u))
+              .append(" granted=").append(s.hasBeenGranted(u))
+              .append(" elsewhere=").append(s.isAccountedElsewhere(u))
+              .append(" migratedIn=").append(s.hasMigratedIn(u))
+              .append(" stipendedAt=").append(s.stipendedAtFill(u))
+              .append(" openOrders=").append(s.openOrderCount(u))
+              .append(" nextFee=").append(s.listingFeeFor(u))
+              .append('\n');
+            for (String it : items) {
+                sb.append("  holds ").append(it)
+                  .append('=').append(s.itemBalances().getBalance(u, it))
+                  .append(" withdrawn=").append(s.withdrawnBy(u, it)).append('\n');
+            }
+        }
+
+        for (String it : items) {
+            sb.append("item ").append(it)
+              .append(" lastPrice=").append(s.trades().lastPrice(it))
+              .append(" trades=").append(s.trades().countFor(it))
+              .append(" volume=").append(s.trades().volumeFor(it))
+              .append(" hasBook=").append(s.hasBook(it))
+              .append('\n');
+            OrderBook b = s.peekBook(it);
+            if (b != null) {
+                for (Order o : b.restingAsks()) sb.append("  ask ").append(describeOrder(o)).append('\n');
+                for (Order o : b.restingBids()) sb.append("  bid ").append(describeOrder(o)).append('\n');
+            }
+            for (Trade t : s.trades().recentFor(it)) {
+                sb.append("  trade seq=").append(t.seq).append(" ts=").append(t.timestamp)
+                  .append(' ').append(t.quantity).append('@').append(t.price)
+                  .append(" buyer=").append(t.buyerId)
+                  .append(" seller=").append(t.sellerId).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String describeOrder(Order o) {
+        return "id=" + o.orderId() + " price=" + o.value() + " vol=" + o.volume()
+                + " item=" + o.itemID() + " bid=" + o.isBid() + " user=" + o.userID();
     }
 
     // ── helpers ──

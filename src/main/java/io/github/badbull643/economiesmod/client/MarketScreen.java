@@ -786,8 +786,15 @@ public class MarketScreen extends Screen {
         // should not — which is what a comment beside the Migrate button has claimed
         // this does since before it did any of it.
         boolean servedByBox = dedicatedServesThisMarket();
+        // And greyed when this machine has the market but not its history. A snapshot-only
+        // replica of a dedicated market would bind a port, advertise the market, and have
+        // no lines to send anybody who joined. servedByBox does not cover it: that check
+        // is live-only, so it goes false the moment the server stops being discovered,
+        // which is precisely when somebody would reach for this button.
+        boolean canServeIt = MarketStateHolder.hasFullHistory();
         if (hostButton != null) {
-            hostButton.active = hostButton.visible && has && !hosting && !servedByBox;
+            hostButton.active = hostButton.visible && has && !hosting && !servedByBox
+                    && canServeIt;
         }
 
         // Only one of these can ever be the right thing to press: connect() stops
@@ -1065,9 +1072,14 @@ public class MarketScreen extends Screen {
                         // Also compares their head against our chain — the poll already
                         // carries a signed (seq, hash), so a split is detectable here
                         // without anyone attempting a connection first.
+                        // The address rides along because the comparison is no longer
+                        // always local: a peer claiming a head above ours has to be
+                        // asked for their hash at ours, and the probe reply cannot
+                        // carry a point it was not asked about.
                         MarketStateHolder.observeHostHead(
                                 UUID.fromString(h.reply.marketId), h.reply.lastSeq,
-                                h.reply.lastHash, h.reply.userId, h.reply.hostName);
+                                h.reply.lastHash, h.reply.userId, h.reply.hostName,
+                                h.peer.address, h.peer.port);
                     } catch (IllegalArgumentException ignored) {
                         // malformed marketId from a peer — not ours to fix
                     }
@@ -2589,9 +2601,43 @@ public class MarketScreen extends Screen {
 
     private int replaceBoxH() { return frameH(); }
 
-    /** Top of one row. The single source for drawing it and for hit-testing it. */
+    /** The first row's top, below the header that doubles as dismiss. */
+    private int replaceListTop() {
+        return replaceBoxTop() + 8 + DISCOVERY_ROW_HEIGHT + 4;
+    }
+
+    /** Where rows stop being drawn — the panel's own bottom, not the frame's. */
+    private int replaceListBottom() {
+        return Math.min(replaceBoxTop() + replaceBoxH() - 4, panelBottom());
+    }
+
+    /**
+     * Where row i sits, scroll included.
+     *
+     * The scroll is subtracted here rather than at each caller because the render and
+     * the hit test both come through this method, and that is the only reason they have
+     * never disagreed about where a row is. Nine orders after a reset was the first time
+     * the list outgrew its box: rows past the bottom were drawn nowhere and reachable by
+     * nothing, and the list is the only record of what to put back.
+     *
+     * Fourth time in this file — the Market column, the market switcher, the reset
+     * overlay, and now this. All four stacked content downwards with no bound and lost
+     * the far end of it. The session log's note after the second one said the next thing
+     * that stacks without a scroll would be next; it was.
+     */
     private int replaceRowY(int index) {
-        return replaceBoxTop() + 8 + DISCOVERY_ROW_HEIGHT + 4 + index * REPLACE_ROW_H;
+        return replaceListTop() + index * REPLACE_ROW_H - scrollOf("replace");
+    }
+
+    /**
+     * Whether a row at this y is on screen, asked by the drawing and the hit test both.
+     *
+     * A row that cannot be seen but still re-places an order when clicked is the defect
+     * this file keeps producing, and scrolling creates it at the top as well as the
+     * bottom — the earlier version only ever ran out of room downwards.
+     */
+    private boolean replaceRowVisible(int y) {
+        return y >= replaceListTop() && y + REPLACE_ROW_H <= replaceListBottom();
     }
 
     private void renderReplaceList(MatrixStack matrices, int mouseX, int mouseY) {
@@ -2618,10 +2664,20 @@ public class MarketScreen extends Screen {
 
         MarketState s = MarketStateHolder.get();
         List<MarketOldRow> rows = replaceRows();
+
+        // The wheel is worth catching anywhere over the box; the rows are clipped to
+        // the narrower band between the header and the panel bottom. Those are two
+        // rectangles, which is the distinction noteScrollable was given a viewH for
+        // after measuring the Market column against the wrong one left its last row
+        // unreachable at every offset.
+        noteScrollable("replace", boxX, replaceBoxTop(), boxW, replaceBoxH(),
+                replaceListBottom() - replaceListTop(),
+                rows.size() * REPLACE_ROW_H, mouseX, mouseY);
+
         for (int i = 0; i < rows.size(); i++) {
             MarketStateHolder.OldOrder o = rows.get(i).order;
             int y = replaceRowY(i);
-            if (y + REPLACE_ROW_H > panelBottom()) break;
+            if (!replaceRowVisible(y)) continue;
 
             drawIcon(matrices, new ItemStack(MinecraftIds.idToItem(o.itemId)),
                     boxX + 6, y, "");
@@ -2857,7 +2913,7 @@ public class MarketScreen extends Screen {
             List<MarketOldRow> rows = replaceRows();
             for (int i = 0; i < rows.size(); i++) {
                 int y = replaceRowY(i);
-                if (y + REPLACE_ROW_H > panelBottom()) break;
+                if (!replaceRowVisible(y)) continue;
                 if (inBox && mouseY >= y && mouseY < y + REPLACE_ROW_H) {
                     replaceOrder(rows.get(i).order);
                     return true;
