@@ -752,6 +752,24 @@ public class AdmissionTest {
             check("turning archiving on fetches the history", after >= reached ? 1 : 0, 1);
             check("and the fetched log is a whole chain",
                     new EventLog(clientLog).verifyChain(), -1);
+
+            // A host's self-connect is also told not to persist, and means something
+            // entirely different by it: the log is right there, being written by the
+            // HostServer on the other end of the socket. Writing a snapshot for it
+            // marked a full history as one that stands without its log — which is the
+            // one kind that survives the log being deleted, so deleting that log would
+            // have handed the market back. Found in a real session, in a line that
+            // failed twice over: two shutdown paths racing on one temporary file.
+            Path selfLog = dir.resolve("refetch-selfconnect.jsonl");
+            Path selfSnap = selfLog.resolveSibling(selfLog.getFileName() + ".snapshot.json");
+            Files.deleteIfExists(selfLog);
+            Files.deleteIfExists(selfSnap);
+            MarketClient selfish = new MarketClient(INVITED, "selfconnect", mine,
+                    new EventLog(selfLog), false, cache, 0, id -> true);
+            selfish.connect("127.0.0.1", cfg.port);
+            selfish.disconnect();
+            check("a caller that never wanted a log gets no snapshot either",
+                    Files.exists(selfSnap) ? 1 : 0, 0);
         } finally {
             host.stop();
         }
