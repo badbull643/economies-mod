@@ -380,29 +380,8 @@ public class MarketClient {
                     + sync.marketName + ") — cannot join");
         }
 
-        // A long history arrives across several frames. Identity rode on the first one;
-        // gather the rest of the lines before applying any, so a transfer that dies
-        // partway leaves our log untouched rather than half-advanced.
-        List<String> syncLines = new ArrayList<>();
-        if (sync.logLines != null) syncLines.addAll(sync.logLines);
-        boolean complete = sync.complete;
-        int frames = 1;
-        while (!complete) {
-            Message next = channel.receive();
-            if (!(next instanceof Message.Sync)) {
-                channel.close();
-                throw new IOException("host stopped partway through the sync");
-            }
-            Message.Sync more = (Message.Sync) next;
-            if (more.logLines != null) syncLines.addAll(more.logLines);
-            complete = more.complete;
-            frames++;
-        }
-        if (frames > 1) {
-            System.out.println("[client] received " + syncLines.size()
-                    + " events in " + frames + " chunks");
-        }
-
+        // Said before anything is applied, because it is a warning about who we are
+        // taking a history from and is worth less after we have taken it.
         if (peerCache != null && sync.hostUserId != null
                 && !sync.hostUserId.equals(userId.toString())
                 && peerCache.keyChanged(sync.hostUserId, sync.hostPublicKey)) {
@@ -411,12 +390,57 @@ public class MarketClient {
             onRejected.accept("Warning: " + sync.hostName + "'s key has changed");
         }
 
-        boolean synced;
+        // A long history arrives across several frames, and is applied a frame at a time
+        // rather than gathered first.
+        //
+        // Gathering was deliberate — "so a transfer that dies partway leaves our log
+        // untouched rather than half-advanced" — and it is the same shape as the bug on
+        // the host, in the place it does more damage: a Minecraft client, with the game
+        // already holding most of the heap, building the entire market in memory before
+        // touching any of it. Measured on the host side at roughly the size of the log
+        // again, so a large market was a first join that could not complete at all.
+        //
+        // What the old property bought is smaller than it looks. A transfer that dies at
+        // event three hundred of seven hundred thousand now leaves three hundred events:
+        // a valid prefix of the chain, with position and state advanced together, so the
+        // next connect says "I have three hundred" and carries on from there instead of
+        // starting again. All-or-nothing is traded for resumable, which is the better of
+        // the two on exactly the histories that made this a problem.
+        boolean synced = true;
+        long received = 0;
+        int frames = 0;
+        replaying = true;
         try {
-            synced = applySyncLines(syncLines);
+            Message.Sync frame = sync;
+            while (true) {
+                frames++;
+                if (frame.logLines != null) {
+                    for (String line : frame.logLines) {
+                        if (!applyLine(line)) {
+                            synced = false;
+                            break;
+                        }
+                        received++;
+                    }
+                }
+                if (!synced || frame.complete) break;
+
+                Message next = channel.receive();
+                if (!(next instanceof Message.Sync)) {
+                    channel.close();
+                    throw new IOException("host stopped partway through the sync");
+                }
+                frame = (Message.Sync) next;
+            }
         } catch (IllegalStateException e) {
             channel.close();
             throw new IOException("cannot read host's events — mod version mismatch?");
+        } finally {
+            replaying = false;
+        }
+        if (frames > 1) {
+            System.out.println("[client] received " + received
+                    + " events in " + frames + " chunks");
         }
         if (!synced) {
             channel.close();
@@ -764,18 +788,6 @@ public class MarketClient {
     }
 
     /** Returns false if a line failed verification, meaning the connection is finished. */
-    private boolean applySyncLines(List<String> lines) {
-        replaying = true;
-        try {
-            for (String line : lines) {
-                if (!applyLine(line)) return false;
-            }
-            return true;
-        } finally {
-            replaying = false;
-        }
-    }
-
     private volatile long appliedSeq = 0;
 
     /**
