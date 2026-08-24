@@ -3406,6 +3406,17 @@ public class MarketTests {
             String warning = hostFor(disagrees, file).grantMismatchWarning();
             check("a mismatch is reported", warning != null ? 1 : 0, 1);
 
+            // And names the log this host actually opened. Only the dedicated launcher
+            // derives its config and its log path together; a world hosting from the
+            // Market screen is handed the log separately and leaves config.logFile at
+            // its compiled default, so this told a player to delete server-market.jsonl
+            // — a file from another deployment, holding somebody else's market. Seen in
+            // a real session, hosting a world's own market.
+            check("and names the log this host opened",
+                    warning.contains(file.toString()) ? 1 : 0, 1);
+            check("not the one the config happens to name",
+                    warning.contains(disagrees.logFile) ? 0 : 1, 1);
+
             // Zero is the opt-out from issuing grants at all, not an operator who got
             // the number wrong, so it must not be reported as one.
             ServerConfig off = ServerConfig.friendGroup(25555);

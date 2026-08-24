@@ -373,7 +373,14 @@ public class HostServer {
                 + " whether this server issues grants at all, and only sets the amount"
                 + " for a market it creates itself. Newcomers will receive " + market
                 + ". To hand out " + config.welcomeGrant + ", create a market with that"
-                + " figure (delete " + config.logFile + " first — that discards this"
+                // The log this host actually opened, not the one the config names. Only
+                // the dedicated launcher builds its config and its log path from the
+                // same place; a world hosting from the Market screen is handed the log
+                // separately and leaves config.logFile at the compiled default. So this
+                // told a player hosting their own world to delete server-market.jsonl —
+                // a file belonging to a different deployment, which either does not
+                // exist or is somebody else's market entirely.
+                + " figure (delete " + log.file() + " first — that discards this"
                 + " market's history).";
     }
 
