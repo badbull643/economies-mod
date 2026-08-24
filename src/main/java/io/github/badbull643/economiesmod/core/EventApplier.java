@@ -309,11 +309,68 @@ public class EventApplier {
         public final MarketState state;
         public final long headSeq;
         public final String headHash;
+        /**
+         * Seq of the first entry that fails the chain check, or -1 if the chain is
+         * whole. Only set by {@link #verifyAndReplay}; a plain replay does not check,
+         * and says so by leaving this -1 rather than by claiming the chain is good.
+         */
+        public final long chainBrokenAt;
+
+        /**
+         * The snapshot this load started from, or 0 if it read the whole log.
+         *
+         * Here so the console can say which happened. A snapshot is invisible when it
+         * works — the same line was printed either way — and this project has already
+         * learned twice that a mechanism whose failure is quiet needs its success to be
+         * loud, or nobody can tell the two apart from outside.
+         */
+        public final long restoredFrom;
+
+        /**
+         * Whether the log itself holds the events this state was built from.
+         *
+         * Normally yes, trivially: the state came from walking the log. It is false for
+         * a replica that restored a snapshot the log does not cover — one keeping no
+         * history, or one whose history stops short of where its state got to.
+         *
+         * Here because there is no cheap way to ask afterwards, and the obvious way to
+         * ask is wrong. {@code log.lastSeq()} is primed from the state after a load, so
+         * a slot with a nought-byte log answers with the state's head — which is exactly
+         * what the Host gate asked, and exactly why it let a replica with no history
+         * offer to serve one.
+         */
+        public final boolean logCoversHead;
 
         Replayed(MarketState state, long headSeq, String headHash) {
+            this(state, headSeq, headHash, -1, 0, true);
+        }
+
+        Replayed(MarketState state, long headSeq, String headHash, long chainBrokenAt) {
+            this(state, headSeq, headHash, chainBrokenAt, 0, true);
+        }
+
+        Replayed(MarketState state, long headSeq, String headHash, long chainBrokenAt,
+                 long restoredFrom, boolean logCoversHead) {
             this.state = state;
             this.headSeq = headSeq;
             this.headHash = headHash;
+            this.chainBrokenAt = chainBrokenAt;
+            this.restoredFrom = restoredFrom;
+            this.logCoversHead = logCoversHead;
+        }
+
+        /**
+         * How this load happened, in words, for the console.
+         *
+         * One phrasing in one place, because two call sites print it and a market that
+         * says "replayed 140 events" on one path and something else on the other is a
+         * difference somebody will read as a bug.
+         */
+        public String describe() {
+            if (restoredFrom <= 0) return "replayed " + headSeq + " events";
+            long since = headSeq - restoredFrom;
+            return "restored a snapshot at event " + restoredFrom + " and replayed "
+                    + since + (since == 1 ? " event" : " events") + " since";
         }
     }
 
@@ -341,16 +398,149 @@ public class EventApplier {
      * until the client started validating what the host sends.
      */
     public static Replayed replayWithHead(EventLog log) throws IOException {
+        return walkLog(log, false);
+    }
+
+    /**
+     * Verifies the chain and replays it in **one** pass over the file.
+     *
+     * For the load paths, which wanted both and asked for them separately —
+     * {@code verifyChain()} then {@code replay()}, each parsing every line, and on the
+     * world-load path {@code damageReason()} asking for a third. Parsing was 44% of a
+     * load and half of it was this.
+     *
+     * Deliberately the same answers as asking separately, including the odd one: a
+     * broken chain does **not** stop the replay. Everything parseable is applied and the
+     * first bad seq is reported alongside, because that is what the callers already did
+     * and what the UI expects — the market is shown, with a banner saying it is damaged
+     * and a Reset button. Stopping the replay at the break would empty somebody's market
+     * on the screen where they go to fix it.
+     */
+    public static Replayed verifyAndReplay(EventLog log) throws IOException {
+        return walkLog(log, true);
+    }
+
+    /**
+     * Loads a market the fast way when it can and the honest way when it cannot, and
+     * keeps the snapshot beside the log up to date.
+     *
+     * This is what a load path should call. It is the only place that decides whether a
+     * snapshot is used, and the decision is made on the length of the log and nothing
+     * else — never on who is hosting. Both deployments reach the same lengths; a rule
+     * that read {@code dedicated} here would be the fifth defect of that shape in this
+     * codebase, and there is no sense in which a snapshot should mean something
+     * different on a dedicated server.
+     *
+     * When a snapshot is used, the events below it are not re-verified. See
+     * {@link MarketSnapshot} for why that is safe in both directions a log can be wrong.
+     */
+    public static Replayed load(EventLog log) throws IOException {
+        MarketSnapshot.Restored snap = MarketSnapshot.loadIfValid(log);
+        Replayed result = snap == null ? verifyAndReplay(log) : replayTail(log, snap);
+        // Both walks above read through to the last entry, so the log need not go and
+        // find its own head — which on the snapshot path would be the one full pass over
+        // the file left, and would undo the whole point of having a snapshot.
+        log.headIs(result.headSeq, result.headHash);
+        maybeSnapshot(log, result, snap);
+        return result;
+    }
+
+    /** Carries on from a restored snapshot, verifying only what came after it. */
+    private static Replayed replayTail(EventLog log, MarketSnapshot.Restored snap)
+            throws IOException {
+        MarketState state = snap.state;
+        final long[] head = { snap.seq };
+        final String[] hash = { snap.chainHash };
+        final String[] expectedPrev = { snap.chainHash };
+        final long[] expectedSeq = { snap.seq + 1 };
+        final long[] broken = { -1 };
+
+        log.forEachAfter(snap.seq, se -> {
+            if (broken[0] == -1
+                    && (se.seq != expectedSeq[0]
+                        || !expectedPrev[0].equals(se.prevHash)
+                        || !EventLog.recomputeHash(se).equals(se.hash))) {
+                broken[0] = se.seq;
+            }
+            expectedPrev[0] = se.hash;
+            expectedSeq[0] = se.seq + 1;
+
+            apply(state, se);
+            head[0] = se.seq;
+            hash[0] = se.hash;
+            return true;
+        });
+
+        long broke = broken[0];
+        if (broke == -1 && log.unreadableAtSoFar() != -1) broke = log.unreadableAtSoFar();
+        // Only asked when a snapshot was used, so the ordinary path pays nothing: a
+        // walk that read the log to its end plainly covers what it built.
+        boolean covered = log.headSeqOnDisk() >= head[0];
+        return new Replayed(state, head[0], hash[0], broke, snap.seq, covered);
+    }
+
+    /**
+     * Writes a snapshot when the log has run far enough past the last one to be worth it.
+     *
+     * Never for a damaged chain, and never for a log with no market in it — a snapshot
+     * of a state nobody should be using is a way to keep using it.
+     */
+    private static void maybeSnapshot(EventLog log, Replayed result,
+                                      MarketSnapshot.Restored from) {
+        if (result.chainBrokenAt != -1) return;
+        if (result.state.marketId() == null) return;
+        // When, and only when — MarketSnapshot owns the thresholds and how they combine.
+        if (!MarketSnapshot.worthWriting(result.headSeq, from == null ? -1 : from.seq)) {
+            return;
+        }
+
+        try {
+            MarketSnapshot.save(log, result.state, result.headSeq, result.headHash);
+            System.out.println("[economiesmod] wrote a snapshot at event "
+                    + result.headSeq + " — the next load starts from there");
+        } catch (Exception e) {
+            // A snapshot is an optimisation. Failing to write one costs a slower load
+            // next time and must never cost a market.
+            System.err.println("[economiesmod] could not write snapshot: " + e);
+        }
+    }
+
+    private static Replayed walkLog(EventLog log, boolean verify) throws IOException {
         MarketState state = new MarketState();
-        long headSeq = 0;
-        String headHash = "0";
-        for (SequencedEvent se : log.readFrom(0)) {
+        final long[] head = { 0 };
+        final String[] hash = { EventLog.GENESIS_HASH };
+        final String[] expectedPrev = { EventLog.GENESIS_HASH };
+        final long[] expectedSeq = { 1 };
+        final long[] broken = { -1 };
+
+        log.forEach(0, se -> {
+            if (verify && broken[0] == -1
+                    && (se.seq != expectedSeq[0]
+                        || !expectedPrev[0].equals(se.prevHash)
+                        || !EventLog.recomputeHash(se).equals(se.hash))) {
+                broken[0] = se.seq;
+            }
+            expectedPrev[0] = se.hash;
+            expectedSeq[0] = se.seq + 1;
+
             apply(state, se);
             // From the events actually replayed, never from the log's own idea of where
             // it ends. This line is the whole point of this method.
-            headSeq = se.seq;
-            headHash = se.hash;
+            head[0] = se.seq;
+            hash[0] = se.hash;
+            return true;
+        });
+
+        long headSeq = head[0];
+        long chainBrokenAt = broken[0];
+        // A line this build cannot parse is a damaged log too, and forEach stops at it
+        // rather than carrying the chain across a gap. verifyChain answers that case
+        // without walking, so asking it here costs nothing and keeps one definition of
+        // what "broken at" means.
+        if (verify && chainBrokenAt == -1 && log.unreadableAtSoFar() != -1) {
+            chainBrokenAt = log.unreadableAtSoFar();
         }
+
         // A log written before market identity existed replays to nothing, because
         // every event fails the genesis check. Say so — silence here looks like an
         // empty market rather than an incompatible one.
@@ -359,7 +549,7 @@ public class EventApplier {
                     + " MarketCreated genesis — it predates market identity and cannot be"
                     + " replayed. Reset the log and create or join a market.");
         }
-        return new Replayed(state, headSeq, headHash);
+        return new Replayed(state, headSeq, hash[0], chainBrokenAt);
     }
     /** Checks whether an event would be accepted, without mutating state. */
     public static Result validate(MarketState state, SequencedEvent se) {

@@ -288,12 +288,17 @@ public class HostServer {
         this.log = new EventLog(logFile);
         this.keyRegistry = new KeyRegistry(logFile.resolveSibling("known-keys.json"), true);
 
-        long bad = log.verifyChain();
-        if (bad != -1) {
-            throw new IOException("log chain broken at seq " + bad + " — refusing to start");
+        // Verified and replayed in one pass. A broken chain still refuses to start; the
+        // only difference is that the refusal now costs a replay it throws away, which
+        // is the rare path, in exchange for one walk of the file instead of two on the
+        // path that always runs.
+        EventApplier.Replayed loaded = EventApplier.load(log);
+        if (loaded.chainBrokenAt != -1) {
+            throw new IOException("log chain broken at seq " + loaded.chainBrokenAt
+                    + " — refusing to start");
         }
 
-        this.state = EventApplier.replay(log);
+        this.state = loaded.state;
 
         // A host with no genesis event has no market to serve. Refusing here is what
         // stops a market being created silently, as a side effect of clicking Host.
@@ -302,7 +307,7 @@ public class HostServer {
         }
 
         System.out.println("[host] serving '" + state.marketName() + "' ("
-                + state.marketId() + ") — replayed " + log.lastSeq() + " events");
+                + state.marketId() + ") — " + loaded.describe());
 
         warnIfGrantDisagrees();
     }
@@ -368,7 +373,14 @@ public class HostServer {
                 + " whether this server issues grants at all, and only sets the amount"
                 + " for a market it creates itself. Newcomers will receive " + market
                 + ". To hand out " + config.welcomeGrant + ", create a market with that"
-                + " figure (delete " + config.logFile + " first — that discards this"
+                // The log this host actually opened, not the one the config names. Only
+                // the dedicated launcher builds its config and its log path from the
+                // same place; a world hosting from the Market screen is handed the log
+                // separately and leaves config.logFile at the compiled default. So this
+                // told a player hosting their own world to delete server-market.jsonl —
+                // a file belonging to a different deployment, which either does not
+                // exist or is somebody else's market entirely.
+                + " figure (delete " + log.file() + " first — that discards this"
                 + " market's history).";
     }
 
@@ -880,7 +892,7 @@ public class HostServer {
                     addressOf(channel), hello.hostPort,hello.publicKey);
         }
 
-        List<String> raw = log.rawLinesFrom(hello.lastSeq + 1);
+        // Deliberately not read into a list first — see the streamed send below.
 
         // Who else is here, for a market where hosting rotates and the next host is one
         // of these people.
@@ -909,28 +921,71 @@ public class HostServer {
         // A fresh joiner syncs from seq 1, so this is the bulk path that outgrows one
         // frame first. Identity and peers ride on the first chunk only; the client has
         // everything it needs to set up before the history finishes arriving.
-        List<List<String>> chunks = MessageChannel.chunkByByteBudget(raw);
-        for (int i = 0; i < chunks.size(); i++) {
-            Message.Sync sync = new Message.Sync();
-            sync.logLines = chunks.get(i);
-            sync.complete = (i == chunks.size() - 1);
-            if (i == 0) {
-                sync.hostUserId = hostUserId;
-                sync.hostName = hostName;
-                sync.hostPort = port;
-                sync.hostPublicKey = hostKeys.publicKeyString();
-                sync.marketId = ourMarket;
-                sync.marketName = state.marketName();
-                sync.dedicated = config.dedicated;
-                sync.knownPeers = shareable;
-            }
-            channel.send(sync);
-        }
+        // Streamed rather than gathered. This used to read the whole history into a list
+        // and chunk that, which is fine for a friend group and is the better part of a
+        // gigabyte for a market with a year of a full server behind it — allocated in one
+        // go, per person arriving, before a single byte went out. Now one chunk is held
+        // at a time and released as it goes.
+        //
+        // The read was always line by line, so nothing about what this host sees of a log
+        // its own sequencer may be appending to has changed. What changed is the piling-up.
+        final List<String> current = new ArrayList<>();
+        final long[] bytes = { 0 };
+        final long[] total = { 0 };
+        final int[] chunksSent = { 0 };
 
-        System.out.println("[host] synced " + raw.size() + " events to "
+        // A chunk is only ever sent once the line that did not fit proves another is
+        // coming, so "complete" can be set truthfully without knowing the length in
+        // advance — the last chunk is the one sent after the walk ends.
+        log.forEachRawLine(hello.lastSeq + 1, line -> {
+            int lineBytes = line.getBytes(StandardCharsets.UTF_8).length;
+            if (!current.isEmpty() && bytes[0] + lineBytes > MessageChannel.CHUNK_BUDGET_BYTES) {
+                sendSyncChunk(channel, current, false, chunksSent[0] == 0,
+                        ourMarket, shareable);
+                chunksSent[0]++;
+                current.clear();
+                bytes[0] = 0;
+            }
+            current.add(line);
+            bytes[0] += lineBytes;
+            total[0]++;
+            return true;
+        });
+        // Always one final frame, even for a client that is already up to date: the
+        // handshake is not finished until something says so.
+        sendSyncChunk(channel, current, true, chunksSent[0] == 0, ourMarket, shareable);
+        chunksSent[0]++;
+
+        System.out.println("[host] synced " + total[0] + " events to "
                 + channel.remoteAddress()
-                + (chunks.size() > 1 ? " in " + chunks.size() + " chunks" : ""));
+                + (chunksSent[0] > 1 ? " in " + chunksSent[0] + " chunks" : ""));
         return true;
+    }
+
+    /**
+     * One frame of a synced history.
+     *
+     * Identity and the peer roster ride on the first frame only, so a client has what it
+     * needs to set itself up before the history finishes arriving. The list is copied
+     * because the caller reuses its buffer for the next chunk.
+     */
+    private void sendSyncChunk(MessageChannel channel, List<String> lines, boolean complete,
+                               boolean first, String ourMarket,
+                               List<PeerCache.Peer> shareable) throws IOException {
+        Message.Sync sync = new Message.Sync();
+        sync.logLines = new ArrayList<>(lines);
+        sync.complete = complete;
+        if (first) {
+            sync.hostUserId = hostUserId;
+            sync.hostName = hostName;
+            sync.hostPort = port;
+            sync.hostPublicKey = hostKeys.publicKeyString();
+            sync.marketId = ourMarket;
+            sync.marketName = state.marketName();
+            sync.dedicated = config.dedicated;
+            sync.knownPeers = shareable;
+        }
+        channel.send(sync);
     }
 
     /**

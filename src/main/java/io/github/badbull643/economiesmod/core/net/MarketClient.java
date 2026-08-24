@@ -5,9 +5,11 @@ import com.google.gson.JsonParser;
 import io.github.badbull643.economiesmod.core.*;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -34,7 +36,40 @@ public class MarketClient {
     private volatile long lastSeq = 0;
     private volatile String lastHash = "0";
     private final PlayerKeys keys;
-    private final boolean persist;
+
+    /**
+     * Whether events we accept are written to our own log.
+     *
+     * Not final, and settled at the handshake rather than at construction, because it
+     * depends on something only the host can tell us — see {@link #archiveDedicated} and
+     * the rule in the handshake. {@code hostDedicated} arrives on the Sync message
+     * before a single synced line is applied, so the decision is always made before
+     * anything could be written under the wrong one.
+     */
+    private volatile boolean persist;
+
+    /**
+     * Whether to keep the full history of a market a dedicated server serves.
+     *
+     * Off by default, and that is the whole of step 4 of the compaction note. A replica
+     * carries the log for two reasons: so this machine can serve the market if the
+     * hardware it lives on goes away, and so the host's arithmetic can be checked. On a
+     * dedicated market with a hundred players the first is satisfied by a handful of
+     * copies rather than a hundred, and the second is satisfied by the snapshot plus the
+     * handshake — every event was validated as it arrived and the head is compared
+     * against the host's chain on every connect.
+     *
+     * So the default is a snapshot and no history, and anybody who wants to be one of
+     * the copies that keeps the market alive says so per market. A rotating host is
+     * untouched: there the replica is how hosting rotates at all.
+     *
+     * Asked about a market id rather than answered up front, because the market that
+     * matters is the host's and not ours. A player joining a big server for the first
+     * time holds no market at all, and that is exactly the case this feature exists for
+     * — deciding from what we already have would archive the whole history for precisely
+     * the person it was meant to spare.
+     */
+    private final java.util.function.Predicate<UUID> archiveDedicated;
 
     /** Called when a proposal is rejected, so the UI can report it. */
     private Consumer<String> onRejected = reason -> {};
@@ -51,11 +86,27 @@ public class MarketClient {
     public MarketClient(UUID userId, String displayName, PlayerKeys keys,
                         EventLog log, boolean persist, PeerCache peerCache,
                         int myHostPort) throws IOException {
+        this(userId, displayName, keys, log, persist, peerCache, myHostPort, id -> true);
+    }
+
+    /**
+     * The same, saying whether to archive a market a dedicated server serves.
+     *
+     * The shorter constructor answers "yes", which is what every existing caller meant
+     * and what the tests want: a client that keeps everything behaves exactly as it did
+     * before step 4. Only the live client passes false, and only then does the snapshot
+     * become this replica's memory of the market.
+     */
+    public MarketClient(UUID userId, String displayName, PlayerKeys keys,
+                        EventLog log, boolean persist, PeerCache peerCache,
+                        int myHostPort, java.util.function.Predicate<UUID> archiveDedicated)
+                        throws IOException {
         this.userId = userId;
         this.displayName = displayName;
         this.keys = keys;
         this.log = log;
         this.persist = persist;
+        this.archiveDedicated = archiveDedicated;
         this.peerCache = peerCache;
         this.myHostPort = myHostPort;
         // All three from one read of the log, not from the log's cached idea of where it
@@ -66,10 +117,51 @@ public class MarketClient {
         // captured before the grant, the replay picked it up, and this client believed
         // it was one event behind state it already held — so the host re-sent that
         // event, and the grant was applied to this replica twice.
-        EventApplier.Replayed replayed = EventApplier.replayWithHead(log);
-        this.state = replayed.state;
-        this.appliedSeq = replayed.headSeq;
-        this.lastHash = replayed.headHash;
+        //
+        // Through load rather than a bare replay, so this path gets the snapshot too.
+        // It is the third of the three that walk the whole log and the only one that
+        // runs every session rather than once per world: on a market with a dedicated
+        // server, every player pays it every time they connect. Nothing else changes —
+        // load returns state, position and hash from one walk exactly as replayWithHead
+        // did, which is the property the paragraph above is about.
+        //
+        // It also verifies, which this path did not. The events were each validated as
+        // they arrived, so the chain should hold; if it does not, that is disk damage
+        // rather than dishonesty, and the answer is the same as before — carry on with
+        // what replayed. The verdict is deliberately not acted on here.
+        EventApplier.Replayed replayed = EventApplier.load(log);
+
+        // Somebody who has turned archiving on for a market they only hold a snapshot of
+        // has to start again, and this is the moment to decide it.
+        //
+        // The snapshot leaves the log object believing the market ends where the
+        // snapshot does, which is what stops it re-reading the file — so appending to it
+        // succeeds, and writes event 5,001 as the first line of an empty log. That is not
+        // a history, it is a fragment: no genesis, nothing that verifies, nothing anybody
+        // could ever be served from. The check was there (appendRaw refuses a gap) and
+        // the primed head walked straight past it.
+        //
+        // So the history is fetched rather than resumed: forget the snapshot, tell the
+        // host we have nothing, and take the market from the beginning. That is what
+        // "connect once and it arrives" has to mean, and the whole reason anybody turns
+        // this on is to be able to host, which a fragment would never allow.
+        if (persist && replayed.restoredFrom > 0
+                && archiveDedicated.test(replayed.state.marketId())
+                && log.headSeqOnDisk() == 0) {
+            System.out.println("[client] archiving this market, but only a snapshot is"
+                    + " here — fetching the history from the start");
+            replayed = null;
+        }
+        if (replayed == null) {
+            this.state = new MarketState();
+            this.appliedSeq = 0;
+            this.lastHash = EventLog.GENESIS_HASH;
+            log.headIs(0, EventLog.GENESIS_HASH);
+        } else {
+            this.state = replayed.state;
+            this.appliedSeq = replayed.headSeq;
+            this.lastHash = replayed.headHash;
+        }
     }
     /**
      * A host declining the handshake, carrying the reason in a form the UI can act on.
@@ -101,6 +193,9 @@ public class MarketClient {
 
     public MarketState state() { return state; }
     public boolean isConnected() { return connected; }
+
+    /** Whether this client is writing what it receives to its own log. */
+    public boolean keepsHistory() { return persist; }
 
     /**
      * Whether the host we synced from calls itself a dedicated server.
@@ -191,9 +286,16 @@ public class MarketClient {
         hello.hostPort = myHostPort;
         hello.displayName = displayName;
         hello.protocolVersion = HostServer.PROTOCOL_VERSION;
-        UUID myMarket = log.marketId();
+        // From the state, for the same reason lastSeq is: the two have to come from one
+        // source or they describe different moments. This used to read the log's genesis
+        // event, which is the same answer whenever there is a log — and no answer at all
+        // for a replica that keeps a snapshot instead of a history. It sent "I am at
+        // event 3 of no market", the host refused it as a log that predates market
+        // identity, and every snapshot-only client was locked out from its second
+        // session onwards. Which market we hold and where we are in it are one fact.
+        UUID myMarket = state.marketId() != null ? state.marketId() : log.marketId();
         hello.marketId = myMarket != null ? myMarket.toString() : null;
-        hello.marketName = log.marketName();
+        hello.marketName = state.marketName() != null ? state.marketName() : log.marketName();
         hello.attestation = attestation;
 
         System.out.println("[client] hello: lastSeq=" + hello.lastSeq
@@ -216,6 +318,59 @@ public class MarketClient {
         Message.Sync sync = (Message.Sync) reply;
         hostDedicated = sync.dedicated;
 
+        // Settled here, before a single synced line is applied, because this is the
+        // first moment the answer exists — whether the host is dedicated is something
+        // only the host can say, and it says it on this message. Deciding later would
+        // mean having already written events under a rule that had not been chosen.
+        //
+        // Only ever narrows what gets written: a caller that asked not to persist
+        // (a host's self-connect) still does not.
+        UUID theirs = sync.marketId == null ? null : UUID.fromString(sync.marketId);
+
+        // Refuse to adopt a market this machine is already keeping in another slot.
+        //
+        // Only when we hold nothing ourselves: a slot that already has this market is
+        // reconnecting, which is the ordinary case, and a slot holding a different one
+        // is refused by the host a few lines below. What is left is an empty slot about
+        // to become a second copy of something we have — and two copies of one market on
+        // one machine is not a second market. They are two heads that drift apart, and
+        // hosting from whichever is behind forks the market with nobody else involved.
+        //
+        // Before the synced lines are read, so a refusal costs nothing and leaves the
+        // empty slot exactly as empty as it was.
+        if (myMarket == null && theirs != null && heldElsewhere.test(theirs)) {
+            channel.close();
+            throw new IOException("this world already holds '" + sync.marketName + "' in"
+                    + " another market slot — switch to that slot instead of keeping the"
+                    + " same market twice, which would give you two copies that drift"
+                    + " apart and can fork if you ever host the older one");
+        }
+        if (persist && hostDedicated && !archiveDedicated.test(theirs)) {
+            persist = false;
+            snapshotInsteadOfHistory = true;
+            System.out.println("[client] " + sync.marketName + " is served by a dedicated"
+                    + " server, so this copy keeps a snapshot rather than the whole"
+                    + " history — /trade archive on to keep all of it");
+        }
+
+        // Last guard, and it catches what the rule above cannot: we are still set to
+        // write, and the file cannot take what we are about to be sent. The constructor
+        // fetches from the start when it can see that coming, but it decides from the
+        // archive setting, and the host has just told us something it did not know —
+        // a market we chose not to archive, now served by somebody who is not the box.
+        //
+        // Writing anyway would put event 5,001 at the top of an empty file. Better to
+        // keep the snapshot and say so: nothing is lost that was not already absent, and
+        // /trade archive on then does the fetch properly on the next connect.
+        if (persist && appliedSeq > 0 && log.headSeqOnDisk() < appliedSeq) {
+            persist = false;
+            snapshotInsteadOfHistory = true;
+            System.out.println("[client] this copy holds a snapshot of " + sync.marketName
+                    + " and not its history, so new events are not being written to a"
+                    + " log that could never verify — /trade archive on, then reconnect,"
+                    + " to fetch the whole thing");
+        }
+
         // The host already refused a mismatch, but check our own copy too — a client
         // should not adopt events into a log whose identity it did not agree to.
         if (myMarket != null && sync.marketId != null
@@ -225,29 +380,8 @@ public class MarketClient {
                     + sync.marketName + ") — cannot join");
         }
 
-        // A long history arrives across several frames. Identity rode on the first one;
-        // gather the rest of the lines before applying any, so a transfer that dies
-        // partway leaves our log untouched rather than half-advanced.
-        List<String> syncLines = new ArrayList<>();
-        if (sync.logLines != null) syncLines.addAll(sync.logLines);
-        boolean complete = sync.complete;
-        int frames = 1;
-        while (!complete) {
-            Message next = channel.receive();
-            if (!(next instanceof Message.Sync)) {
-                channel.close();
-                throw new IOException("host stopped partway through the sync");
-            }
-            Message.Sync more = (Message.Sync) next;
-            if (more.logLines != null) syncLines.addAll(more.logLines);
-            complete = more.complete;
-            frames++;
-        }
-        if (frames > 1) {
-            System.out.println("[client] received " + syncLines.size()
-                    + " events in " + frames + " chunks");
-        }
-
+        // Said before anything is applied, because it is a warning about who we are
+        // taking a history from and is worth less after we have taken it.
         if (peerCache != null && sync.hostUserId != null
                 && !sync.hostUserId.equals(userId.toString())
                 && peerCache.keyChanged(sync.hostUserId, sync.hostPublicKey)) {
@@ -256,12 +390,57 @@ public class MarketClient {
             onRejected.accept("Warning: " + sync.hostName + "'s key has changed");
         }
 
-        boolean synced;
+        // A long history arrives across several frames, and is applied a frame at a time
+        // rather than gathered first.
+        //
+        // Gathering was deliberate — "so a transfer that dies partway leaves our log
+        // untouched rather than half-advanced" — and it is the same shape as the bug on
+        // the host, in the place it does more damage: a Minecraft client, with the game
+        // already holding most of the heap, building the entire market in memory before
+        // touching any of it. Measured on the host side at roughly the size of the log
+        // again, so a large market was a first join that could not complete at all.
+        //
+        // What the old property bought is smaller than it looks. A transfer that dies at
+        // event three hundred of seven hundred thousand now leaves three hundred events:
+        // a valid prefix of the chain, with position and state advanced together, so the
+        // next connect says "I have three hundred" and carries on from there instead of
+        // starting again. All-or-nothing is traded for resumable, which is the better of
+        // the two on exactly the histories that made this a problem.
+        boolean synced = true;
+        long received = 0;
+        int frames = 0;
+        replaying = true;
         try {
-            synced = applySyncLines(syncLines);
+            Message.Sync frame = sync;
+            while (true) {
+                frames++;
+                if (frame.logLines != null) {
+                    for (String line : frame.logLines) {
+                        if (!applyLine(line)) {
+                            synced = false;
+                            break;
+                        }
+                        received++;
+                    }
+                }
+                if (!synced || frame.complete) break;
+
+                Message next = channel.receive();
+                if (!(next instanceof Message.Sync)) {
+                    channel.close();
+                    throw new IOException("host stopped partway through the sync");
+                }
+                frame = (Message.Sync) next;
+            }
         } catch (IllegalStateException e) {
             channel.close();
             throw new IOException("cannot read host's events — mod version mismatch?");
+        } finally {
+            replaying = false;
+        }
+        if (frames > 1) {
+            System.out.println("[client] received " + received
+                    + " events in " + frames + " chunks");
         }
         if (!synced) {
             channel.close();
@@ -303,6 +482,50 @@ public class MarketClient {
      * so there is no session to do this inside. On success the caller should reset and
      * connect normally; nothing about the local log is touched here.
      */
+    /**
+     * One host's hash at one sequence number, or null if it could not be had.
+     *
+     * The question a discovery poll needs and could not ask. A probe carries a host's
+     * head and nothing below it, so when that head is *above* ours there is no point the
+     * two chains can be compared at — and "they are ahead of me on my chain" and "they
+     * are on a different chain that happens to be longer" look identical from here. The
+     * first means catch up; the second means you have forked and catching up is a
+     * refusal. Asking for their hash at **our** head separates them in one round trip.
+     *
+     * Deliberately not findSplitPoint. That searches, over several rounds, for where two
+     * chains parted; this asks a single question with a yes or no answer, and it is asked
+     * on the poll path where every round trip is paid on a timer.
+     *
+     * Timeouts are shorter than the search's for the same reason: a peer that has gone
+     * away must not hold the poll up, and the poll will ask again in a few seconds.
+     */
+    public static String hashAt(String host, int port, long seq) throws IOException {
+        if (seq <= 0) return null;
+
+        Socket socket = new Socket();
+        socket.connect(new InetSocketAddress(host, port), 3_000);
+        socket.setSoTimeout(5_000);
+        try (MessageChannel ch = new MessageChannel(socket)) {
+            Message.HashQuery q = new Message.HashQuery();
+            q.seqs = Collections.singletonList(seq);
+            ch.send(q);
+
+            Message reply = ch.receive();
+            if (!(reply instanceof Message.HashReply)) return null;
+            Message.HashReply hr = (Message.HashReply) reply;
+            if (hr.seqs == null || hr.hashes == null) return null;
+
+            for (int i = 0; i < hr.seqs.size() && i < hr.hashes.size(); i++) {
+                Long at = hr.seqs.get(i);
+                if (at != null && at == seq) return hr.hashes.get(i);
+            }
+            // They answered without the seq we asked for, which is what a host shorter
+            // than that seq does. Not an error and not an answer: null means "could not
+            // be had", and the caller holds no opinion rather than guessing one.
+            return null;
+        }
+    }
+
     /**
      * The last sequence number at which our chain and a host's still agree.
      *
@@ -554,23 +777,17 @@ public class MarketClient {
             if (channel != null) {
                 try { channel.close(); } catch (IOException ignored) {}
             }
+            // Here as well as in disconnect(), because this is the end that happens to
+            // somebody rather than the one they choose — the host went away, or sent
+            // something we refused. A replica keeping no history has nothing else to
+            // remember the session by, and the ending it did not ask for is exactly the
+            // one where losing it would be most annoying.
+            keepWhatWeLearned();
             onStateChanged.run();
         }
     }
 
     /** Returns false if a line failed verification, meaning the connection is finished. */
-    private boolean applySyncLines(List<String> lines) {
-        replaying = true;
-        try {
-            for (String line : lines) {
-                if (!applyLine(line)) return false;
-            }
-            return true;
-        } finally {
-            replaying = false;
-        }
-    }
-
     private volatile long appliedSeq = 0;
 
     /**
@@ -707,6 +924,63 @@ public class MarketClient {
         if (channel != null) {
             try { channel.close(); } catch (IOException ignored) {}
         }
+        keepWhatWeLearned();
     }
+
+    /**
+     * Writes down the state this session reached, for a replica that is not keeping the
+     * history it was built from.
+     *
+     * Only for the snapshot-only case. When the log is being written, the ordinary rule
+     * applies and the next load writes its own snapshot off the log; here there will be
+     * no log to write one from, so this is the only record that this replica ever knew
+     * anything, and without it a client of a dedicated market would re-download the
+     * whole market every session — which is worse than what it replaced.
+     *
+     * Best effort by design. A snapshot that fails to write costs a full sync next time
+     * and must never cost a disconnection, and one lost to a crash is simply an older
+     * head that the handshake tops up from.
+     */
+    private void keepWhatWeLearned() {
+        // Only when *we* turned writing off, which is the snapshot-only case. persist is
+        // also false for a host's self-connect, and that is a completely different
+        // situation: the log is right there, being written by the HostServer this client
+        // is talking to. Treating the two the same wrote a logless snapshot beside a
+        // full history — and a logless snapshot is precisely the one that stands without
+        // its log, so deleting that log would have handed the market back. The flag this
+        // reads is set in one place, by the rule that stops the writing.
+        if (!snapshotInsteadOfHistory) return;
+        if (appliedSeq <= 0) return;
+        if (state.marketId() == null) return;
+        // Both disconnect() and the reader loop's finally reach here, and on a world
+        // shutdown both run. Once is enough, and twice raced over the same temporary
+        // file — one call moved it into place while the other was still writing it.
+        if (!snapshotKept.compareAndSet(false, true)) return;
+        try {
+            MarketSnapshot.save(log, state, appliedSeq, lastHash, true);
+        } catch (Exception e) {
+            System.err.println("[client] could not keep a snapshot of this market: " + e);
+        }
+    }
+
+    /** Set only by the rule that stops this replica writing history. See above. */
+    private volatile boolean snapshotInsteadOfHistory = false;
+
+    /**
+     * Asks whether this machine already holds the host's market somewhere else.
+     *
+     * Set from outside for the same reason the attestation is: knowing what else is on
+     * this machine means knowing about worlds and slots, and core does not. Default
+     * answers no, so nothing that does not set it changes behaviour.
+     */
+    private java.util.function.Predicate<UUID> heldElsewhere = id -> false;
+
+    public void setHeldElsewhere(java.util.function.Predicate<UUID> p) {
+        if (p != null) this.heldElsewhere = p;
+    }
+
+    /** So the two paths that end a session do not both write the same file. */
+    private final java.util.concurrent.atomic.AtomicBoolean snapshotKept =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
 }

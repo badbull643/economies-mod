@@ -10,6 +10,7 @@
   "refuseCheatWorlds": false,
   "maxDepositUnitsPerPlayHour": 0,
   "maxDepositMultipleOfHandled": 0,
+  "maxMigratedCredits": 0,
   "admission": "open",
   "allow": [],
   "deny": [],
@@ -18,5 +19,9 @@
   "dedicated": false,
   "logFile": "server-market.jsonl",
   "creatorUserId": "00000000-0000-0000-0000-000000000001",
-  "welcomeGrant": 250
+  "welcomeGrant": 250,
+  "listingFee": 0,
+  "stipendAmount": 0,
+  "acceptsMigration": true,
+  "maxWelcomeGrant": 10000
 }

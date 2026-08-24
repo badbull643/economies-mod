@@ -78,9 +78,19 @@ public class MarketStateHolder {
         return Math.max(0, seen - mine);
     }
 
-    /** Records that this market was seen at a given height, from a poll or a sync. */
-    public static void observeMarketHeight(UUID marketId, long seq) {
-        if (highWater != null) highWater.observe(marketId, seq);
+    /**
+     * Records that a peer confirmed to be on our chain is at this height.
+     *
+     * The confirmation is the caller's job and is not optional: a forked peer's head is
+     * a different branch of this market, not this market advancing, and the mark is
+     * monotonic and persisted so a number written here wrongly outlives the session that
+     * wrote it. observeHostHead is the only caller and asks before it calls.
+     *
+     * The reporter travels with it so the claim can be withdrawn by whoever made it —
+     * see MarketHighWater.observe for the run that made that necessary.
+     */
+    public static void observeMarketHeight(UUID marketId, long seq, String fromUserId) {
+        if (highWater != null) highWater.observe(marketId, seq, fromUserId);
     }
 
     /**
@@ -185,14 +195,42 @@ public class MarketStateHolder {
      * host it polls — signed, and nonce-bound against replay — so the comparison costs
      * nothing extra on the wire.
      *
-     * Only meaningful when their head is at or behind ours: our hash at their seq is a
-     * point they must also have if we share a history. If they're ahead of us we hold
-     * no opinion, which is the same position the host takes during a handshake.
+     * <h2>When their head is above ours</h2>
+     *
+     * This used to return without an opinion, because a probe carries a head and nothing
+     * below it and we have no hash at a sequence we have not reached. Two things went
+     * wrong with holding no opinion, and they were the same missing question:
+     *
+     * A fork with a longer peer stayed <b>invisible</b> until somebody pressed Connect,
+     * so which side saw the warning was decided by nothing more than which branch
+     * happened to be longer. And worse, the height was recorded anyway — the call to
+     * observeMarketHeight was the first line of this method, before a single hash had
+     * been compared — so a forked peer's head was filed as <b>this market</b> advancing.
+     * A host at 90 against a forked peer at 98 came away permanently "8 events behind" a
+     * branch that was never theirs, in a mark that is monotonic and persisted. That is
+     * not cosmetic: eventsBehind gates Host, and it told the participant who was on the
+     * chain everybody else shared that hosting it would split the market, then advised
+     * catching up from a peer who would refuse them.
+     *
+     * So it asks. One HashQuery for their hash at <b>our</b> head answers it: matching
+     * means our chain is a prefix of theirs and they genuinely extend us, so the height
+     * is real and "behind" is true; not matching means a fork, the height is not ours to
+     * record, and the split is worth finding.
+     *
+     * <h2>What it costs</h2>
+     *
+     * One round trip per peer, only when that peer's head has moved — checkedHeads
+     * already keyed the work by (peer, head) and the early return above pays for this.
+     * A peer sitting still costs nothing, which is the ordinary case for a poll on a
+     * timer. Blocking, and called from the discovery thread for that reason.
+     *
+     * The split point is looked up before it is searched for, because it does not move:
+     * two branches that have parted stay parted, and both only grow. Without that, an
+     * active fork would run a bracketing search every time either side placed an order.
      */
     public static void observeHostHead(UUID marketId, long seq, String hash,
-                                       String hostUserId, String hostName) {
-        observeMarketHeight(marketId, seq);
-
+                                       String hostUserId, String hostName,
+                                       String hostAddress, int hostPort) {
         MarketState s = get();
         if (s == null || s.marketId() == null || marketId == null) return;
         if (!s.marketId().equals(marketId)) return;          // different market entirely
@@ -204,26 +242,76 @@ public class MarketStateHolder {
 
         try {
             EventLog log = new EventLog(logPathFor(currentWorldDir));
-            if (seq > log.lastSeq()) return;      // they're ahead; nothing of ours to compare
-            String ours = log.hashAt(seq);
+            long ourHead = log.lastSeq();
+            if (ourHead <= 0) return;        // nothing of ours to compare against
+
+            // Where the two are compared, and what each says there. For a peer at or
+            // below us that is their head; for one above us it is ours, because that is
+            // the highest point we can hold an opinion about. Divergence.seq means "where
+            // the hashes were seen to disagree" and a reset falls back to one below it,
+            // so recording their head for a comparison made at ours would be a claim
+            // nothing checked.
+            long at = Math.min(seq, ourHead);
+            String ours = log.hashAt(at);
             if (ours == null) return;
+
+            String theirs;
+            if (seq <= ourHead) {
+                theirs = hash;               // the probe already answered at this point
+            } else {
+                if (hostAddress == null || hostPort <= 0) return;
+                theirs = MarketClient.hashAt(hostAddress, hostPort, at);
+                // Unanswerable rather than answered: a peer that has gone away, or one
+                // that would not say. Not cached, so the next poll asks again — the
+                // alternative is filing "no opinion" as though it were one.
+                if (theirs == null) return;
+            }
 
             checkedHeads.put(hostUserId, head);
 
-            if (ours.equals(hash)) {
-                // They're on our chain after all — clear any earlier warning about them.
+            if (ours.equals(theirs)) {
+                // On our chain: either level with us, or genuinely ahead. Only now is
+                // their height this market's height, and only now can "you are behind"
+                // be said honestly.
+                observeMarketHeight(marketId, seq, hostUserId);
+
                 Divergence d = divergence;
                 if (d != null && hostName != null && hostName.equals(d.hostName)) {
                     divergence = null;
                 }
             } else {
-                divergence = new Divergence(hostName, seq, hash, ours);
+                // A fork. Their height is not this market advancing — it is a different
+                // branch of it — so the watermark must not learn about it, whichever of
+                // the two is longer.
+                Divergence known = divergence;
+                long splitAt = known != null && known.splitAt >= 0
+                        && hostName != null && hostName.equals(known.hostName)
+                        ? known.splitAt
+                        : findSplitQuietly(hostAddress, hostPort, log);
+
+                divergence = new Divergence(hostName, at, theirs, ours, splitAt);
                 System.err.println("[economiesmod] divergence: " + hostName
-                        + " reports " + hash + " at event " + seq
-                        + ", we have " + ours);
+                        + " reports " + theirs + " at event " + at
+                        + ", we have " + ours
+                        + (splitAt >= 0
+                                ? " — parted after event " + splitAt + ", "
+                                        + (ourHead - splitAt) + " of ours since"
+                                : ""));
             }
         } catch (IOException e) {
             // A poll is best-effort; a read failure here is not worth surfacing.
+        }
+    }
+
+    /** The split point, or -1, without letting a failed search cost the divergence. */
+    private static long findSplitQuietly(String hostAddress, int hostPort, EventLog log) {
+        if (hostAddress == null || hostPort <= 0) return -1;
+        try {
+            return MarketClient.findSplitPoint(hostAddress, hostPort, log);
+        } catch (IOException e) {
+            System.err.println("[economiesmod] could not locate the split point: "
+                    + e.getMessage());
+            return -1;
         }
     }
 
@@ -542,17 +630,21 @@ public class MarketStateHolder {
 
         try {
             localLog = new EventLog(logPathFor(worldDir));
-            chainBrokenAt = localLog.verifyChain();
-            damageReason = localLog.damageReason();
+            // One pass for both. This was verifyChain, then damageReason (which verifies
+            // again), then replay — three walks of the whole file to open a world.
+            EventApplier.Replayed loaded = EventApplier.load(localLog);
+            chainBrokenAt = loaded.chainBrokenAt;
+            damageReason = localLog.damageReasonFor(chainBrokenAt);
+            localHistoryComplete = loaded.logCoversHead;
             if (chainBrokenAt != -1) {
                 System.err.println("[economiesmod] log unusable: " + damageReason);
             }
-            localState = EventApplier.replay(localLog);
+            localState = loaded.state;
             // Replay here goes straight through EventApplier rather than through APPLIED,
             // so the feed has to be filled from the log by hand. A synced history does
             // arrive through APPLIED and fills it on its own.
             seedActivity(localLog);
-            System.out.println("[economiesmod] local: replayed " + localLog.lastSeq() + " events");
+            System.out.println("[economiesmod] local: " + loaded.describe());
         } catch (Exception e) {
             System.err.println("[economiesmod] local log load failed: " + e);
             e.printStackTrace();
@@ -639,12 +731,34 @@ public class MarketStateHolder {
                 // offer back. The only thing that ever set it was the discovery poll,
                 // which is why the list appeared after Refresh and not before.
                 //
-                // The three values are already in hand and are exactly what the poll
-                // records: their head, their hash there, ours at the same seq. Safe as a
-                // split point because AHEAD means their head is below ours, so anything
-                // after it on our chain is genuinely ours alone.
+                // The split is asked for here for the same reason noteForkFromRefusal
+                // asks: without it the reset falls back to hostSeq - 1, and the comment
+                // that used to sit here claimed that was "safe as a split point because
+                // AHEAD means their head is below ours, so anything after it on our
+                // chain is genuinely ours alone".
+                //
+                // That justification is false in precisely the branch it was written in.
+                // This is the case where our hash at their head does NOT match theirs —
+                // their chain is not a prefix of ours, it is a different chain that
+                // happens to be shorter, so their head number says nothing about where
+                // the two parted. Measured on a real run: a host at 90 and a client at
+                // 98 that had actually parted at or below 84, where the fallback offered
+                // back 9 deposits and 9 orders out of 14. Under-refunding cannot create
+                // items, which is why it was quiet, and quiet is how it survived.
+                long splitAt = -1;
+                try {
+                    splitAt = MarketClient.findSplitPoint(host, port, log);
+                } catch (IOException probe) {
+                    System.err.println("[economiesmod] could not locate the split point: "
+                            + probe.getMessage());
+                }
+
                 divergence = new Divergence(refusal.hostName, refusal.hostSeq,
-                        refusal.hostHash, ourHashAtTheirHead);
+                        refusal.hostHash, ourHashAtTheirHead, splitAt);
+                if (splitAt >= 0) {
+                    System.out.println("[economiesmod] parted after event " + splitAt
+                            + ", " + (log.lastSeq() - splitAt) + " of ours since");
+                }
                 return false;
             }
 
@@ -704,8 +818,21 @@ public class MarketStateHolder {
             // precisely what let a duplicate sequence number get appended before.
             log = new EventLog(logPathFor(currentWorldDir));
 
+            // Whether to archive this market if the host turns out to be a dedicated
+            // server. A question rather than an answer, because it is asked about the
+            // host's market id during the handshake — which is the only id that is
+            // certain to exist. Somebody joining a big server for the first time holds
+            // no market at all, and they are precisely who this feature is for.
+            java.util.function.Predicate<UUID> archive =
+                    id -> settings == null || settings.archives(id);
+
             MarketClient c = new MarketClient(userId, displayName, keys, log, persist,
-                    peerCache, myHostPort);
+                    peerCache, myHostPort, archive);
+            // Which slot we are about to fill, so the check below can exempt it — the
+            // active slot reconnecting to its own market is the ordinary case.
+            final String activeSlot = MarketSlots.active(currentWorldDir);
+            final Path world = currentWorldDir;
+            c.setHeldElsewhere(id -> MarketSlots.slotHolding(world, id, activeSlot) != null);
             c.setOnRejected(onRejected);
             c.setOnProposalRefused(MarketStateHolder::noteRefusedProposal);
             c.setOnApplied(APPLIED);
@@ -847,9 +974,11 @@ public class MarketStateHolder {
 
         try {
             localLog = log;
-            chainBrokenAt = log.verifyChain();
-            damageReason = log.damageReason();
-            localState = EventApplier.replay(log);
+            EventApplier.Replayed loaded = EventApplier.load(log);
+            chainBrokenAt = loaded.chainBrokenAt;
+            damageReason = log.damageReasonFor(chainBrokenAt);
+            localHistoryComplete = loaded.logCoversHead;
+            localState = loaded.state;
             seedActivity(log);
         } catch (Exception e) {
             // Same reasoning as loadLocal: this runs on a UI-driven path, and a throw
@@ -1281,6 +1410,67 @@ public class MarketStateHolder {
         return s != null && s.marketId() != null;
     }
 
+    /**
+     * Whether this machine holds the history behind the market it is showing.
+     *
+     * It usually does, and on a rotating host it always does. What makes this a question
+     * is step 4 of the compaction note: a client of a dedicated market keeps a snapshot
+     * and no history by default, so its state can be a hundred thousand events ahead of
+     * a log that holds nothing at all.
+     *
+     * Hosting is what this gates, and the reason is not tidiness. A host serves a joiner
+     * by reading raw lines out of its log; one with no history would accept the
+     * connection and hand over nothing, and the market it advertised would be a market
+     * nobody could actually join. The Host button is already greyed while a dedicated
+     * server is serving this market — but that check is deliberately live-only, so the
+     * moment the box stops being discovered the button comes back, which is exactly the
+     * moment a snapshot-only replica must not take it.
+     *
+     * Being false is not damage and not an error. It is what somebody chose by not
+     * archiving a market that a server was looking after.
+     */
+    /** How many events are actually on disk here, as opposed to how far our state got. */
+    public static long localHeadSeq() {
+        // The file, not the primed head. lastSeq() answers from the state after a load,
+        // so it reported nine events on disk for a slot holding nought bytes.
+        try {
+            return localLog == null ? 0 : localLog.headSeqOnDisk();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Recorded at load, because it cannot be asked for cheaply afterwards and the cheap
+     * way of asking is wrong.
+     *
+     * The first version of {@link #hasFullHistory()} read {@code localLog.lastSeq()},
+     * which after a load is primed from the state rather than the file — so a slot with
+     * a nought-byte log answered with the state's head, and the gate that exists to stop
+     * a historyless replica hosting said yes to every one of them. Measured on a real
+     * slot: nought bytes on disk, {@code lastSeq()} of nine.
+     *
+     * Only changes at a load, or when a client stops writing mid-session. A log being
+     * written stays in step with the state it is building, so nothing else can move it.
+     */
+    private static boolean localHistoryComplete = true;
+
+    /**
+     * Whether this machine holds the history behind the market it is showing.
+     *
+     * See the field above for why this is a stored answer rather than a computed one.
+     */
+    public static boolean hasFullHistory() {
+        MarketState s = get();
+        if (s == null || s.marketId() == null) return false;
+        if (!localHistoryComplete) return false;
+        // A connected client that has stopped writing is building state its log will not
+        // contain, so completeness ends the moment that decision is taken rather than at
+        // the next load.
+        if (client != null && client.isConnected() && !client.keepsHistory()) return false;
+        return localLog != null;
+    }
+
     /** The name of the market in this world's log, or null if there isn't one. */
     public static String marketName() {
         MarketState s = get();
@@ -1421,6 +1611,16 @@ public class MarketStateHolder {
     }
 
     public static void startHosting(Path worldDir, int port, UUID userId, String playerName) {
+        // Asked here as well as by the button that greys itself, because a greyed control
+        // with a live handler behind it is this file's oldest recurring defect and has
+        // caused three of the entries in the session log's §0. The button can also be
+        // reached by a confirmation overlay that does not re-check.
+        if (!hasFullHistory() && hasMarket()) {
+            onRejected.accept("this copy of the market is a snapshot without its history,"
+                    + " so it cannot serve anybody — turn on archiving for this market"
+                    + " and reconnect once to fetch it");
+            return;
+        }
         currentWorldDir = worldDir;
         myHostPort = port;
         disconnectIfConnected();
@@ -1734,6 +1934,11 @@ public class MarketStateHolder {
             // player who owns the world, including their own self-connection when
             // hosting — with no way to fix it from inside the game.
             Files.deleteIfExists(log.resolveSibling("known-keys.json"));
+            // The snapshot is state computed from the log being deleted. Its chain-hash
+            // binding means a leftover one is refused rather than believed — a new log
+            // will not carry the hash it names — so this is tidiness rather than a
+            // guard. Which is exactly why it is done here and not relied on there.
+            Files.deleteIfExists(log.resolveSibling(log.getFileName() + ".snapshot.json"));
             // The watermark describes the market being discarded, so it goes with it —
             // otherwise a fresh market would look permanently behind the old one.
             if (highWater != null) highWater.clear();
