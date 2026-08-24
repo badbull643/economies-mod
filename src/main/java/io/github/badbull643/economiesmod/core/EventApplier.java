@@ -221,6 +221,15 @@ public class EventApplier {
             return Result.ok(Collections.emptyList());
         }
 
+        if (e instanceof Event.HostDefaults) {
+            // Recorded and nothing more. No rule anywhere reads this to decide whether
+            // something is allowed — a host consults it when it starts and may disagree,
+            // which is what keeps it defaults rather than enforcement and is why it
+            // cannot fork a market however hosting rotates.
+            state.setHostDefaults((Event.HostDefaults) e);
+            return Result.ok(Collections.emptyList());
+        }
+
         if (e instanceof Event.MigrateBalance) {
             Event.MigrateBalance mb = (Event.MigrateBalance) e;
             if (mb.credits > 0) state.wallets().adjust(mb.beneficiary, mb.credits);
@@ -711,6 +720,41 @@ public class EventApplier {
             }
             if (!state.creator().equals(e.userId)) {
                 return Result.reject("only the market's creator can set policy");
+            }
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.HostDefaults) {
+            Event.HostDefaults hd = (Event.HostDefaults) e;
+
+            // Creator-signed, exactly as policy is. Anybody being able to publish the
+            // group's rules would make this a way to tell every future host to stop
+            // capping deposits, which is the opposite of what it is for.
+            if (state.creator() == null) {
+                return Result.reject("this market has no creator recorded");
+            }
+            if (!state.creator().equals(e.userId)) {
+                return Result.reject("only the market's creator can publish host rules");
+            }
+
+            // Bounded here even though nothing enforces them, because a published figure
+            // is read by every future host and a nonsense one would be adopted by all of
+            // them. Refusing at the gate every replica passes is the same reasoning as
+            // MarketPolicy's, for a value that is advice rather than law.
+            if (hd.maxDepositUnitsPerWindow != null && hd.maxDepositUnitsPerWindow < 0) {
+                return Result.reject("deposit cap cannot be negative");
+            }
+            if (hd.depositWindowMinutes != null && hd.depositWindowMinutes < 1) {
+                return Result.reject("a deposit window needs at least one minute");
+            }
+            if (hd.maxMigratedCredits != null && hd.maxMigratedCredits < 0) {
+                return Result.reject("migrated-credit cap cannot be negative");
+            }
+            if (hd.maxWelcomeGrant != null && hd.maxWelcomeGrant < 0) {
+                return Result.reject("welcome-grant ceiling cannot be negative");
+            }
+            if (hd.admission != null && !ServerConfig.isAdmissionMode(hd.admission)) {
+                return Result.reject("unknown admission mode '" + hd.admission + "'");
             }
             return Result.ok(Collections.emptyList());
         }
