@@ -159,7 +159,13 @@ public final class MarketSlots {
         Path log = logPath(worldDir, slot);
         if (log == null || !Files.exists(log)) return null;
         try {
-            return new EventLog(log).marketName();
+            EventLog opened = new EventLog(log);
+            String fromLog = opened.marketName();
+            if (fromLog != null) return fromLog;
+            // A slot that keeps a snapshot and no history has no genesis event to read a
+            // name from, and returning null here left the switcher drawing a row nobody
+            // could identify. The snapshot knows what the market is called.
+            return MarketSnapshot.marketNameFor(opened);
         } catch (Exception e) {
             return null;   // damaged or half-written; the slot still exists
         }
