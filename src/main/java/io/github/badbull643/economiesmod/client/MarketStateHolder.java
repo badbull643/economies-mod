@@ -827,6 +827,11 @@ public class MarketStateHolder {
 
             MarketClient c = new MarketClient(userId, displayName, keys, log, persist,
                     peerCache, myHostPort, archive);
+            // Which slot we are about to fill, so the check below can exempt it — the
+            // active slot reconnecting to its own market is the ordinary case.
+            final String activeSlot = MarketSlots.active(currentWorldDir);
+            final Path world = currentWorldDir;
+            c.setHeldElsewhere(id -> MarketSlots.slotHolding(world, id, activeSlot) != null);
             c.setOnRejected(onRejected);
             c.setOnProposalRefused(MarketStateHolder::noteRefusedProposal);
             c.setOnApplied(APPLIED);
