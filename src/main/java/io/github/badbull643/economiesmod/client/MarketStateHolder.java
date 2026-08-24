@@ -635,6 +635,7 @@ public class MarketStateHolder {
             EventApplier.Replayed loaded = EventApplier.load(localLog);
             chainBrokenAt = loaded.chainBrokenAt;
             damageReason = localLog.damageReasonFor(chainBrokenAt);
+            localHistoryComplete = loaded.logCoversHead;
             if (chainBrokenAt != -1) {
                 System.err.println("[economiesmod] log unusable: " + damageReason);
             }
@@ -976,6 +977,7 @@ public class MarketStateHolder {
             EventApplier.Replayed loaded = EventApplier.load(log);
             chainBrokenAt = loaded.chainBrokenAt;
             damageReason = log.damageReasonFor(chainBrokenAt);
+            localHistoryComplete = loaded.logCoversHead;
             localState = loaded.state;
             seedActivity(log);
         } catch (Exception e) {
@@ -1429,19 +1431,44 @@ public class MarketStateHolder {
      */
     /** How many events are actually on disk here, as opposed to how far our state got. */
     public static long localHeadSeq() {
-        return localLog == null ? 0 : localLog.lastSeq();
+        // The file, not the primed head. lastSeq() answers from the state after a load,
+        // so it reported nine events on disk for a slot holding nought bytes.
+        try {
+            return localLog == null ? 0 : localLog.headSeqOnDisk();
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
+    /**
+     * Recorded at load, because it cannot be asked for cheaply afterwards and the cheap
+     * way of asking is wrong.
+     *
+     * The first version of {@link #hasFullHistory()} read {@code localLog.lastSeq()},
+     * which after a load is primed from the state rather than the file — so a slot with
+     * a nought-byte log answered with the state's head, and the gate that exists to stop
+     * a historyless replica hosting said yes to every one of them. Measured on a real
+     * slot: nought bytes on disk, {@code lastSeq()} of nine.
+     *
+     * Only changes at a load, or when a client stops writing mid-session. A log being
+     * written stays in step with the state it is building, so nothing else can move it.
+     */
+    private static boolean localHistoryComplete = true;
+
+    /**
+     * Whether this machine holds the history behind the market it is showing.
+     *
+     * See the field above for why this is a stored answer rather than a computed one.
+     */
     public static boolean hasFullHistory() {
         MarketState s = get();
         if (s == null || s.marketId() == null) return false;
-        if (localLog == null) return false;
-        long onDisk = localLog.lastSeq();
-        if (onDisk <= 0) return false;
-        // Behind what we know is the same problem in weaker form: we would serve a
-        // market shorter than the one we are looking at.
-        long weKnow = client != null ? Math.max(onDisk, client.lastSeq()) : onDisk;
-        return onDisk >= weKnow;
+        if (!localHistoryComplete) return false;
+        // A connected client that has stopped writing is building state its log will not
+        // contain, so completeness ends the moment that decision is taken rather than at
+        // the next load.
+        if (client != null && client.isConnected() && !client.keepsHistory()) return false;
+        return localLog != null;
     }
 
     /** The name of the market in this world's log, or null if there isn't one. */
