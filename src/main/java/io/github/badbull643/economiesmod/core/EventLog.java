@@ -624,17 +624,50 @@ public class EventLog {
     }
 
     /** Raw JSONL lines from seq onward — used to send the wire format unchanged. */
-    public List<String> rawLinesFrom(long fromSeq) throws IOException {
-        List<String> out = new ArrayList<>();
+    /**
+     * One raw line of a walk. Return false to stop early.
+     *
+     * Allowed to fail, unlike {@link Visitor}: the caller this exists for is writing
+     * each line to a socket as it arrives, and a broken connection partway through a
+     * history is an ordinary thing rather than a bug to be swallowed.
+     */
+    @FunctionalInterface
+    public interface RawVisitor {
+        boolean visit(String line) throws IOException;
+    }
+
+    /**
+     * Hands over raw lines from fromSeq onward, one at a time.
+     *
+     * For sending a history rather than replaying one — the wire format is the file's
+     * own lines, so nothing here parses an event it is only going to pass along.
+     *
+     * The reason this exists rather than {@link #rawLinesFrom} is the same reason
+     * {@link #forEach} exists: a host serving a joiner built the entire market in memory
+     * before sending a byte of it. Measured at roughly the size of the log again, so a
+     * large market meant the better part of a gigabyte allocated per person arriving,
+     * and several seconds before anything went out. Reading was always line by line;
+     * only the piling-up was the problem.
+     */
+    public void forEachRawLine(long fromSeq, RawVisitor visitor) throws IOException {
+        if (!Files.exists(file)) return;
         try (java.io.BufferedReader reader =
                      Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.trim().isEmpty()) continue;
                 long seq = new JsonParser().parse(line).getAsJsonObject().get("seq").getAsLong();
-                if (seq >= fromSeq) out.add(line);
+                if (seq >= fromSeq && !visitor.visit(line)) return;
             }
         }
+    }
+
+    public List<String> rawLinesFrom(long fromSeq) throws IOException {
+        List<String> out = new ArrayList<>();
+        forEachRawLine(fromSeq, line -> {
+            out.add(line);
+            return true;
+        });
         return out;
     }
 
