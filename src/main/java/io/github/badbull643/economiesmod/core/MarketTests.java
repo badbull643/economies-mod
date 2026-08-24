@@ -4155,6 +4155,32 @@ public class MarketTests {
                 MarketSnapshot.save(new EventLog(deleted), real.state, real.headSeq,
                         real.headHash);            // the ordinary kind, log kept
                 Files.write(deleted, new byte[0]);  // ...and then the log goes missing
+                // A snapshot-only slot still has to be nameable. Its log holds no genesis
+                // to read a name from, and without a fallback the market switcher drew a
+                // row with nothing on it — an entry nobody could tell from any other, in
+                // the control §0.16 exists about.
+                check("a snapshot names its market when the log cannot",
+                        "test market".equals(
+                                MarketSnapshot.marketNameFor(new EventLog(bare))) ? 1 : 0, 1);
+                check("and there is nothing to read when no snapshot is there",
+                        MarketSnapshot.marketNameFor(new EventLog(full)) == null ? 1 : 0, 1);
+
+                // Through the switcher's own question, not just the helper behind it.
+                // Checking only the helper left the fallback in MarketSlots untested —
+                // removing it kept every check green, which makes them the wrong checks.
+                Path world = scratch("nolog-world");
+                Path slotLog = MarketSlots.logPath(world, "market-2");
+                Files.createDirectories(slotLog.getParent());
+                Files.deleteIfExists(slotLog);
+                Files.deleteIfExists(slotLog.resolveSibling(
+                        slotLog.getFileName() + ".snapshot.json"));
+                MarketSnapshot.save(new EventLog(slotLog), real.state, real.headSeq,
+                        real.headHash, true);
+                Files.write(slotLog, new byte[0]);
+                check("the switcher can name a slot that holds only a snapshot",
+                        "test market".equals(MarketSlots.marketNameIn(world, "market-2"))
+                                ? 1 : 0, 1);
+
                 check("deleting a log still resets the market",
                         MarketSnapshot.loadIfValid(new EventLog(deleted)) == null ? 1 : 0, 1);
                 check("and the market really is gone",
