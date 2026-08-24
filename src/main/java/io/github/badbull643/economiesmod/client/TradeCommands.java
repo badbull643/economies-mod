@@ -2,6 +2,7 @@ package io.github.badbull643.economiesmod.client;
 
 import com.google.gson.JsonElement;
 import com.mojang.brigadier.context.CommandContext;
+import io.github.badbull643.economiesmod.core.Event;
 import io.github.badbull643.economiesmod.core.MarketState;
 import io.github.badbull643.economiesmod.core.Settings;
 import io.github.badbull643.economiesmod.core.Order;
@@ -35,33 +36,60 @@ import java.util.UUID;
  * no mixin — verified present in fabric-command-api-v1 1.1.3 before being written
  * against.
  *
- * <h2>Why only queries, and the one exception</h2>
+ * <h2>What may be a command, and what may not</h2>
  *
- * Every command here reads the market. Nothing buys, sells, cancels, resets or migrates.
+ * This used to read "every command here reads the market", with an exception bolted on
+ * beneath it. Then a second exception arrived, and two exceptions with good arguments
+ * and no rule between them is how a boundary turns into a habit — the next person has a
+ * precedent to argue from rather than a test to apply. So the test is written down here
+ * instead, and the exceptions are gone because they were never exceptions to the thing
+ * that actually mattered.
  *
- * The reading ones are free: they duplicate no mutation logic, need no confirmation
- * design, and cannot cost anybody anything if they are wrong. Trading verbs are not
- * free, and the constraint that decides whether they stay cheap is that a command and
- * the screen must submit through one path — two paths mean two validations, and they
- * drift silently until someone reports a bug. That work belongs with the verbs, not
- * before them.
+ * <b>A command may write when getting it wrong cannot cost anybody their items, their
+ * credits, or their market.</b>
  *
- * Lifecycle verbs — reset, migrate, import, host — are deliberately never coming. Those
- * are exactly what the guided Market screen exists to protect: it works out which of
- * Reset and Migrate applies and refuses to offer the wrong one, behind a DANGER overlay
- * with a double-click guard. A command would put a market-destroying action one typo
- * from execution with none of that.
+ * That is the whole rule. It is about the harm, not the mechanism: "does this touch the
+ * ledger" was never the question, because the ledger is only frightening for what it
+ * cannot take back.
  *
- * <b>hostconfig write is the exception, and it writes a file rather than the market.</b>
- * The rule above is about the ledger — an append-only chain with no undo, where a wrong
- * command costs somebody their items. A host-config.json costs nothing: it takes effect
- * only when hosting next starts, every value in it can be edited back by hand, and it
- * cannot be written over anything (write refuses when the file is already there). It is
- * here because there was no other way to reach it. Host rules — admission, deposit caps,
- * attestation, acceptsMigration, maxWelcomeGrant — have no control anywhere in the UI,
- * and the file they live in is one nothing creates, in a directory the game never names
- * until you have already hosted once. A setting nobody can find is a setting that does
- * not exist, which is how the free-order allowance shipped switched permanently off.
+ * What it admits, and each of these is here now:
+ *
+ * <ul>
+ *   <li><b>Queries.</b> They cannot be wrong in a way that costs anything.</li>
+ *   <li><b>A local file</b> — {@code hostconfig write}. It takes effect only when
+ *       hosting next starts, every value can be edited back by hand, and it refuses to
+ *       overwrite. It is here because there was no other way to reach it: host rules had
+ *       no control anywhere in the UI and live in a file nothing creates, in a directory
+ *       the game never names until you have hosted once.</li>
+ *   <li><b>A local preference</b> — {@code archive}. It decides what this machine keeps
+ *       on its own disk and can be reversed by typing the opposite.</li>
+ *   <li><b>An advisory record</b> — {@code hostrules publish}. It appends to the log,
+ *       and passes anyway: it moves no balance, creates and destroys nothing, is read by
+ *       no rule in EventApplier, and publishing again replaces it entirely. What a wrong
+ *       one costs is a figure future hosts start from until somebody corrects it, which
+ *       is a message rather than a market.</li>
+ * </ul>
+ *
+ * What it permanently excludes, and why each fails the same test:
+ *
+ * <ul>
+ *   <li><b>Trading verbs</b> — buy, sell, cancel. A wrong one costs credits or goods
+ *       immediately. They fail for a second reason too: a command and the screen would
+ *       have to submit through one path, or two validations drift silently until
+ *       somebody reports a bug.</li>
+ *   <li><b>Lifecycle verbs</b> — reset, migrate, import, host. A wrong one costs a
+ *       market. These are exactly what the guided screen exists to protect: it works out
+ *       which of Reset and Migrate applies, refuses to offer the wrong one, and puts a
+ *       DANGER overlay and a double-click guard in front of it. A command would put a
+ *       market-destroying action one typo from execution with none of that.</li>
+ * </ul>
+ *
+ * The two admitted writes are both here for the same reason, and it is worth stating
+ * because it is the argument that will be made next: <b>a setting nobody can find is a
+ * setting that does not exist</b>, which is how the free-order allowance shipped
+ * switched permanently off for its entire life. That reason justifies reaching for a
+ * command; it does not justify failing the test above. Something that would cost
+ * somebody their market and has no control anywhere needs a control, not a command.
  */
 public final class TradeCommands {
 
@@ -90,6 +118,10 @@ public final class TradeCommands {
                                 .then(ClientCommandManager.literal("write")
                                         .executes(TradeCommands::hostConfigWrite))
                                 .executes(TradeCommands::hostConfig))
+                        .then(ClientCommandManager.literal("hostrules")
+                                .then(ClientCommandManager.literal("publish")
+                                        .executes(TradeCommands::publishHostRules))
+                                .executes(TradeCommands::hostRules))
                         .then(ClientCommandManager.literal("archive")
                                 .then(ClientCommandManager.literal("on")
                                         .executes(c -> setArchive(c, true)))
@@ -105,8 +137,104 @@ public final class TradeCommands {
         info(src, "/trade orders — your resting orders");
         info(src, "/trade price <item> — the book for one item");
         info(src, "/trade hostconfig — the rules this world hosts under");
+        info(src, "/trade hostrules — the rules this market's group agreed once");
         info(src, "/trade archive — whether this copy keeps the market's whole history");
         info(src, "Trading itself is on the market screen (M).");
+        return 1;
+    }
+
+    /**
+     * What host rules this market's group has agreed, and what this host does with them.
+     *
+     * Reading half. The publishing half below writes, and the rule on this class is what
+     * says it may.
+     */
+    private static int hostRules(CommandContext<FabricClientCommandSource> ctx) {
+        FabricClientCommandSource src = ctx.getSource();
+        MarketState market = marketOrComplain(src);
+        if (market == null) return 0;
+
+        Event.HostDefaults published = market.hostDefaults();
+        head(src, "Host rules published by '" + market.marketName() + "'");
+        if (published == null) {
+            info(src, "None. Every host of this market starts from its own settings, so"
+                    + " a friend who has never opened the file hosts with no caps at all.");
+            info(src, "/trade hostrules publish writes this host's rules into the market,"
+                    + " for every future host to start from.");
+            return 1;
+        }
+
+        describe(src, "deposit cap per window", published.maxDepositUnitsPerWindow);
+        describe(src, "deposit window (minutes)", published.depositWindowMinutes);
+        describe(src, "migrated-credit cap", published.maxMigratedCredits);
+        describe(src, "welcome-grant ceiling", published.maxWelcomeGrant);
+        describe(src, "accepts migration", published.acceptsMigration);
+        describe(src, "admission", published.admission);
+        describe(src, "allow", published.allow);
+        describe(src, "deny", published.deny);
+
+        info(src, "These are defaults, not rules. A host takes up whatever it has not set"
+                + " for itself, and is free to disagree with all of it.");
+        info(src, "/trade hostconfig shows what is actually in force here.");
+        return 1;
+    }
+
+    private static void describe(FabricClientCommandSource src, String label, Object value) {
+        info(src, "  " + label + ": " + (value == null ? "not set by the group" : value));
+    }
+
+    /**
+     * Publishes this host's rules into the market, for every future host to start from.
+     *
+     * Writes to the log, and is allowed to under the rule on this class: getting it
+     * wrong cannot cost anybody their items, their credits or their market. See there
+     * for what that admits and what it will never admit — the reasoning lives in one
+     * place so the next write can be tested against it rather than argued beside it.
+     *
+     * It is a command rather than a screen control because that screen is 4,700 lines
+     * and backlog item 6 defers adding to it until item 5 has split it.
+     */
+    private static int publishHostRules(CommandContext<FabricClientCommandSource> ctx) {
+        FabricClientCommandSource src = ctx.getSource();
+        MarketState market = marketOrComplain(src);
+        if (market == null) return 0;
+
+        UUID me = me();
+        if (me == null) return 0;
+        if (market.creator() == null || !market.creator().equals(me)) {
+            info(src, "Only the market's creator can publish its host rules.");
+            return 0;
+        }
+
+        Path file = hostConfigFileOrComplain(src);
+        if (file == null) return 0;
+        ServerConfig cfg = hostRulesOrComplain(src, file);
+        if (cfg == null) return 0;
+
+        // From the same object /trade hostconfig prints, so what somebody read a moment
+        // ago is what goes into the market. Two ways of working out "the rules here"
+        // would be one description of a setting living next to the setting.
+        Event.HostDefaults rules = new Event.HostDefaults();
+        rules.userId = me;
+        rules.maxDepositUnitsPerWindow = cfg.maxDepositUnitsPerWindow;
+        rules.depositWindowMinutes = cfg.depositWindowMinutes;
+        rules.maxMigratedCredits = cfg.maxMigratedCredits;
+        rules.maxWelcomeGrant = cfg.maxWelcomeGrant();
+        rules.acceptsMigration = cfg.acceptsMigration();
+        rules.admission = cfg.admission;
+        rules.allow = cfg.allow == null ? null : new java.util.ArrayList<>(cfg.allow);
+        rules.deny = cfg.deny == null ? null : new java.util.ArrayList<>(cfg.deny);
+
+        MarketStateHolder.Submission sent = MarketStateHolder.submit(rules);
+        if (sent != null && !sent.pending && !sent.accepted) {
+            info(src, "Could not publish: "
+                    + (sent.reason == null ? "the host refused it" : sent.reason));
+            return 0;
+        }
+        head(src, "Published this host's rules to '" + market.marketName() + "'");
+        info(src, "Every future host of this market starts from these, for anything they"
+                + " have not set for themselves. Nothing is enforced by them.");
+        info(src, "/trade hostrules to see what the market now carries.");
         return 1;
     }
 
@@ -117,6 +245,9 @@ public final class TradeCommands {
      * play from, the events were each checked as they arrived, and a hundred players do
      * not need a hundred copies of a half-gigabyte log to keep one market alive. A few
      * do, though, and this is how somebody becomes one of them.
+     *
+     * Sets a local preference, which the rule on this class admits: getting it wrong
+     * costs a slower load and nothing else, and typing the opposite undoes it.
      *
      * Here rather than only in `economiesmod-settings-<name>.json` for §0.18's reason,
      * which cost this project a whole entry: a rule whose default does something, with no

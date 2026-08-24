@@ -172,6 +172,47 @@ public abstract class Event {
         public List<UUID> foreignParticipants;
     }
 
+    /**
+     * Host rules a group has agreed once, published by the creator.
+     *
+     * <b>Defaults, never enforcement.</b> Nothing in {@code EventApplier.validate} reads
+     * this, no replica has to agree about what it means, and a host that ignores it
+     * produces a perfectly valid market. It exists because a group's economy is
+     * otherwise only as protected as its most permissive host: a deposit cap that
+     * applied on Tuesday and not Wednesday capped nothing, since Wednesday's goods are
+     * in the ledger for good, and rotating to somebody who never opened
+     * {@code host-config.json} was enough to do it.
+     *
+     * Host rules cannot <i>travel</i> — be replicated and enforced — for three separate
+     * reasons the backlog records, any one of which is fatal. What they can do is be
+     * written down where the next host will find them. That is all this is.
+     *
+     * <b>Every field is boxed, and that is the design.</b> A {@code MarketPolicy} event
+     * is the whole policy, so anything it does not restate is set to zero — which once
+     * silently wiped the stipend. Here null means "the group has never said", which is a
+     * different thing from "the group said nought", and the two have to stay
+     * distinguishable or publishing an admission list would quietly remove a deposit
+     * cap. The publisher still builds from what is already published, so a partial
+     * event is not expressible from the UI either; the boxing is the belt to that
+     * braces.
+     *
+     * <b>The subset is deliberate.</b> Deposit caps, migration limits, the welcome-grant
+     * ceiling and admission are things a group can sensibly agree. Attestation, the
+     * world checks and bans are not here and should not be: "I do not want this person
+     * on my machine" is a different decision from "this group excludes them", and making
+     * the first mean the second is heavier than it looks.
+     */
+    public static class HostDefaults extends Event {
+        public Long maxDepositUnitsPerWindow;
+        public Integer depositWindowMinutes;
+        public Long maxMigratedCredits;
+        public Long maxWelcomeGrant;
+        public Boolean acceptsMigration;
+        public String admission;
+        public List<String> allow;
+        public List<String> deny;
+    }
+
     public static class Deposit extends Event {
         public String itemId;
         public long quantity;

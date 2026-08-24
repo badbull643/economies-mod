@@ -233,9 +233,18 @@ public class EventLog {
      *
      * <b>The prefix is not examined at all</b> on the fast path, so a line below
      * afterSeq that this build cannot parse goes unnoticed here where {@code forEach}
-     * would have stopped at it. That is the point rather than an oversight: the only
-     * caller is a replay carrying on from a snapshot, and a snapshot is used only when
-     * the chain hash it recorded is still the one on disk at that sequence number.
+     * would have stopped at it. That is the point rather than an oversight, but it is a
+     * property every caller has to be able to live with, so they are named:
+     *
+     * <ul>
+     *   <li>a replay carrying on from a snapshot, and a snapshot is used only when the
+     *       chain hash it recorded is still the one on disk at that sequence number;</li>
+     *   <li>{@link #hashAtSeqFast}, which is how that check is made;</li>
+     *   <li>{@code BranchDiff.depositsOnlyAfter}, which nets deposits made after a fork
+     *       and is bounded twice by what the ledger says is still held — so a prefix it
+     *       never reads can only make it hand back less. Its sibling
+     *       {@code ordersOnlyAfter} needs the prefix and does not use this.</li>
+     * </ul>
      */
     public void forEachAfter(long afterSeq, Visitor visitor) throws IOException {
         if (afterSeq <= 0) {
@@ -497,6 +506,7 @@ public class EventLog {
             case "DepositAndList": return Event.DepositAndList.class;
             case "MarketPolicy":  return Event.MarketPolicy.class;
             case "Stipend":       return Event.Stipend.class;
+            case "HostDefaults":  return Event.HostDefaults.class;
             default:
                 throw new IllegalStateException("Unknown event type in log: " + typeName);
         }
