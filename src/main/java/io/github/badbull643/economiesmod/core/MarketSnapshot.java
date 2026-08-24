@@ -403,10 +403,23 @@ public final class MarketSnapshot {
         public final long seq;
         public final String chainHash;
 
-        Restored(MarketState state, long seq, String chainHash) {
+        /**
+         * Whether this was taken on its own authority, with no log beside it to check.
+         *
+         * The one thing a caller cannot work out afterwards without reading the file,
+         * and the whole of what {@code logCoversHead} needs to know: a snapshot accepted
+         * against the log's own hash has a log under it by definition, and only this
+         * branch produces state the log does not account for. Carried here so that
+         * question costs nothing — it used to be answered by walking the whole file,
+         * which is what a snapshot exists to avoid.
+         */
+        public final boolean logless;
+
+        Restored(MarketState state, long seq, String chainHash, boolean logless) {
             this.state = state;
             this.seq = seq;
             this.chainHash = chainHash;
+            this.logless = logless;
         }
     }
 
@@ -453,7 +466,7 @@ public final class MarketSnapshot {
                 // reports a fork. So a snapshot that has drifted from the market is
                 // caught the moment we next speak to anybody — which for a market with
                 // no local history is the only moment it could matter.
-                return new Restored(rebuild(b), b.seq, b.chainHash);
+                return new Restored(rebuild(b), b.seq, b.chainHash, true);
             }
             if (onDisk == null || !onDisk.equals(b.chainHash)) {
                 System.out.println("[economiesmod] snapshot describes a chain this log no"
@@ -461,7 +474,7 @@ public final class MarketSnapshot {
                 return null;
             }
 
-            return new Restored(rebuild(b), b.seq, b.chainHash);
+            return new Restored(rebuild(b), b.seq, b.chainHash, false);
         } catch (Exception e) {
             // A snapshot must never be able to stop a market opening. Every failure here
             // is answerable by doing the thing this class exists to avoid.

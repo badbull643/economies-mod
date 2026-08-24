@@ -636,6 +636,7 @@ public class MarketStateHolder {
             chainBrokenAt = loaded.chainBrokenAt;
             damageReason = localLog.damageReasonFor(chainBrokenAt);
             localHistoryComplete = loaded.logCoversHead;
+            stateHeadSeq = loaded.headSeq;
             if (chainBrokenAt != -1) {
                 System.err.println("[economiesmod] log unusable: " + damageReason);
             }
@@ -978,6 +979,7 @@ public class MarketStateHolder {
             chainBrokenAt = loaded.chainBrokenAt;
             damageReason = log.damageReasonFor(chainBrokenAt);
             localHistoryComplete = loaded.logCoversHead;
+            stateHeadSeq = loaded.headSeq;
             localState = loaded.state;
             seedActivity(log);
         } catch (Exception e) {
@@ -1456,6 +1458,16 @@ public class MarketStateHolder {
     private static boolean localHistoryComplete = true;
 
     /**
+     * Where the state this world is showing actually got to, recorded at the same load.
+     *
+     * The other half of the pair above, and it exists so that "is my log readable through
+     * my head" can be asked without asking {@code lastSeq()}, which after a load is
+     * primed from the state and would compare the state against itself — the same wrong
+     * question that let a historyless replica host. Read once, by startHosting.
+     */
+    private static long stateHeadSeq = 0;
+
+    /**
      * Whether this machine holds the history behind the market it is showing.
      *
      * See the field above for why this is a stored answer rather than a computed one.
@@ -1616,11 +1628,60 @@ public class MarketStateHolder {
         // caused three of the entries in the session log's §0. The button can also be
         // reached by a confirmation overlay that does not re-check.
         if (!hasFullHistory() && hasMarket()) {
-            onRejected.accept("this copy of the market is a snapshot without its history,"
-                    + " so it cannot serve anybody — turn on archiving for this market"
-                    + " and reconnect once to fetch it");
+            // Long form to the console, short form to the screen. The footer draws one
+            // trimmed line, so the sentence this used to send — a hundred and fifty
+            // characters ending in the only instruction it contained — arrived as
+            // "...so it cannot serve any..." and told nobody anything. It had never been
+            // seen at all until the reason stopped being overwritten by "Failed to start
+            // host", which is how a message this shape survived being written.
+            System.err.println("[economiesmod] not hosting: this copy of the market is a"
+                    + " snapshot without the history behind it, so it has no lines to send"
+                    + " anybody who joins. Turn archiving on for this market with"
+                    + " /trade archive on, reconnect once to fetch the history, and it can"
+                    + " be hosted from here afterwards.");
+            onRejected.accept("no history here to serve — /trade archive on, then reconnect");
             return;
         }
+
+        // Whether the file can actually be read through, which is a different question
+        // from the one above and the only place in the mod that has to ask it. Hosting
+        // means handing this history to somebody who will verify it; a log with a line
+        // this build cannot parse hands over a truncated chain and forks whoever takes
+        // it.
+        //
+        // It costs a pass over the file, and it is here rather than on the load path
+        // because here is where it is decided. Every world load used to pay it, through
+        // logCoversHead, for a case that arises when a snapshot sits on top of a damaged
+        // log — rare, invisible on screen, and worth one pause at the moment somebody
+        // presses Host. The button beside it cannot ask this: it is set from a render
+        // path, and a parse of the log per frame is not a trade anybody would make.
+        //
+        // Says what is wrong, too. The refusal above would have covered this case before
+        // and told the player to turn on archiving, which is advice for a different
+        // problem — archiving is already on, and their file is damaged.
+        if (localLog != null && localState != null && hasMarket()) {
+            // localHeadSeq answers 0 rather than throwing when the file cannot be read at
+            // all, which lands in the same refusal as a file that stops early — right in
+            // both cases, and the reason the message names the number it reached.
+            long readable = localHeadSeq();
+            if (readable < stateHeadSeq) {
+                // Short enough to survive the footer, which trims to one line and would
+                // otherwise cut off the half that says what to do — the defect §0 of the
+                // session log records twice. The reasoning goes to the console, where
+                // there is room for it.
+                System.err.println("[economiesmod] not hosting: this world's log stops"
+                        + " being readable at event " + readable + " while the market is"
+                        + " at " + stateHeadSeq + ". A snapshot is standing in for the"
+                        + " history, so the market itself is intact on screen — but the"
+                        + " file is damaged, and serving it would hand a joiner a chain"
+                        + " that breaks partway. Reset the local history and rejoin"
+                        + " whoever else holds this market.");
+                onRejected.accept("log damaged after event " + readable
+                        + " — reset before hosting");
+                return;
+            }
+        }
+
         currentWorldDir = worldDir;
         myHostPort = port;
         disconnectIfConnected();
