@@ -104,7 +104,7 @@ fills nobody experienced. See the design note, and the Not-on-this-list section 
 
 ---
 
-## 2. Log compaction — and what a long log actually costs
+## 2. ~~Log compaction — and what a long log actually costs~~ — DONE 2026-08-24, all five steps
 
 **Design: [`design/log-compaction.md`](design/log-compaction.md), rewritten 2026-08-23
 against measurements. All five steps are resolved: 1 to 4 built, and 5 closed once it
@@ -228,7 +228,8 @@ the bottom of its box — and no suite here would have seen any of them.
 
 ## 5. Splitting `MarketScreen`
 
-4,293 lines. Five of the thirteen defects in the session log's §0 lived in it, on top of
+**4,718 lines** — it was 4,293 when this entry was written, and grew during two sessions
+that were nominally about something else. That is the entry restating itself. Five of the thirteen defects in the session log's §0 lived in it, on top of
 three the session before.
 
 **Split by component, never by layer.** Separating render from hit-test is the recurring
