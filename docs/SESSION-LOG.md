@@ -1040,6 +1040,9 @@ of the same items is §4 again, in prose.*
   this treated the symptom; and no real market has been seen pressing against the price
   floor. See the Dropped section there for the one constraint worth keeping.
 - Whether `MarketScreen` gets split — backlog item 5.
+- ~~Whether host rules can be agreed once without travelling.~~ **Built 2026-08-24**, as
+  backlog item 8 describes: published by the creator, adopted by a host for anything it
+  has not set itself, enforced by nothing. `/trade hostrules`.
 - ~~Whether host rules should travel with the market.~~ **Decided 2026-08-23: no.** They
   cannot — a time-windowed cap would judge a client-set timestamp, the world checks weigh
   evidence no replica receives, and a deployment-dependent default forks the market when

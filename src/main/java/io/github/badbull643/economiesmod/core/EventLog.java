@@ -497,6 +497,7 @@ public class EventLog {
             case "DepositAndList": return Event.DepositAndList.class;
             case "MarketPolicy":  return Event.MarketPolicy.class;
             case "Stipend":       return Event.Stipend.class;
+            case "HostDefaults":  return Event.HostDefaults.class;
             default:
                 throw new IllegalStateException("Unknown event type in log: " + typeName);
         }

@@ -180,6 +180,16 @@ public final class MarketSnapshot {
         Map<String, Map<String, Long>> itemBalances = new LinkedHashMap<>();
         Map<String, BookBody> books = new LinkedHashMap<>();
         Map<String, List<TradeBody>> trades = new LinkedHashMap<>();
+
+        /**
+         * The host rules this market's creator published, stored as the event itself.
+         *
+         * Every field on it is already a plain boxed type, so there is nothing for Gson
+         * to guess, and keeping the whole event keeps its provenance — who published it
+         * and when — rather than flattening it into values that could have come from
+         * anywhere.
+         */
+        Event.HostDefaults hostDefaults;
     }
 
     /**
@@ -272,6 +282,7 @@ public final class MarketSnapshot {
         b.stipendAmount = state.stipendAmount();
         b.stipendEveryFills = state.stipendEveryFills();
         b.fillsEver = state.fillsEver();
+        b.hostDefaults = state.hostDefaults();
 
         for (Map.Entry<UUID, String> e : state.keyDirectory().entrySet()) {
             b.keyDirectory.put(str(e.getKey()), e.getValue());
@@ -472,6 +483,7 @@ public final class MarketSnapshot {
         s.setListingFreeOrders(b.listingFreeOrders);
         s.setStipend(b.stipendAmount, b.stipendEveryFills);
         s.setFillsEver(b.fillsEver);
+        s.setHostDefaults(b.hostDefaults);
 
         if (b.keyDirectory != null) {
             for (Map.Entry<String, String> e : b.keyDirectory.entrySet()) {

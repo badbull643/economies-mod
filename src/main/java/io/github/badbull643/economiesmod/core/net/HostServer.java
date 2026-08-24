@@ -300,6 +300,19 @@ public class HostServer {
 
         this.state = loaded.state;
 
+        // Take on whatever this market's group agreed, for anything this host has not
+        // decided for itself. Here rather than at either caller because this is the one
+        // place both deployments pass through, and because it is the first moment both
+        // halves exist: the config comes from a file or from code, the published rules
+        // come from the log, and neither caller has both.
+        Event.HostDefaults published = state.hostDefaults();
+        if (published != null) {
+            config.adopt(published);
+            System.out.println("[host] this market publishes host rules, and they have"
+                    + " been taken up where this host had not set its own —"
+                    + " /trade hostconfig to see what is in force");
+        }
+
         // A host with no genesis event has no market to serve. Refusing here is what
         // stops a market being created silently, as a side effect of clicking Host.
         if (state.marketId() == null) {

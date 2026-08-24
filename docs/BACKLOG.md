@@ -308,7 +308,46 @@ is the one thing meant to survive everybody being offline.
 because all of this is about what happens between two machines.
 ---
 
-## 8. Host rules a group can agree once — as defaults, never as enforcement
+## 8. ~~Host rules a group can agree once — as defaults, never as enforcement~~ — DONE 2026-08-24
+
+**Built as designed below, and the design held.** `Event.HostDefaults` is published by the
+creator, recorded in the log, and read by **nothing** in `EventApplier.validate` — a host
+consults it when it starts and is free to disagree, so no replica has to agree about it
+and hosting cannot fork the market however it rotates.
+
+`ServerConfig.adopt` fills in only what a host has not set for itself, so an operator who
+opened their own file keeps every word of it. `HostServer`'s constructor is the single
+place that asks, because it is the one point both deployments pass through and the first
+moment both halves exist — the config from a file or from code, the rules from the log.
+
+`/trade hostrules` reads what the market carries; `/trade hostrules publish` writes this
+host's rules into it. That is the **second** command in `TradeCommands` that is not a
+query and the first that touches the ledger, argued in its javadoc rather than assumed:
+the event moves no balance, is enforced by nothing, and republishing replaces it, so a
+wrong one costs a figure somebody corrects rather than anything anybody owns. It is a
+command and not a screen control because item 6 defers `MarketScreen` work until item 5 —
+and shipping it reachable from nowhere would have been §0.10 exactly.
+
+**Three things worth keeping from building it.**
+
+Every field on the event is **boxed**, so "the group never said" and "the group said
+nought" stay different answers. §7's trap — *a MarketPolicy event is the whole policy, so
+anything it does not restate is set to zero* — is closed at the type level rather than by
+remembering, and publishing still builds from what is in force so a partial event is not
+expressible anyway.
+
+The **shape fingerprint earned itself**. Adding one field to `MarketState` moved it from
+`6400af1f2bdcd673` to `c7efb9da38c778ba`, discarding every snapshot written before it,
+with nobody having to think about it. What it could not catch is a serialiser written
+incomplete *today* — `MarketSnapshot` did not know the new field, and L10 passed because
+its fixture published no rules. The fixture publishes them now, and dropping the field
+fails the round-trip with a readable diff.
+
+And the first draft of L17 **asked `apply` whether things were refused**, so three
+refusals passed that were never refused. The rules live in `validate`, which is §0.2's
+distinction, and it is still the easiest mistake in this codebase to make.
+
+## 8b. The original entry, kept for the reasoning
 
 **Decided 2026-08-23, after the question "should they travel?" was asked properly.**
 The answer is no, and the distinction is the whole entry: *travelling* means whoever hosts
