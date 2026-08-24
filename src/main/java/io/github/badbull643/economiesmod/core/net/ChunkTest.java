@@ -64,6 +64,9 @@ public class ChunkTest {
         Files.deleteIfExists(hostLog.resolveSibling("known-keys.json"));
 
         PlayerKeys hostKeys = PlayerKeys.generate();
+        // One keypair for the joiner across the whole suite: the market registers a key
+        // the first time it sees this identity, and a second keypair is an impostor.
+        PlayerKeys joinerKeys = PlayerKeys.generate();
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST_ID, "chunk test market", hostKeys);
 
@@ -112,7 +115,7 @@ public class ChunkTest {
             EventLog fresh = new EventLog(joinerLog);
             check("joiner starts empty", fresh.lastSeq(), 0);
 
-            MarketClient client = new MarketClient(JOINER, "Joiner", PlayerKeys.generate(),
+            MarketClient client = new MarketClient(JOINER, "Joiner", joinerKeys,
                     fresh, true, new PeerCache(dir.resolve("chunk-joiner-peers.json")), 0);
             client.connect("127.0.0.1", port);
 
@@ -169,6 +172,57 @@ public class ChunkTest {
             none.add(empty);
             check("a client with nothing to receive still gets one frame", none.size(), 1);
             check("and it is empty", none.get(0).size(), 0);
+        }
+
+        // The client applies a history frame by frame now instead of gathering it, for
+        // the same reason the host stopped gathering — except on the client the heap is
+        // a Minecraft one and the market was being built in it twice over.
+        //
+        // What that gave up is all-or-nothing: a transfer that dies partway used to
+        // leave the log untouched, and now leaves a prefix. This is the property that
+        // makes the trade worth taking — a prefix is resumable, so an interrupted first
+        // join carries on rather than starting again, which on the histories that made
+        // this a problem is the difference between finishing and never finishing.
+        System.out.println("  [N2: an interrupted history resumes rather than restarting]");
+        {
+            EventLog full = new EventLog(dir.resolve("chunk-joiner.jsonl"));
+            long complete = full.lastSeq();
+
+            Path partial = dir.resolve("chunk-partial.jsonl");
+            Files.deleteIfExists(partial);
+            Files.deleteIfExists(partial.resolveSibling("chunk-partial.jsonl.snapshot.json"));
+            List<String> lines = Files.readAllLines(dir.resolve("chunk-joiner.jsonl"));
+            List<String> half = new ArrayList<>(lines.subList(0, lines.size() / 2));
+            Files.write(partial, half);
+
+            EventLog cut = new EventLog(partial);
+            check("the interrupted log is a valid prefix", cut.verifyChain(), -1);
+            check("and stops short of the market", cut.lastSeq() < complete ? 1 : 0, 1);
+
+            int resumePort = TestPorts.free();
+            HostServer resumeHost = new HostServer(resumePort, hostLog, "resume",
+                    HOST_ID.toString(), hostKeys,
+                    new PeerCache(dir.resolve("chunk-resume-peers.json")), 0L);
+            Thread t = new Thread(() -> {
+                try { resumeHost.start(); } catch (IOException e) { /* stopped */ }
+            }, "chunk-resume-host");
+            t.setDaemon(true);
+            t.start();
+            IOException err = resumeHost.awaitBound(5000);
+            if (err != null) throw err;
+
+            try {
+                MarketClient resuming = new MarketClient(JOINER, "Joiner",
+                        joinerKeys, new EventLog(partial), true,
+                        new PeerCache(dir.resolve("chunk-joiner-peers.json")), 0);
+                resuming.connect("127.0.0.1", resumePort);
+                EventLog done = new EventLog(partial);
+                check("reconnecting finishes the history", done.lastSeq() >= complete ? 1 : 0, 1);
+                check("and it verifies end to end", done.verifyChain(), -1);
+                resuming.disconnect();
+            } finally {
+                resumeHost.stop();
+            }
         }
 
         System.out.println();
