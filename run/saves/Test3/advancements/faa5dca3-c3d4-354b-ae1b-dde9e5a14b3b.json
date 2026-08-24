@@ -1,0 +1,28 @@
+{
+  "minecraft:recipes/misc/charcoal": {
+    "criteria": {
+      "has_log": "2026-08-20 01:01:23 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/building_blocks/dark_oak_wood": {
+    "criteria": {
+      "has_log": "2026-08-20 01:01:23 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/building_blocks/dark_oak_planks": {
+    "criteria": {
+      "has_log": "2026-08-20 01:01:23 +0100"
+    },
+    "done": true
+  },
+  "minecraft:adventure/adventuring_time": {
+    "criteria": {
+      "minecraft:dark_forest": "2026-08-20 01:01:06 +0100",
+      "minecraft:plains": "2026-08-20 00:58:19 +0100"
+    },
+    "done": false
+  },
+  "DataVersion": 2586
+}

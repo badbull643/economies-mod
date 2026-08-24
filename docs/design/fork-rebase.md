@@ -165,6 +165,25 @@ session is spent on telling somebody clearly what was dropped rather than on the
 
 **Never B.**
 
+### What happened — 2026-08-23
+
+Discovery and C were built on 2026-08-22, in that order, and both are in use. **C turned
+out to be enough, so A is refused rather than deferred**; the audit is under backlog
+item 1 and the short of it is that this section under-sold its own second paragraph.
+
+The sentence *"the only part of a reset that destroys something the ledger cannot
+recreate"* is doing more work than it looks. It is not a ranking, it is an exhaustive
+list: everything else A could replay is a ledger entry, and a ledger entry restored onto
+a chain that never recorded it is either minted money or a trade nobody made. So A was
+never going to recover the two things this note describes it as preserving — it was only
+ever going to re-propose the deposits and orders, which C hands back and the re-place
+checklist lists.
+
+And for orders, doing it automatically is worse than a checklist: an order replayed into a
+different book can fill at once, at a price nobody agreed to. This note flagged the
+silent-drop reporting as A's real cost. The trading-on-somebody's-behalf risk is the one
+it missed, and it is the larger of the two.
+
 ## What is not the problem
 
 Detection — `observeHostHead` already surfaces a fork passively, early, without anyone

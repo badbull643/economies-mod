@@ -1,0 +1,65 @@
+name: tests
+
+# Backlog item 4. Every claim this project makes about working has rested on one
+# machine, and the suites only ever ran when somebody remembered to run them — while
+# twenty-six defects in the session log were found by them or by the discipline of
+# running one with its fix disabled.
+#
+# Two JDKs on purpose. Gradle 9 needs 17 or later to run itself; the mod compiles
+# against 8, because Minecraft 1.16.5 does. setup-java exports JAVA_HOME_8_X64 for the
+# older one and the fromEnv property below points Gradle's toolchain detection straight
+# at it, rather than leaving it to guess or to download a JDK of its own.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suites:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The repository tracks build/ and .gradle/ — deliberately, since .gitignore was
+      # removed on purpose — so a fresh checkout arrives carrying one machine's compiled
+      # classes, Loom caches and Gradle file hashes. Left in place they are at best
+      # ignored and at worst believed. Removing them is what makes the phrase "never
+      # built from a clean checkout" mean anything here.
+      - name: Clear one machine's build state out of the checkout
+        run: rm -rf build .gradle
+
+      - name: Install JDK 8 and 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Loom resolves and remaps Minecraft on a cold cache, which is most of the time
+      # this job takes. Split out from the suites so a failure here reads as "the
+      # toolchain could not be assembled" rather than as a test failure — they are
+      # different problems and the second is the one anybody wants to be told about.
+      - name: Assemble
+        run: ./gradlew classes -Porg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64 --stacktrace
+
+      # Nine suites, each exiting non-zero on a failed check. Named individually rather
+      # than behind an aggregate task so a red run names which one went, and in the same
+      # order the session log quotes their counts in.
+      - name: Run the suites
+        run: |
+          ./gradlew -Porg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64 \
+            coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
+            depositCapTest attestationTest hostTrustTest splitPointTest
+
+      # The thing this workflow exists to find out, and it cannot be found out on the
+      # machine that has always built it. A clean checkout compiling is a separate claim
+      # from the suites passing, and until now neither had ever been tested anywhere else.
+      - name: Build from the checkout
+        run: ./gradlew build -Porg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64

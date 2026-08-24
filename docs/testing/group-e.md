@@ -43,9 +43,15 @@ down is newer than the sitting:
 - ~~**`E19`**~~ **run 2026-08-22 and correct** — the two post-split deposits came back and
   the four pre-split ones did not. `E19b` is new: the confirmation was rewritten around
   what it found, and has not been run
-- **`E20`** is new from the same sitting: a fork warning that has been answered. Alice's
-  banner survived Bob discarding his branch and joining her, because nothing but the
-  discovery poll could ever retire one
+- ~~**`E20`**~~ **run 2026-08-22 and correct** — the banner went the moment Bob joined.
+  The same run under-refunded by five items, which is §0.22 and is now fixed: the AHEAD
+  path never asked where the two chains parted
+- **`E21`** is new from that run: the re-place list could not be scrolled, and it is the
+  only record of what to put back
+- **`E22`** — the poll now asks whether a longer peer is on your chain, instead of
+  assuming so and filing their head as your market's height
+- **`E23`** is newest: the high-water mark can be withdrawn by whoever set it, and a mark
+  with no source is discarded on load. Every existing world has one of those
 
 Nothing else on this list has moved since it was run.
 
@@ -777,3 +783,114 @@ The name matching is the known weakness, and it is deliberate: a FORK refusal ca
 `hostName` and no identity, so a name is what the two sides have in common. The cost of a
 collision is a warning retired early on a market the player is already connected to; the
 cost of not asking was a warning that never went away.
+
+## E21. The re-place list, when there is more of it than fits
+
+New, never run. Nine orders came back from an `E19` run; the box fits fewer; the rest
+were drawn nowhere and reachable by nothing. The list is the only record of what to put
+back, so the far end of it being unreachable loses exactly what the feature exists to
+save.
+
+Get a checklist longer than the box — ten or more orders on the losing branch is easy,
+since every `DepositAndList` makes one — then:
+
+- **Scroll it.** The wheel works anywhere over the box, and every row can be brought into
+  view. Before this it stopped at the panel bottom and the rest did not exist
+- **Click a row after scrolling.** It must re-place *that* row. The drawing and the hit
+  test both go through `replaceRowY` and `replaceRowVisible`, so a mismatch here would be
+  the oldest defect in this file — and scrolling is what makes it possible at the top of
+  the list as well as the bottom
+- **Click above the first row and below the last.** Nothing happens. A row scrolled out of
+  sight must not still be clickable where it used to be
+- Re-place rows until fewer remain than fit → the offset clamps and the list does not sit
+  scrolled past its own contents
+- The header still dismisses the whole list, at any offset
+
+Worth doing on the **Market** tab and in the side column both, since `replaceInSideColumn`
+puts the box in two different places.
+
+## E22. What the poll can now tell about a longer peer
+
+New, never run. Until now a probe carried a host's head and nothing below it, so a peer
+*ahead* of you could not be compared with at all — and the poll both held no opinion about
+whether you had forked and recorded their head as your market's height anyway. Which side
+of a fork saw the warning came down to which branch happened to be longer.
+
+It sends one `HashQuery` for their hash at **your** head now. Everything below is about
+telling the two answers apart.
+
+**The honest case — they really are ahead of you on your chain:**
+
+- Alice hosts and gets ahead; Bob, who shares her history, polls without connecting
+- Bob's alert says he is behind by the right number, and Host warns him off with
+  *"You are N events behind"*. That warning is the point of the watermark and must survive
+- Connect → he catches up, and the alert clears
+
+**The forked case, which is the one that was wrong:**
+
+- Fork as in `B2`, and make sure **the peer who did not fork is the shorter of the two** —
+  that is the arrangement that used to show nothing. On the first sitting that was Alice
+  at 90 against a forked Bob at 98
+- Without connecting, the shorter side must now raise the FORKED banner from the poll
+  alone, and it must name where they parted
+- **The behind alert must not appear**, and Host must not warn about being behind. Their
+  events are a different branch, not this market advancing
+- Check `high-water.json` is not raised by them. It is monotonic and persisted, so a
+  number written here wrongly outlives the session that wrote it
+- Retire the fork (either side discards and joins the other, per `E20`) and confirm Host
+  is offered normally afterwards
+
+**The cost, which is why it was not done sooner:**
+
+- Watch the console with two hosts visible and nothing happening → **no repeated round
+  trips.** The question is asked once per peer per head, so a peer sitting still costs
+  nothing
+- Leave a fork live and keep trading on both sides → the split search must not re-run per
+  poll. The split does not move once found, and is looked up before it is searched for
+- Kill the peer mid-poll → no opinion is cached, the next poll asks again, and nothing is
+  recorded from a question that went unanswered
+
+**And the watermark's own bug, from the same fix:**
+
+- With a market open, poll a friend hosting a **completely different** market → your
+  `high-water.json` must be untouched. `observeMarketHeight` used to be called before the
+  market id was checked, and `MarketHighWater.observe` starts a fresh record when handed a
+  different id, so any foreign host silently zeroed the mark
+- The check that matters: set the mark by seeing a peer ahead, then poll a foreign host,
+  then go offline and try to Host. The "you are behind" warning must still fire
+
+## E23. A watermark that can be taken back
+
+New, never run. The "connect to catch up" alert stood after a fork was over, on a copy
+that was level with everybody. The mark had been recorded honestly — the peer really did
+extend this chain at the moment it was asked — and was invalidated four seconds later by
+*this* copy appending its own event and leaving that chain. A bare number could not
+notice, so the record now carries who reported it, and their later word replaces their
+earlier one in either direction.
+
+The setup that produced it, worth reproducing exactly:
+
+- Two copies level and agreeing, say at 123
+- The other side goes ahead — 129 — while you stay put. **Open your Market screen so a
+  poll runs.** Your alert says you are 6 behind, which is true
+- **Now trade on your own copy**, forking away from the chain you just measured against
+- Your alert must go. Their 129 is a branch you are not on, and your own head is the only
+  thing on your chain
+- Fork resolved (they discard and join you, or you them, per `E20`) → Host is offered
+  without a "you are behind" warning, and `high-water.json` does not name a number above
+  the chain you share
+
+Then confirm the thing it must not break, which is the whole reason the mark exists:
+
+- Peer ahead of you on your chain, **then close their game**. Your alert survives, and
+  Host still warns you. Nobody is around to tell you, which is exactly the case
+- Two peers, one at 300 and one at 50, both on your chain → the mark reads 300, and the
+  one at 50 does not pull it down. Only the peer who set it can lower it
+- The peer who set it resets and comes back lower → the mark comes down with them
+
+**And the one-off, which happens on first launch after this change:**
+
+- Any world with an existing `high-water.json` prints *"discarding a high-water mark with
+  no source"* once, and the file is deleted. Marks written before provenance cannot be
+  withdrawn by anybody, so they are dropped rather than trusted
+- Confirm the next poll rebuilds it, and that it is discarded **once** and not every load

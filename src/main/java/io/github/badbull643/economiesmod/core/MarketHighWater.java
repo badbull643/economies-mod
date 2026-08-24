@@ -27,10 +27,15 @@ public class MarketHighWater {
 
     private static final Gson gson = new Gson();
 
-    /** On-disk shape. Carries the market id so a reset or a different market resets it. */
+    /**
+     * On-disk shape. Carries the market id so a reset or a different market resets it,
+     * and who said so, so the claim can be withdrawn by whoever made it.
+     */
     private static class Record {
         String marketId;
         long seq;
+        /** The peer whose head this is. Null in files written before provenance. */
+        String fromUserId;
     }
 
     private final Path file;
@@ -42,6 +47,23 @@ public class MarketHighWater {
             if (Files.exists(file)) {
                 String json = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
                 Record loaded = gson.fromJson(json, Record.class);
+                // A record with no source cannot be reasoned about: the rule below is
+                // "the peer who said it can unsay it", and there is nobody to ask. Older
+                // files are all like this, and one of them is the reason provenance
+                // exists — a mark left standing for a branch its own reporter had since
+                // abandoned. Discarded rather than trusted; the next poll rebuilds it,
+                // and the cost is the offline warning being unavailable until then.
+                if (loaded != null && loaded.marketId != null && loaded.fromUserId == null) {
+                    System.out.println("[economiesmod] discarding a high-water mark with"
+                            + " no source (" + loaded.seq + ") — it will be relearned from"
+                            + " the next host seen");
+                    loaded = null;
+                    try {
+                        Files.deleteIfExists(file);
+                    } catch (IOException ignored) {
+                        // Not worth failing over: the in-memory record is already empty.
+                    }
+                }
                 if (loaded != null) record = loaded;
             }
         } catch (Exception e) {
@@ -50,10 +72,35 @@ public class MarketHighWater {
     }
 
     /**
-     * Notes that this market was seen at {@code seq}. Only ever moves forward, and
-     * starts over if this is a different market than the one on record.
+     * Notes that {@code fromUserId} is on this market at {@code seq}, and is on our chain.
+     *
+     * <h2>Why the reporter is recorded, and why their own number can go down</h2>
+     *
+     * This was a bare maximum and could only ever rise. That is right for the case it was
+     * built for — somebody returns after a week to a market that moved on without them —
+     * and wrong for the one that turned up in play: a mark recorded honestly is
+     * invalidated by <em>your own</em> later fork, and a number with no source cannot
+     * notice.
+     *
+     * Measured. A host sat at 123 while a peer reported 129, and their chains agreed
+     * through 123 — so the peer genuinely extended them and 129 was the true height of
+     * this market. Four seconds later the host appended its own event 124 and left that
+     * chain. The 129 now described a branch nobody was on, `eventsBehind` read 1, and
+     * since it gates Host the participant was told that serving their own market would
+     * split it.
+     *
+     * So a claim belongs to whoever made it. A peer's current head replaces their
+     * previous one <b>in either direction</b>: they are not asserting a record, they are
+     * telling you where they are, and when they come back lower — because they reset, or
+     * because the branch they were on is gone — the evidence for the old number has gone
+     * with it. A different peer can only raise the mark, because their being at 50 says
+     * nothing about whether somebody else's 300 was real.
+     *
+     * Callers must only pass a peer they have confirmed is on their own chain. That is
+     * the other half of this: a forked peer's head is not this market advancing, and the
+     * discovery poll checks before it calls.
      */
-    public void observe(UUID marketId, long seq) {
+    public void observe(UUID marketId, long seq, String fromUserId) {
         if (marketId == null) return;
         String id = marketId.toString();
 
@@ -61,11 +108,15 @@ public class MarketHighWater {
             record = new Record();
             record.marketId = id;
             record.seq = seq;
+            record.fromUserId = fromUserId;
             save();
             return;
         }
-        if (seq > record.seq) {
+
+        boolean theirsToChange = fromUserId != null && fromUserId.equals(record.fromUserId);
+        if (theirsToChange ? seq != record.seq : seq > record.seq) {
             record.seq = seq;
+            record.fromUserId = fromUserId;
             save();
         }
     }

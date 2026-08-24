@@ -8,7 +8,6 @@ import io.github.badbull643.economiesmod.core.PlayerKeys;
 import io.github.badbull643.economiesmod.core.ServerConfig;
 
 import java.io.IOException;
-import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -62,7 +61,7 @@ public class DepositCapTest {
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST, "cap test market", hostKeys);
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostName = "capped";
         cfg.hostUserId = HOST.toString();
         cfg.maxDepositUnitsPerWindow = CAP;
@@ -155,12 +154,6 @@ public class DepositCapTest {
         long deadline = System.currentTimeMillis() + 5000;
         while (System.currentTimeMillis() < deadline && slot[0] == null) {
             Thread.sleep(25);
-        }
-    }
-
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
         }
     }
 }

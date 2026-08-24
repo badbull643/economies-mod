@@ -67,7 +67,7 @@ public class AdmissionTest {
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST, "admission test market", hostKeys);
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostName = "gatekeeper";
         cfg.hostUserId = HOST.toString();
         cfg.admission = ServerConfig.ALLOWLIST;
@@ -98,6 +98,8 @@ public class AdmissionTest {
         migrationIsWeighedAgainstStatistics();
         aDedicatedServerDeclinesMigration();
         aHostCapsTheWelcomeGrant();
+        onlyArchivistsKeepADedicatedMarketsHistory();
+        archivingOnFetchesTheHistoryItPromised();
 
         System.out.println();
         if (failures == 0) {
@@ -133,7 +135,7 @@ public class AdmissionTest {
         EventLog log = new EventLog(hostLog);
         MarketBootstrap.createMarket(log, HOST, "public market", boxKeys);
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostName = "the box";
         cfg.hostUserId = HOST.toString();
         cfg.dedicated = true;          // the only thing that differs
@@ -210,7 +212,7 @@ public class AdmissionTest {
         // INVITED creates it, so INVITED is the creator and may set policy at all.
         MarketBootstrap.createMarket(log, INVITED, "capped market", keys);
 
-        ServerConfig cfg = ServerConfig.friendGroup(freePort());
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
         cfg.hostName = "somebody's game";
         cfg.hostUserId = HOST.toString();
         cfg.maxWelcomeGrant = 500L;
@@ -399,7 +401,7 @@ public class AdmissionTest {
             EventLog log = new EventLog(hostLog);
             MarketBootstrap.createMarket(log, HOST, "migration test market", keys);
 
-            ServerConfig cfg = ServerConfig.friendGroup(freePort());
+            ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
             cfg.hostName = "weigher";
             cfg.hostUserId = HOST.toString();
             cfg.maxDepositMultipleOfHandled = 3;
@@ -545,7 +547,7 @@ public class AdmissionTest {
             PeerCache hostCache = new PeerCache(hostPeers);
             hostCache.record(stranger.toString(), "Stranger", "203.0.113.7", 25565, null);
 
-            ServerConfig cfg = ServerConfig.friendGroup(freePort());
+            ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
             cfg.hostName = "roster";
             cfg.hostUserId = HOST.toString();
             cfg.dedicated = dedicated;
@@ -584,17 +586,238 @@ public class AdmissionTest {
         }
     }
 
+    /**
+     * Step 4 of the compaction note: who writes down a dedicated market's history.
+     *
+     * The rule is three-way and every leg of it matters, so all three are run against a
+     * real host rather than asserted about a boolean. A client of a dedicated market
+     * keeps a snapshot and no history; one that has opted in keeps everything; and a
+     * client of a rotating host is untouched, because there the replica is how hosting
+     * rotates at all — getting that leg wrong would quietly stop friend groups being
+     * able to take turns.
+     */
+    private static void onlyArchivistsKeepADedicatedMarketsHistory() throws Exception {
+        // (dedicated?, archives?, expected to write history?)
+        boolean[][] cases = {
+                { true,  false, false },
+                { true,  true,  true  },
+                { false, false, true  },
+        };
+        for (boolean[] c : cases) {
+            boolean dedicated = c[0], archives = c[1], expectHistory = c[2];
+            String tag = (dedicated ? "ded" : "rot") + (archives ? "-arch" : "-plain");
+
+            Path hostLog = dir.resolve("persist-host-" + tag + ".jsonl");
+            Path clientLog = dir.resolve("persist-client-" + tag + ".jsonl");
+            Files.deleteIfExists(hostLog);
+            Files.deleteIfExists(clientLog);
+            Files.deleteIfExists(clientLog.resolveSibling(
+                    clientLog.getFileName() + ".snapshot.json"));
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(hostLog);
+            MarketBootstrap.createMarket(log, HOST, "persist test market", keys);
+
+            ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
+            cfg.hostName = "persist";
+            cfg.hostUserId = HOST.toString();
+            cfg.dedicated = dedicated;
+
+            HostServer host = new HostServer(cfg, hostLog, keys,
+                    new PeerCache(dir.resolve("persist-host-peers-" + tag + ".json")));
+            Thread t = new Thread(() -> {
+                try { host.start(); } catch (IOException e) { /* stopped */ }
+            }, "persist-test-host-" + tag);
+            t.setDaemon(true);
+            t.start();
+            IOException bindError = host.awaitBound(5000);
+            if (bindError != null) throw bindError;
+
+            try {
+                MarketClient joiner = new MarketClient(INVITED, "joiner",
+                        PlayerKeys.generate(), new EventLog(clientLog), true,
+                        new PeerCache(dir.resolve("persist-client-peers-" + tag + ".json")),
+                        0, id -> archives);
+                joiner.connect("127.0.0.1", cfg.port);
+
+                // The client is registered and granted on joining, so there is real
+                // history to either keep or not — a market with nothing in it would let
+                // both answers look the same.
+                check(tag + ": the client actually synced something",
+                        joiner.lastSeq() > 0 ? 1 : 0, 1);
+
+                long written = new EventLog(clientLog).lastSeq();
+                check(tag + ": " + (expectHistory ? "history is kept" : "no history is kept"),
+                        written > 0 ? 1 : 0, expectHistory ? 1 : 0);
+                if (!expectHistory) {
+                    check(tag + ": but the state is still there",
+                            joiner.state().marketId() != null ? 1 : 0, 1);
+                }
+
+                joiner.disconnect();
+
+                // A replica that keeps no history has to keep a snapshot, or it would
+                // re-download the whole market next session — which is worse than the
+                // thing this replaced.
+                boolean snap = Files.exists(clientLog.resolveSibling(
+                        clientLog.getFileName() + ".snapshot.json"));
+                check(tag + ": " + (expectHistory
+                                ? "no snapshot is needed while the log is kept"
+                                : "a snapshot is left in the log's place"),
+                        snap ? 1 : 0, expectHistory ? 0 : 1);
+            } finally {
+                host.stop();
+            }
+        }
+    }
+
+    /**
+     * Turning archiving on for a market this machine only has a snapshot of.
+     *
+     * The command says the history arrives on the next connect. That is the promise the
+     * whole opt-in rests on — somebody turns it on precisely so they can host — so it is
+     * worth a check of its own rather than being assumed from the rule above.
+     */
+    private static void archivingOnFetchesTheHistoryItPromised() throws Exception {
+        Path hostLog = dir.resolve("refetch-host.jsonl");
+        Path clientLog = dir.resolve("refetch-client.jsonl");
+        Path clientSnap = clientLog.resolveSibling(clientLog.getFileName() + ".snapshot.json");
+        Files.deleteIfExists(hostLog);
+        Files.deleteIfExists(clientLog);
+        Files.deleteIfExists(clientSnap);
+
+        PlayerKeys keys = PlayerKeys.generate();
+        EventLog log = new EventLog(hostLog);
+        MarketBootstrap.createMarket(log, HOST, "refetch market", keys);
+
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
+        cfg.hostName = "refetch";
+        cfg.hostUserId = HOST.toString();
+        cfg.dedicated = true;
+
+        HostServer host = new HostServer(cfg, hostLog, keys,
+                new PeerCache(dir.resolve("refetch-host-peers.json")));
+        Thread t = new Thread(() -> {
+            try { host.start(); } catch (IOException e) { /* stopped */ }
+        }, "refetch-test-host");
+        t.setDaemon(true);
+        t.start();
+        IOException bindError = host.awaitBound(5000);
+        if (bindError != null) throw bindError;
+
+        try {
+            PeerCache cache = new PeerCache(dir.resolve("refetch-client-peers.json"));
+
+            // One identity across both visits: the market registers a key the first time
+            // and a second keypair would be refused as an impostor, which is a different
+            // test entirely.
+            PlayerKeys mine = PlayerKeys.generate();
+
+            // First visit: not archiving. Snapshot, no history.
+            MarketClient first = new MarketClient(INVITED, "joiner", mine,
+                    new EventLog(clientLog), true, cache, 0, id -> false);
+            first.connect("127.0.0.1", cfg.port);
+            long reached = first.lastSeq();
+            first.disconnect();
+
+            check("the first visit kept no history", new EventLog(clientLog).lastSeq(), 0);
+            check("but did leave a snapshot", Files.exists(clientSnap) ? 1 : 0, 1);
+            check("and got somewhere", reached > 0 ? 1 : 0, 1);
+
+            // Second visit: still not archiving. The ordinary session-after-session case
+            // for a snapshot-only replica, and the one that has to work every day.
+            // Its Hello carries a position restored from the snapshot, so the market it
+            // names has to come from the snapshot too — reading it off the log instead
+            // says "I am at event 3 of no market", which a host refuses as a log that
+            // predates market identity. That locked every snapshot-only client out from
+            // its second session onwards, and nothing noticed because every other test
+            // here connects exactly once.
+            MarketClient again = new MarketClient(INVITED, "joiner", mine,
+                    new EventLog(clientLog), true, cache, 0, id -> false);
+            again.connect("127.0.0.1", cfg.port);
+            check("a snapshot-only replica can come back tomorrow",
+                    again.lastSeq() >= reached ? 1 : 0, 1);
+            check("and still holds the market it had",
+                    again.state().marketId() != null ? 1 : 0, 1);
+            again.disconnect();
+            check("and still keeps no history", new EventLog(clientLog).lastSeq(), 0);
+
+            // Third visit: archiving on. The command promises the history turns up.
+            MarketClient second = new MarketClient(INVITED, "joiner", mine,
+                    new EventLog(clientLog), true, cache, 0, id -> true);
+            second.connect("127.0.0.1", cfg.port);
+            long after = new EventLog(clientLog).lastSeq();
+            second.disconnect();
+
+            check("turning archiving on fetches the history", after >= reached ? 1 : 0, 1);
+            check("and the fetched log is a whole chain",
+                    new EventLog(clientLog).verifyChain(), -1);
+
+            // A host's self-connect is also told not to persist, and means something
+            // entirely different by it: the log is right there, being written by the
+            // HostServer on the other end of the socket. Writing a snapshot for it
+            // marked a full history as one that stands without its log — which is the
+            // one kind that survives the log being deleted, so deleting that log would
+            // have handed the market back. Found in a real session, in a line that
+            // failed twice over: two shutdown paths racing on one temporary file.
+            Path selfLog = dir.resolve("refetch-selfconnect.jsonl");
+            Path selfSnap = selfLog.resolveSibling(selfLog.getFileName() + ".snapshot.json");
+            Files.deleteIfExists(selfLog);
+            Files.deleteIfExists(selfSnap);
+            MarketClient selfish = new MarketClient(INVITED, "selfconnect", mine,
+                    new EventLog(selfLog), false, cache, 0, id -> true);
+            selfish.connect("127.0.0.1", cfg.port);
+            selfish.disconnect();
+            check("a caller that never wanted a log gets no snapshot either",
+                    Files.exists(selfSnap) ? 1 : 0, 0);
+
+            // An empty slot is refused when this machine already holds the host's market
+            // somewhere else. Over the wire rather than against the predicate, because
+            // the half that matters is where it happens: before a single synced line is
+            // read, so a refusal leaves the empty slot exactly as empty as it was.
+            Path dupLog = dir.resolve("refetch-duplicate.jsonl");
+            Files.deleteIfExists(dupLog);
+            Files.deleteIfExists(dupLog.resolveSibling(dupLog.getFileName() + ".snapshot.json"));
+            MarketClient dup = new MarketClient(INVITED, "joiner", mine,
+                    new EventLog(dupLog), true, cache, 0, id -> true);
+            dup.setHeldElsewhere(id -> true);
+            int refused = 0;
+            String why = "";
+            try {
+                dup.connect("127.0.0.1", cfg.port);
+            } catch (IOException e) {
+                refused = 1;
+                why = e.getMessage() == null ? "" : e.getMessage();
+            }
+            check("a second slot for a market we already hold is refused", refused, 1);
+            check("and says which way out there is",
+                    why.contains("another market slot") ? 1 : 0, 1);
+            check("and the empty slot is left empty",
+                    new EventLog(dupLog).lastSeq(), 0);
+
+            // The ordinary case must not be caught by it. Deliberately with the guard
+            // answering yes — this slot already holds the market, and holding it is what
+            // exempts it, not the predicate saying no. Testing this with the default
+            // predicate proved nothing: dropping the "we hold nothing" condition left
+            // the check green, because a client that never sets the guard can never
+            // trip it.
+            MarketClient normal = new MarketClient(INVITED, "joiner", mine,
+                    new EventLog(clientLog), true, cache, 0, id -> true);
+            normal.setHeldElsewhere(id -> true);
+            normal.connect("127.0.0.1", cfg.port);
+            check("but a slot reconnecting to its own market still gets in",
+                    normal.lastSeq() > 0 ? 1 : 0, 1);
+            normal.disconnect();
+        } finally {
+            host.stop();
+        }
+    }
+
     private static MarketClient client(UUID who, String logName) throws Exception {
         Path p = dir.resolve(logName);
         Files.deleteIfExists(p);
         return new MarketClient(who, who.toString().substring(0, 8), PlayerKeys.generate(),
                 new EventLog(p), true,
                 new PeerCache(dir.resolve("adm-client-peers.json")), 0);
-    }
-
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
-        }
     }
 }

@@ -755,6 +755,29 @@ public class MarketState {
 
     Map<String, OrderBook> markets() { return markets; }
 
+    // ─────────── snapshot access ───────────
+    //
+    // Live collections, handed out inside this package so MarketSnapshot can write them
+    // out and read them back. Deliberately not public: everything outside core still has
+    // to go through the questions above, and a snapshot is the one thing that is allowed
+    // to set state without an event behind it.
+    //
+    // Anything added to this class must be added to MarketSnapshot too, or a restored
+    // market silently loses it. Nobody is trusted to remember that — MarketSnapshot
+    // fingerprints this class's shape and refuses a snapshot written against a different
+    // one, so a forgotten field costs a slow load rather than a wrong balance.
+
+    Map<UUID, String> keyDirectory() { return keyDirectory; }
+    Set<UUID> granted() { return granted; }
+    Set<String> migrationsDone() { return migrationsDone; }
+    Set<UUID> accountedElsewhere() { return accountedElsewhere; }
+    Set<UUID> migratedIn() { return migratedIn; }
+    Map<UUID, Long> stipendedAtFills() { return stipendedAtFill; }
+    Map<String, Long> withdrawn() { return withdrawn; }
+
+    /** Restore only — every other path reaches this through recordTrades. */
+    void setFillsEver(long n) { this.fillsEver = n; }
+
     public static class SubmitResult {
         public final boolean accepted;
         public final String reason;

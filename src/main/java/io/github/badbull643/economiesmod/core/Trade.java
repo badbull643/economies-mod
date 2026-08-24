@@ -39,6 +39,18 @@ public final class Trade {
         this.sellerId = fill.sellerId();
     }
 
+    /** Restore only — rebuilds a recorded trade from a snapshot, with no Fill behind it. */
+    Trade(long seq, long timestamp, String itemId, long price, long quantity,
+          UUID buyerId, UUID sellerId) {
+        this.seq = seq;
+        this.timestamp = timestamp;
+        this.itemId = itemId;
+        this.price = price;
+        this.quantity = quantity;
+        this.buyerId = buyerId;
+        this.sellerId = sellerId;
+    }
+
     /** Total currency that moved, for convenience. */
     public long amount() {
         return Math.multiplyExact(quantity, price);

@@ -239,7 +239,7 @@ public class GapRecoveryTest {
         for (int seq = 1; seq <= 3; seq++) behind.appendRaw(line(seq));
         check("client starts behind", behind.lastSeq(), 3);
 
-        int port = freePort();
+        int port = TestPorts.free();
         HostServer host = new HostServer(port, dir.resolve("gap-host.jsonl"),
                 "gaphost", HOST.toString(), hostKeys,
                 new PeerCache(dir.resolve("gap-host-peers.json")), 0L);
@@ -351,12 +351,6 @@ public class GapRecoveryTest {
         public void close() throws IOException {
             if (socket != null) try { socket.close(); } catch (IOException ignored) {}
             server.close();
-        }
-    }
-
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
         }
     }
 }
