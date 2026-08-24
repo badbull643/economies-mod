@@ -339,6 +339,32 @@ public final class MarketSnapshot {
 
     // ─────────── reading ───────────
 
+    /**
+     * The market name recorded in the snapshot beside this log, or null.
+     *
+     * Reads the header and rebuilds nothing, because the one caller is the market
+     * switcher asking what to write on a row. It exists because a slot that keeps a
+     * snapshot and no history has no genesis event to take a name from, so the switcher
+     * showed it as nothing at all — a row you cannot identify, in the control §0.16 was
+     * written about.
+     *
+     * Deliberately not checked against the chain. A name is not a balance: the worst a
+     * stale one can do is label a row, and refusing to label it is worse than labelling
+     * it from a file that turns out to be out of date.
+     */
+    public static String marketNameFor(EventLog log) {
+        try {
+            Path file = pathFor(log);
+            if (!Files.exists(file)) return null;
+            try (java.io.BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                Body b = GSON.fromJson(r, Body.class);
+                return b == null ? null : b.marketName;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** A snapshot that was found, checked against the log, and rebuilt. */
     public static final class Restored {
         public final MarketState state;
