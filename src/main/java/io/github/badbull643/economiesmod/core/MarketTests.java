@@ -3128,6 +3128,123 @@ public class MarketTests {
                             .getOrDefault(IRON, 0L), 0L);
         }
 
+        section("X3c: the same answers from a snapshot, and none from a history not here");
+        {
+            // Both questions now take the state at the head from EventApplier.inspect,
+            // so a market with a snapshot pays for its tail instead of its whole log.
+            // That is two sources of truth where there was one, and the checks below are
+            // the three things that can go wrong with the second one. X1 and X3 above
+            // pin the arithmetic; nothing there has a snapshot beside it, so none of
+            // this was covered by them.
+            Path p = scratch("test-branchdiff-x3c.jsonl");
+            Files.deleteIfExists(p);
+            Files.deleteIfExists(p.resolveSibling(p.getFileName() + ".snapshot.json"));
+
+            PlayerKeys keys = PlayerKeys.generate();
+            EventLog log = new EventLog(p);
+            MarketBootstrap.createMarket(log, ALICE, "snapshot diff market", keys);
+            UUID marketId = log.marketId();
+
+            // 100 iron and one resting sell before the split; 40 iron and two sells
+            // after it. Distinct prices so a wrong answer says which orders it took.
+            depositAt(log, keys, ALICE, marketId, IRON, 100);
+            Event.PlaceOrder early = placeOrder(ALICE, IRON, 10, 5, false);
+            early.marketId = marketId;
+            early.timestamp = 1L;
+            long split = log.append(early, keys.sign(EventCanonical.canonicalPayload(early))).seq;
+
+            depositAt(log, keys, ALICE, marketId, IRON, 40);
+            for (int i = 0; i < 2; i++) {
+                Event.PlaceOrder late = placeOrder(ALICE, IRON, 20 + i, 5, false);
+                late.marketId = marketId;
+                late.timestamp = 2L + i;
+                log.append(late, keys.sign(EventCanonical.canonicalPayload(late)));
+            }
+
+            // The answers with no snapshot in sight — the ones already trusted.
+            int ordersPlain = BranchDiff.ordersOnlyAfter(log, split, ALICE).size();
+            long ironPlain = BranchDiff.depositsOnlyAfter(log, split, ALICE)
+                    .getOrDefault(IRON, 0L);
+            check("without a snapshot, the two orders since the split", ordersPlain, 2);
+            check("without a snapshot, the 40 iron since the split", ironPlain, 40L);
+
+            // 1. With a snapshot at the head, the same answers. A snapshot that dropped
+            //    or altered anything either question reads would show up here as a
+            //    different number rather than as a slower load.
+            EventApplier.Replayed full = EventApplier.replayWithHead(log);
+            MarketSnapshot.save(log, full.state, full.headSeq, full.headHash);
+            check("the snapshot is accepted",
+                    MarketSnapshot.loadIfValid(new EventLog(p)) != null ? 1 : 0, 1);
+            check("with a snapshot, the same orders",
+                    BranchDiff.ordersOnlyAfter(new EventLog(p), split, ALICE).size(),
+                    ordersPlain);
+            check("with a snapshot, the same iron",
+                    BranchDiff.depositsOnlyAfter(new EventLog(p), split, ALICE)
+                            .getOrDefault(IRON, 0L), ironPlain);
+
+            // 2. A log with a line this build cannot parse, and a snapshot that survives
+            //    it — the hash check looks at the snapshot's own line and never below.
+            //    The walk to the split stops at the damage, the head state does not, and
+            //    every order in the gap would be offered back while the host still holds
+            //    it. The line count is kept intact deliberately: that is what leaves the
+            //    snapshot valid, and a check where the snapshot were rejected would be
+            //    checking nothing.
+            Path damaged = scratch("test-branchdiff-x3c-damaged.jsonl");
+            List<String> lines = Files.readAllLines(p, java.nio.charset.StandardCharsets.UTF_8);
+            lines.set(1, "{ not an event }");
+            Files.write(damaged, lines, java.nio.charset.StandardCharsets.UTF_8);
+            Files.copy(p.resolveSibling(p.getFileName() + ".snapshot.json"),
+                    damaged.resolveSibling(damaged.getFileName() + ".snapshot.json"),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            check("the snapshot still passes its own check",
+                    MarketSnapshot.loadIfValid(new EventLog(damaged)) != null ? 1 : 0, 1);
+            check("but nothing is offered back from a log that cannot be read through",
+                    BranchDiff.ordersOnlyAfter(new EventLog(damaged), split, ALICE).size(), 0);
+
+            // The refund half answers, and answering is correct — which is worth a line
+            // because the two halves disagreeing looks like a bug and is the design. The
+            // orders question needs the prefix, to know which orders were already resting
+            // at the split, and the prefix is what cannot be read. The refund question
+            // never reads the prefix: it nets the events after the split, which parse
+            // fine, and weighs them against what the ledger says is held now, which comes
+            // from the snapshot and is complete. Before the snapshot was used here this
+            // handed back nothing, because the replay stopped where the parsing did —
+            // under-refunding somebody whose items are genuinely gone.
+            check("while the refund is worked out anyway, and correctly",
+                    BranchDiff.depositsOnlyAfter(new EventLog(damaged), split, ALICE)
+                            .getOrDefault(IRON, 0L), 40L);
+
+            // 3. A replica keeping no history at all — a client of a dedicated market.
+            //    Its snapshot is its memory, and it says nothing about when any of those
+            //    orders were placed, so all three would look post-split. This is the
+            //    case that decides the whole design of the guard, because it is ordinary
+            //    rather than damaged.
+            Path logless = scratch("test-branchdiff-x3c-logless.jsonl");
+            Files.deleteIfExists(logless);
+            MarketSnapshot.save(new EventLog(logless), full.state, full.headSeq,
+                    full.headHash, true);
+            check("a logless snapshot is accepted",
+                    MarketSnapshot.loadIfValid(new EventLog(logless)) != null ? 1 : 0, 1);
+            check("a replica with no history offers no orders back",
+                    BranchDiff.ordersOnlyAfter(new EventLog(logless), split, ALICE).size(), 0);
+
+            // The same replica, forked at genesis — and this is the one input where the
+            // two guards do not overlap. Everywhere else, a walk that cannot reach the
+            // split catches the historyless replica on its way past; with nothing shared
+            // there is no split to fall short of, the walk is trivially complete at zero,
+            // and logCoversHead is all that stands between this and offering back every
+            // order the market holds. Both guards exist because of this line.
+            check("and none at a fork with nothing shared, which only one guard catches",
+                    BranchDiff.ordersOnlyAfter(new EventLog(logless), 0, ALICE).size(), 0);
+
+            // No refund check here, and the reason is the point. With no log there is
+            // nothing for the netting walk to read, so depositsOnlyAfter answers nothing
+            // whether the guard is there or not — a check on it passes with the guard
+            // torn out, which is the one kind of check this suite counts as worse than
+            // none. The damaged log above is where that half is actually tested, because
+            // there the events since the split are readable and the prefix is not.
+        }
+
         section("W3: deposits are weighed against the player's own statistics");
         {
             // The one figure here the player did not write. Minecraft counts mined,
@@ -3783,6 +3900,24 @@ public class MarketTests {
             pol.stipendEveryFills = 50;
             apply(log, live, pol);
 
+            // Host rules the group has agreed, which the market carries but nothing
+            // enforces. In the fixture because a snapshot that dropped them would lose
+            // what every future host of this market starts from, silently — and the
+            // shape fingerprint cannot catch that, since it stops a stale snapshot being
+            // read and says nothing about a serialiser written incomplete today.
+            Event.HostDefaults rules = new Event.HostDefaults();
+            rules.userId = ALICE;
+            rules.maxDepositUnitsPerWindow = 640L;
+            rules.depositWindowMinutes = 30;
+            rules.maxMigratedCredits = 5000L;
+            rules.maxWelcomeGrant = 250L;
+            rules.acceptsMigration = Boolean.FALSE;
+            rules.admission = ServerConfig.ALLOWLIST;
+            rules.allow = java.util.Arrays.asList(ALICE.toString(), BOB.toString());
+            apply(log, live, rules);
+            check("the fixture publishes host rules",
+                    live.hostDefaults() != null ? 1 : 0, 1);
+
             apply(log, live, deposit(ALICE, IRON, 500));
             apply(log, live, deposit(ALICE, WOOD, 300));
 
@@ -4148,6 +4283,33 @@ public class MarketTests {
                 check("a full replay covers its own head",
                         EventApplier.load(new EventLog(full)).logCoversHead ? 1 : 0, 1);
 
+                // What this field does NOT answer, pinned deliberately because it did
+                // answer it for one session and charged every load a pass over the whole
+                // file to do so. A log with a line this build cannot parse, under a
+                // snapshot that is still valid — the hash check reads the snapshot's own
+                // line and never looks below it — now loads as covered, because the state
+                // it built really is backed by a log. That the log cannot be read through
+                // is damage, and damage is a different question with a different answer:
+                // BranchDiff asks it of its own walk (X3c), and the Host gate asks it at
+                // the moment somebody presses Host rather than on every world load.
+                //
+                // If this check ever goes red, the field has quietly taken the stricter
+                // meaning back on, and the load path is paying for it again.
+                Path underSnap = scratch("test-nolog-damaged-prefix.jsonl");
+                Files.deleteIfExists(pathOfSnapshot(underSnap));
+                List<String> prefixDamaged = new ArrayList<>(Files.readAllLines(full));
+                prefixDamaged.set(1, "{ not an event }");
+                Files.write(underSnap, prefixDamaged);
+                MarketSnapshot.save(new EventLog(underSnap), real.state, real.headSeq,
+                        real.headHash);
+                check("a snapshot survives a damaged line below it",
+                        MarketSnapshot.loadIfValid(new EventLog(underSnap)) != null ? 1 : 0, 1);
+                EventApplier.Replayed overDamage = EventApplier.load(new EventLog(underSnap));
+                check("and the load calls that covered, because it is",
+                        overDamage.logCoversHead ? 1 : 0, 1);
+                check("the file itself stops short, which is what Host has to ask",
+                        new EventLog(underSnap).headSeqOnDisk() < overDamage.headSeq ? 1 : 0, 1);
+
                 // The distinction that makes this safe: an empty log is "nothing to
                 // check against", a SHORT log is "we disagree" and must be refused.
                 Path shortLog = scratch("test-nolog-short.jsonl");
@@ -4285,6 +4447,116 @@ public class MarketTests {
                     MarketSlots.slotHolding(world, UUID.randomUUID(), null) == null ? 1 : 0, 1);
         }
 
+        section("L17: host rules a group agrees once — defaults, never enforcement");
+        {
+            Path p = scratch("test-hostrules.jsonl");
+            Files.deleteIfExists(p);
+            Files.deleteIfExists(pathOfSnapshot(p));
+            EventLog log = new EventLog(p);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+
+            // Through validate, not apply. apply enforces none of these — the rules live
+            // where a host asks them before appending, which is the distinction §0.2 was
+            // written about, and asking the wrong one is how a check that cannot fail
+            // gets written. The first draft of this section did exactly that and passed
+            // three refusals that were never refused.
+            Event.HostDefaults byBob = new Event.HostDefaults();
+            byBob.userId = BOB;
+            byBob.maxWelcomeGrant = 10L;
+            check("somebody else may not publish the group's rules",
+                    hostRulesRefusal(live, byBob) != null ? 1 : 0, 1);
+
+            Event.HostDefaults bad = new Event.HostDefaults();
+            bad.userId = ALICE;
+            bad.admission = "allow-list";      // the misspelling §0.18 warns about
+            check("an admission mode no host understands is refused",
+                    hostRulesRefusal(live, bad) != null ? 1 : 0, 1);
+
+            Event.HostDefaults negative = new Event.HostDefaults();
+            negative.userId = ALICE;
+            negative.maxDepositUnitsPerWindow = -1L;
+            check("a negative cap is refused",
+                    hostRulesRefusal(live, negative) != null ? 1 : 0, 1);
+
+            Event.HostDefaults good = new Event.HostDefaults();
+            good.userId = ALICE;
+            good.maxDepositUnitsPerWindow = 640L;
+            good.maxWelcomeGrant = 250L;
+            good.acceptsMigration = Boolean.FALSE;
+            check("the creator may publish them",
+                    hostRulesRefusal(live, good) == null ? 1 : 0, 1);
+            apply(log, live, good);
+            check("and the market carries them",
+                    live.hostDefaults() != null ? 1 : 0, 1);
+
+            // The property that keeps this defaults rather than enforcement: publishing
+            // a ceiling of 250 does not stop the market's own grant of 1000 being valid.
+            // If it did, one host would refuse what another accepted and hosting could
+            // fork the market — which is why this was refused as *travelling* rules.
+            check("the market's own policy is untouched by them",
+                    live.welcomeGrant(), ServerConfig.DEFAULT_WELCOME_GRANT);
+            Event.Deposit stillFine = deposit(ALICE, IRON, 5000);
+            stillFine.marketId = live.marketId();
+            SequencedEvent depositSe = new SequencedEvent();
+            depositSe.seq = live.hostDefaults() == null ? 5 : 6;
+            depositSe.event = stillFine;
+            check("and nothing validates against them",
+                    EventApplier.validate(live, depositSe).accepted ? 1 : 0, 1);
+        }
+
+        section("L18: a host takes up published rules only where it has not spoken");
+        {
+            Event.HostDefaults published = new Event.HostDefaults();
+            published.maxDepositUnitsPerWindow = 640L;
+            published.depositWindowMinutes = 30;
+            published.maxMigratedCredits = 5000L;
+            published.maxWelcomeGrant = 250L;
+            published.acceptsMigration = Boolean.FALSE;
+            published.admission = ServerConfig.ALLOWLIST;
+            published.allow = java.util.Arrays.asList(ALICE.toString());
+
+            ServerConfig silent = ServerConfig.friendGroup(25555);
+            silent.adopt(published);
+            check("a host that set nothing takes the group's deposit cap",
+                    silent.maxDepositUnitsPerWindow, 640);
+            check("and its window", silent.depositWindowMinutes, 30);
+            check("and its migration cap", silent.maxMigratedCredits, 5000);
+            check("and its grant ceiling", silent.maxWelcomeGrant(), 250);
+            check("and its migration answer", silent.acceptsMigration() ? 1 : 0, 0);
+            check("and its admission mode",
+                    ServerConfig.ALLOWLIST.equals(silent.admission) ? 1 : 0, 1);
+            check("with the list that makes the mode usable", silent.allow.size(), 1);
+
+            // The half that matters more: an operator who has decided keeps their answer.
+            ServerConfig opinionated = ServerConfig.friendGroup(25555);
+            opinionated.maxDepositUnitsPerWindow = 64;
+            opinionated.maxWelcomeGrant = 9999L;
+            opinionated.acceptsMigration = Boolean.TRUE;
+            opinionated.adopt(published);
+            check("a local deposit cap survives", opinionated.maxDepositUnitsPerWindow, 64);
+            check("a local grant ceiling survives", opinionated.maxWelcomeGrant(), 9999);
+            check("a local migration answer survives",
+                    opinionated.acceptsMigration() ? 1 : 0, 1);
+            check("and what it did not set is still filled in",
+                    opinionated.maxMigratedCredits, 5000);
+
+            // Adopting an allowlist with nobody on it would lock a host out of its own
+            // market, so the mode and its list move together or not at all.
+            Event.HostDefaults modeOnly = new Event.HostDefaults();
+            modeOnly.admission = ServerConfig.ALLOWLIST;
+            ServerConfig lonely = ServerConfig.friendGroup(25555);
+            lonely.adopt(modeOnly);
+            check("an allowlist with no list is still adopted as a mode",
+                    ServerConfig.ALLOWLIST.equals(lonely.admission) ? 1 : 0, 1);
+            check("but the config says why that is unusable",
+                    lonely.problem() != null ? 1 : 0, 1);
+
+            check("adopting nothing changes nothing", ServerConfig.friendGroup(25555)
+                    .maxDepositUnitsPerWindow, 0);
+        }
+
         section("L12: the shape fingerprint sees the fields it has to see");
         {
             List<String> shape = MarketSnapshot.shapeLines();
@@ -4378,6 +4650,12 @@ public class MarketTests {
         sb.append("stipendEveryFills=").append(s.stipendEveryFills()).append('\n');
         sb.append("fillsEver=").append(s.fillsEver()).append('\n');
         sb.append("registeredCount=").append(s.registeredCount()).append('\n');
+        Event.HostDefaults hd = s.hostDefaults();
+        sb.append("hostDefaults=").append(hd == null ? "none"
+                : hd.maxDepositUnitsPerWindow + "/" + hd.depositWindowMinutes
+                  + "/" + hd.maxMigratedCredits + "/" + hd.maxWelcomeGrant
+                  + "/" + hd.acceptsMigration + "/" + hd.admission
+                  + "/" + hd.allow + "/" + hd.deny).append('\n');
 
         List<UUID> users = new ArrayList<>(s.registeredUsers());
         java.util.Collections.sort(users);
@@ -4583,6 +4861,23 @@ public class MarketTests {
         se.seq = 2;
         se.event = mp;
 
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
+    }
+
+    /**
+     * Why publishing these host rules would be refused, or null if it would be allowed.
+     *
+     * Asks validate, because that is where the rules are. apply takes an event that has
+     * already been judged and settles it — so a test that asked apply whether something
+     * was allowed would be told yes about everything, which is what the first draft of
+     * L17 did.
+     */
+    private static String hostRulesRefusal(MarketState state, Event.HostDefaults rules) {
+        rules.marketId = state.marketId();
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 99;
+        se.event = rules;
         EventApplier.Result r = EventApplier.validate(state, se);
         return r.accepted ? null : r.reason;
     }

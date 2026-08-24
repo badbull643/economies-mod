@@ -955,12 +955,30 @@ public class MarketScreen extends Screen {
         UUID me = MinecraftIds.userIdOf(mc.player);
         String playerName = mc.getSession().getUsername();
 
-        status = "Starting host...";
+        final String starting = "Starting host...";
+        status = starting;
         new Thread(() -> {
             MarketStateHolder.startHosting(worldDir, hostPort, me, playerName);
-            status = MarketStateHolder.mode() == MarketStateHolder.Mode.HOSTING
-                    ? "Hosting on port " + hostPort
-                    : "Failed to start host";
+            if (MarketStateHolder.mode() == MarketStateHolder.Mode.HOSTING) {
+                status = "Hosting on port " + hostPort;
+            } else if (starting.equals(status)) {
+                // Only when nothing better arrived. Every refusal inside startHosting
+                // reports itself through onRejected, which writes this same field — and
+                // this line used to overwrite it unconditionally, one statement later, so
+                // "your log is damaged" and "this copy has no history" both reached the
+                // player as "Failed to start host". The reasons were written, and then
+                // thrown away by the code that ran next.
+                //
+                // onConnect above already says this in its own words, and has since the
+                // day somebody noticed it there. Two threads doing the same job, one
+                // corrected and one not, is the defect this project keeps finding: the
+                // fix went where the bug was seen instead of everywhere it lived.
+                //
+                // The generic message still has a job here, which is why this is a
+                // fallback rather than a deletion: a bind failure happens inside the host
+                // thread after this returns and refuses nothing through onRejected.
+                status = "Failed to start host";
+            }
         }, "market-host-start").start();
     }
 

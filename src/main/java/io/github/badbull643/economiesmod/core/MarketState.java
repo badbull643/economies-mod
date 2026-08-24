@@ -755,6 +755,25 @@ public class MarketState {
 
     Map<String, OrderBook> markets() { return markets; }
 
+    /**
+     * Host rules this market's creator has published, or null if none ever were.
+     *
+     * Derived from the log like everything else here, and read by <b>nothing</b> in
+     * EventApplier. That is the whole point: it is what the group agreed, not what any
+     * host is made to do. A host consults it when it starts and is free to disagree, and
+     * a market where every host disagrees is still a perfectly valid market.
+     *
+     * Held as the event because the event is already the complete set — every field
+     * boxed, null meaning "never said" — so there is nothing to unpack and nothing that
+     * can be unpacked wrongly.
+     */
+    private volatile Event.HostDefaults hostDefaults;
+
+    public Event.HostDefaults hostDefaults() { return hostDefaults; }
+
+    /** Called only by EventApplier. */
+    void setHostDefaults(Event.HostDefaults published) { this.hostDefaults = published; }
+
     // ─────────── snapshot access ───────────
     //
     // Live collections, handed out inside this package so MarketSnapshot can write them

@@ -98,6 +98,7 @@ public class AdmissionTest {
         migrationIsWeighedAgainstStatistics();
         aDedicatedServerDeclinesMigration();
         aHostCapsTheWelcomeGrant();
+        aHostTakesUpTheGroupsPublishedRules();
         onlyArchivistsKeepADedicatedMarketsHistory();
         archivingOnFetchesTheHistoryItPromised();
 
@@ -811,6 +812,65 @@ public class AdmissionTest {
         } finally {
             host.stop();
         }
+    }
+
+    /**
+     * Backlog item 8's payoff, checked where it actually lands.
+     *
+     * The unit tests cover publishing and cover ServerConfig.adopt. What neither can see
+     * is whether a host that starts on this market ever asks — the failure this whole
+     * feature exists to prevent is a friend rotating in and hosting with no caps, and a
+     * rule adopted in a test but never consulted by HostServer would look identical to a
+     * working one from every angle except the only one that matters.
+     */
+    private static void aHostTakesUpTheGroupsPublishedRules() throws Exception {
+        System.out.println("  [A10: a host starts from the rules the group published]");
+
+        Path hostLog = dir.resolve("adopt-host.jsonl");
+        Files.deleteIfExists(hostLog);
+        Files.deleteIfExists(hostLog.resolveSibling(hostLog.getFileName() + ".snapshot.json"));
+
+        PlayerKeys keys = PlayerKeys.generate();
+        EventLog log = new EventLog(hostLog);
+        MarketBootstrap.createMarket(log, HOST, "adopt test market", keys);
+
+        // The creator publishes what the group agreed.
+        Event.HostDefaults rules = new Event.HostDefaults();
+        rules.userId = HOST;
+        rules.marketId = log.marketId();
+        rules.clientEventId = UUID.randomUUID().toString();
+        rules.timestamp = System.currentTimeMillis();
+        rules.maxDepositUnitsPerWindow = 640L;
+        rules.maxMigratedCredits = 5000L;
+        log.append(rules, keys.sign(EventCanonical.canonicalPayload(rules)));
+
+        // A host that has set one of the two for itself and left the other alone.
+        ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
+        cfg.hostName = "adopter";
+        cfg.hostUserId = HOST.toString();
+        cfg.maxMigratedCredits = 99;          // this host has an opinion about this one
+
+        HostServer host = new HostServer(cfg, hostLog, keys,
+                new PeerCache(dir.resolve("adopt-host-peers.json")));
+
+        check("the host took up the cap it had not set", cfg.maxDepositUnitsPerWindow, 640);
+        check("and kept the one it had", cfg.maxMigratedCredits, 99);
+
+        // And a market that publishes nothing leaves a host exactly as it was, which is
+        // the behaviour every existing market has and must keep.
+        Path plainLog = dir.resolve("adopt-plain.jsonl");
+        Files.deleteIfExists(plainLog);
+        Files.deleteIfExists(plainLog.resolveSibling(plainLog.getFileName() + ".snapshot.json"));
+        PlayerKeys plainKeys = PlayerKeys.generate();
+        EventLog plain = new EventLog(plainLog);
+        MarketBootstrap.createMarket(plain, HOST, "plain market", plainKeys);
+
+        ServerConfig untouched = ServerConfig.friendGroup(TestPorts.free());
+        untouched.hostUserId = HOST.toString();
+        new HostServer(untouched, plainLog, plainKeys,
+                new PeerCache(dir.resolve("adopt-plain-peers.json")));
+        check("a market that publishes nothing changes nothing",
+                untouched.maxDepositUnitsPerWindow, 0);
     }
 
     private static MarketClient client(UUID who, String logName) throws Exception {
