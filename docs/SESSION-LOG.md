@@ -145,9 +145,9 @@ new observation to argue from, but nothing forces it today.
   config and the log would stop describing different economies, and the restart that
   recreates it is the *only* moment this can be chosen. Without it the box is its own
   creator and that market's policy is frozen for good. §9, and §7 for why.
-- **`server-identity.key` is tracked, unencrypted**, along with all of `run/`, because
-  `.gitignore` was removed on purpose. Raised and reaffirmed before — but this branch is
-  now pushed to GitHub. **If that repository is public, so is the key.**
+- ~~**`server-identity.key` is tracked, unencrypted.** If that repository is public, so is
+  the key.~~ **It was public. Answered 2026-08-24** — and it was three keys, not one. See
+  §12.
 - **Whether to port anything from `MigrationCapTest`.** `depositCapTest` is six checks and
   `admissionTest` twenty-five, and between them they never read a `MigrateBalance`.
 
@@ -1141,11 +1141,14 @@ out to be is worth more than the fact that it is gone.*
   `--creator-key` with a player's key, and that player's uuid in `creatorUserId`, leaves
   the policy changeable from the Market screen afterwards.
 
-- **`server-identity.key` is tracked, unencrypted**, along with the rest of `run/`, because
-  `.gitignore` was removed on purpose. Raised before and reaffirmed, so this is not a new
-  objection — but CI now exists and this branch is pushed to GitHub, so the question is no
-  longer theoretical. If that repository is public, so is the key. Worth answering
-  deliberately rather than by default.
+- ~~**`server-identity.key` is tracked, unencrypted**, along with the rest of `run/`,
+  because `.gitignore` was removed on purpose. Raised before and reaffirmed, so this is
+  not a new objection — but CI now exists and this branch is pushed to GitHub, so the
+  question is no longer theoretical. If that repository is public, so is the key. Worth
+  answering deliberately rather than by default.~~ **Answered 2026-08-24, and the answer
+  was yes — see §12.** The entry is left because of how it aged: it was written as a
+  conditional twice, by somebody who could have spent thirty seconds establishing which
+  branch of the condition was true. **A question you can answer is not an open question.**
 
 ---
 
@@ -1434,3 +1437,55 @@ so it is gone rather than kept for symmetry — with a line saying why its sibli
 **A guard that cannot fire is the same defect as a check that cannot fail**, one step
 earlier: it implies a protection that is not there, and the next person reads it as
 covering something.
+
+---
+
+## 12. Three published private keys, and a conditional nobody resolved
+
+*2026-08-24.*
+
+`https://github.com/badbull643/economies-mod` is **public**. It took one fetch to
+establish, and this file had carried the question as an "if" since the branch was first
+pushed — twice, in two sections, each time noting that the answer mattered. Nobody looked.
+That is the whole lesson here and it is worth more than the fix: **a question you can
+answer in thirty seconds is not an open question, it is an unasked one.**
+
+It was also not one key. Tracked, and present in `origin/main`:
+
+```
+server-identity.key
+run/config/economiesmod-identity-Alice.key
+run/config/economiesmod-identity-Bob.key
+```
+
+All three are unencrypted PKCS#8 private keys, published since `b1f35e7` — a commit called
+"update 12 - with Jar", which is what a `git add -A` looks like a year later.
+
+**What was done, and what deliberately was not.**
+
+- **All three untracked**, behind a `.gitignore` that matches `*.key` and nothing else. It
+  is not a reversal of the decision to track `build/` and `run/`: it is the exception that
+  decision never considered.
+- **`server-identity.key` rotated** — deleted, and the next server start generates a new
+  one through `PlayerKeys.loadOrCreate`. This was free *today* and only today: it had
+  signed nothing that survives, because the market it created was deleted on 2026-08-23,
+  and after a bootstrap rotating it means abandoning the market.
+- **Alice and Bob were not rotated**, on purpose. They unlock nothing but make-believe
+  markets in `run/saves` on one machine, and a second key for an already-registered user
+  is refused by design — so rotating them would make this machine a stranger to its own
+  test worlds in exchange for nothing.
+- **No history rewrite.** A private key in public history cannot be recalled; rotation is
+  what makes a published one worthless. A rewrite would break every clone and the branch
+  relationship to buy nothing on top of that.
+
+**The part that would have cost something.** The next dedicated-server bootstrap is the
+one moment `--creator-key` can be chosen, and the creator is the only identity that can
+ever set a market's policy. Bootstrapping with one of these keys would have produced a
+market whose policy was **both frozen and forgeable** — anybody with a copy of a public
+repository could sign its rates. That is the version of this that had teeth, and it was
+two decisions away from happening by default.
+
+**Still true and still tracked:** `known-keys.json` and the peer caches, which hold public
+keys and are meant to be readable. And `server-market.jsonl`, which does not exist now but
+did once, in the repository root, tracked — so the next bootstrap should move `logFile`
+somewhere ignored before a live market's every trade is committed to a public repo.
