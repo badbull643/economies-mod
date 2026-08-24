@@ -10,6 +10,7 @@ import net.minecraft.text.LiteralText;
 import net.minecraft.text.MutableText;
 import net.minecraft.util.Formatting;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -78,6 +79,84 @@ public final class FillNotifier {
             batchedFills++;
             batchedNet += delta;
         }
+    }
+
+    /**
+     * One line for an order of your own that crossed several resting ones at once.
+     *
+     * The case this exists for: nine resting buy orders taken by a single listing, which
+     * on screen is nine rows vanishing in one frame. A sweep and a wipe look identical
+     * there, and the mod said nothing that told them apart — the per-fill lines below
+     * would have arrived as nine greys or as a batched "9 more fills", neither of which
+     * says *your order did that*. Reported here rather than at the submit, because when
+     * a host is sequencing, the submit returns before anybody knows what it crossed.
+     *
+     * Says what is left as well as what went. An order that fills in part leaves the
+     * remainder resting, and "sold 9 of 10" is the difference between a trade that
+     * finished and one that is still open — which is exactly the thing somebody goes
+     * looking for in the book afterwards.
+     *
+     * @param ordered how much the order asked for, or 0 when that is not known — the
+     *                remainder line is skipped rather than guessed at.
+     */
+    public void onOwnSweep(List<Fill> fills, UUID me, long ordered) {
+        Settings settings = MarketStateHolder.settings();
+        if (settings == null) return;
+        if (!settings.notifyChat() && !settings.notifyActionBar()) return;
+        if (fills == null || fills.isEmpty()) return;
+
+        long quantity = 0;
+        long delta = 0;
+        boolean bought = false;
+        String itemId = null;
+        for (Fill f : fills) {
+            boolean iBought = me.equals(f.buyerId());
+            boolean iSold = me.equals(f.sellerId());
+            if (!iBought && !iSold) continue;
+            if (iBought && iSold) {
+                // Crossing your own book. The existing per-fill path explains that case
+                // properly, including the fee, and it is rare enough not to be worth a
+                // second telling of it here.
+                return;
+            }
+            quantity += f.quantity();
+            delta += iBought ? -f.amount() : f.amount();
+            bought = iBought;
+            itemId = f.itemId();
+        }
+        if (quantity == 0 || itemId == null) return;
+
+        long resting = ordered > quantity ? ordered - quantity : 0;
+        MutableText chat = prefix()
+                .append(new LiteralText(bought ? "Bought " : "Sold ")
+                        .formatted(Formatting.GRAY))
+                .append(new LiteralText(quantity + (ordered > 0 ? " of " + ordered : "")
+                                + " " + name(itemId))
+                        .formatted(Formatting.WHITE))
+                .append(new LiteralText(" across " + fills.size() + " orders · ")
+                        .formatted(Formatting.DARK_GRAY))
+                .append(credits(delta));
+        if (resting > 0) {
+            chat.append(new LiteralText(" · " + resting + " still resting")
+                    .formatted(Formatting.AQUA));
+        }
+
+        MutableText bar = new LiteralText((bought ? "Bought " : "Sold ") + quantity + " ")
+                .formatted(Formatting.GRAY)
+                .append(new LiteralText(name(itemId)).formatted(Formatting.WHITE))
+                .append(new LiteralText(" ").formatted(Formatting.DARK_GRAY))
+                .append(credits(delta));
+
+        // Outside the window counter. This is one line for one thing the player just
+        // did, so it cannot flood the way a market-maker's resting orders can, and
+        // batching the feedback for an action into next minute's summary would be the
+        // silence this method exists to end.
+        send(settings, chat, bar);
+    }
+
+    private static String name(String itemId) {
+        Item item = MinecraftIds.idToItem(itemId);
+        return item == Items.AIR ? itemId : item.getName().getString();
     }
 
     /**

@@ -356,17 +356,17 @@
     },
     "done": true
   },
-  "minecraft:recipes/building_blocks/gray_wool": {
-    "criteria": {
-      "has_white_wool": "2026-08-24 02:16:06 +0100"
-    },
-    "done": true
-  },
   "minecraft:adventure/kill_all_mobs": {
     "criteria": {
       "minecraft:zombie": "2026-08-24 02:15:04 +0100"
     },
     "done": false
+  },
+  "minecraft:recipes/building_blocks/gray_wool": {
+    "criteria": {
+      "has_white_wool": "2026-08-24 02:16:06 +0100"
+    },
+    "done": true
   },
   "minecraft:recipes/misc/sugar_from_sugar_cane": {
     "criteria": {

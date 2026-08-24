@@ -1,6 +1,7 @@
 package io.github.badbull643.economiesmod.client;
 
 import com.google.gson.JsonElement;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import io.github.badbull643.economiesmod.core.Event;
 import io.github.badbull643.economiesmod.core.MarketState;
@@ -128,7 +129,89 @@ public final class TradeCommands {
                                 .then(ClientCommandManager.literal("off")
                                         .executes(c -> setArchive(c, false)))
                                 .executes(TradeCommands::archive))
+                        .then(ClientCommandManager.literal("panel")
+                                .then(ClientCommandManager.literal("on")
+                                        .executes(c -> setPanel(c, true)))
+                                .then(ClientCommandManager.literal("off")
+                                        .executes(c -> setPanel(c, false)))
+                                .then(ClientCommandManager.literal("rows")
+                                        .then(ClientCommandManager.argument("count",
+                                                        IntegerArgumentType.integer(1, 99))
+                                                .executes(TradeCommands::setPanelRows)))
+                                .executes(TradeCommands::panel))
                         .executes(TradeCommands::usage));
+    }
+
+    /**
+     * The listings panel beside the inventory: whether it shows, and how much.
+     *
+     * A local preference, which the rule on this class already admits — it decides what
+     * this machine draws on its own screen and is reversed by typing the opposite. It is
+     * a command rather than a screen control for the same reason {@code hostconfig write}
+     * is: there is nowhere else to put it. The Market screen's settings tab is a
+     * placeholder, and adding to that screen is what backlog item 6 defers until item 5
+     * has split it — so the alternative was a panel with no way to turn it off, which is
+     * worse than a panel with a command.
+     */
+    private static int panel(CommandContext<FabricClientCommandSource> ctx) {
+        FabricClientCommandSource src = ctx.getSource();
+        Settings settings = MarketStateHolder.settings();
+        if (settings == null) {
+            info(src, "No settings are loaded, so there is nothing to report.");
+            return 0;
+        }
+
+        head(src, "Inventory listings panel");
+        info(src, settings.inventoryPanel()
+                ? "On — showing the last " + settings.inventoryPanelRows()
+                  + " listings other people have made, beside your inventory."
+                : "Off — nothing is drawn beside your inventory.");
+        info(src, "Click its header to swap between what is being sold and what is"
+                + " wanted. Your own orders are never in it.");
+        info(src, "/trade panel on | off | rows <1-"
+                + Settings.MAX_INVENTORY_PANEL_ROWS + ">");
+        return 1;
+    }
+
+    private static int setPanel(CommandContext<FabricClientCommandSource> ctx, boolean on) {
+        FabricClientCommandSource src = ctx.getSource();
+        Settings settings = MarketStateHolder.settings();
+        if (settings == null) {
+            info(src, "No settings are loaded, so there is nowhere to remember this.");
+            return 0;
+        }
+        settings.setInventoryPanel(on);
+        head(src, "Inventory listings panel is now " + (on ? "on" : "off"));
+        return 1;
+    }
+
+    private static int setPanelRows(CommandContext<FabricClientCommandSource> ctx) {
+        FabricClientCommandSource src = ctx.getSource();
+        Settings settings = MarketStateHolder.settings();
+        if (settings == null) {
+            info(src, "No settings are loaded, so there is nowhere to remember this.");
+            return 0;
+        }
+
+        int asked = IntegerArgumentType.getInteger(ctx, "count");
+        int kept = settings.setInventoryPanelRows(asked);
+
+        head(src, "Inventory listings panel shows " + kept
+                + (kept == 1 ? " listing" : " listings"));
+        if (kept != asked) {
+            // Said out loud rather than silently clamped. A number that comes back
+            // different from the one typed, with no explanation, reads as the command
+            // not working.
+            info(src, "Asked for " + asked + "; the most this panel takes is "
+                    + Settings.MAX_INVENTORY_PANEL_ROWS + ".");
+            info(src, "It is a glance at what is new. A market busy enough to fill more"
+                    + " rows than that is one where the last few listings have stopped"
+                    + " being news — the Market screen (M) is the one that scrolls.");
+        }
+        if (!settings.inventoryPanel()) {
+            info(src, "The panel is off, so this takes effect when you turn it on.");
+        }
+        return 1;
     }
 
     private static int usage(CommandContext<FabricClientCommandSource> ctx) {
@@ -139,6 +222,7 @@ public final class TradeCommands {
         info(src, "/trade hostconfig — the rules this world hosts under");
         info(src, "/trade hostrules — the rules this market's group agreed once");
         info(src, "/trade archive — whether this copy keeps the market's whole history");
+        info(src, "/trade panel — the listings panel beside your inventory");
         info(src, "Trading itself is on the market screen (M).");
         return 1;
     }
