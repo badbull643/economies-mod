@@ -20,4 +20,19 @@ public interface HandledScreenAccessor {
 
     @Accessor("x")
     int getPanelX();
+
+    /**
+     * The panel's top edge, for anything anchored beside it rather than inside it.
+     *
+     * Does not move when the recipe book opens — only x does — but it is asked for the
+     * same way and in the same breath, and a caller that reads one from the screen and
+     * derives the other from a formula is one vanilla layout change from drawing in the
+     * wrong place.
+     */
+    @Accessor("y")
+    int getPanelY();
+
+    /** How wide vanilla drew it, so a panel beside it knows where "beside" is. */
+    @Accessor("backgroundWidth")
+    int getPanelWidth();
 }

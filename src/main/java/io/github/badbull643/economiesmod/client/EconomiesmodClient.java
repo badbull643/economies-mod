@@ -38,6 +38,9 @@ public class EconomiesmodClient implements ClientModInitializer {
         InventoryMarketButton.register();
         // A third, for reading the market without leaving what you were doing.
         TradeCommands.register();
+        // And one that asks for nothing: what other people are selling, beside the
+        // inventory, because a listing nobody notices is a trade that does not happen.
+        InventoryListingsPanel.register();
 
 
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
@@ -134,7 +137,16 @@ public class EconomiesmodClient implements ClientModInitializer {
                 // Whoever authored the event is the aggressor; anyone else in a fill was
                 // sitting on the book.
                 boolean iAggressed = me.equals(se.event.userId);
+                // One order of mine that crossed several gets one line rather than one
+                // per fill. Nine resting orders taken at once is nine rows leaving the
+                // screen in a single frame, and nine grey lines saying "Sold 1" do not
+                // add up to "your order did that" for anybody reading them afterwards.
+                boolean swept = iAggressed && applied.result.fills.size() > 1;
                 mc.execute(() -> {
+                    if (swept) {
+                        FILLS.onOwnSweep(applied.result.fills, me, orderedVolume(se.event));
+                        return;
+                    }
                     for (Fill fill : applied.result.fills) {
                         FILLS.onFill(fill, me, !iAggressed);
                     }
@@ -201,5 +213,22 @@ public class EconomiesmodClient implements ClientModInitializer {
         MarketStateHolder.reportRecovery(recovery.refunds.size(), recovery.unconfirmed.size());
         System.out.println("[economiesmod] settled " + total
                 + " interrupted inventory operation(s) from a previous session");
+    }
+
+    /**
+     * How much an order asked for, so a summary can say what is left as well as what
+     * went. Zero for anything that is not an order, and the summary then says nothing
+     * about a remainder rather than inventing one.
+     *
+     * Both kinds are here for the same reason BranchDiff reads the book rather than the
+     * event type: DepositAndList is a listing too, and a check that knew only about
+     * PlaceOrder would go quiet for half of them.
+     */
+    private static long orderedVolume(Event event) {
+        if (event instanceof Event.PlaceOrder) return ((Event.PlaceOrder) event).volume;
+        if (event instanceof Event.DepositAndList) {
+            return ((Event.DepositAndList) event).quantity;
+        }
+        return 0;
     }
 }

@@ -41,6 +41,20 @@ public class Settings {
          *  rather than dropped — a market-maker on a busy host loses detail, not news. */
         int notifyMaxPerMinute = 20;
 
+        /** The listings panel beside the inventory. On, because it is the only thing in
+         *  the mod that shows you a market you did not go looking at. */
+        boolean inventoryPanel = true;
+
+        /**
+         * How many listings that panel shows.
+         *
+         * Capped rather than free, and the cap is the interesting part: this is a glance
+         * at what is new, and a market with enough volume to fill twenty rows is a market
+         * where the last twenty listings stopped being news. The panel is not a book —
+         * that is what the Market screen is for, and it scrolls.
+         */
+        int inventoryPanelRows = 6;
+
         /**
          * Market ids whose whole history this machine keeps even though a dedicated
          * server serves them.
@@ -150,6 +164,39 @@ public class Settings {
         if (max < 0 || max == record.notifyMaxPerMinute) return;
         record.notifyMaxPerMinute = max;
         save();
+    }
+
+    /** The most rows the inventory panel will show, whatever a file asks for. */
+    public static final int MAX_INVENTORY_PANEL_ROWS = 15;
+
+    public boolean inventoryPanel() { return record.inventoryPanel; }
+
+    /**
+     * Clamped on the way out, not only on the way in.
+     *
+     * A hand-edited settings file is the other way this number arrives, and a 400 there
+     * would draw a panel taller than the window with no way to reach the control that
+     * fixed it. Clamping in the setter alone protects the path that already had a person
+     * looking at it.
+     */
+    public int inventoryPanelRows() {
+        return Math.max(1, Math.min(MAX_INVENTORY_PANEL_ROWS, record.inventoryPanelRows));
+    }
+
+    public void setInventoryPanel(boolean on) {
+        if (on == record.inventoryPanel) return;
+        record.inventoryPanel = on;
+        save();
+    }
+
+    /** @return what was actually stored, which is the request clamped to the cap. */
+    public int setInventoryPanelRows(int rows) {
+        int clamped = Math.max(1, Math.min(MAX_INVENTORY_PANEL_ROWS, rows));
+        if (clamped != record.inventoryPanelRows) {
+            record.inventoryPanelRows = clamped;
+            save();
+        }
+        return clamped;
     }
 
     private void save() {
