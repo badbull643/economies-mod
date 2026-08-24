@@ -338,15 +338,25 @@ public class EventApplier {
         /**
          * Whether the log itself holds the events this state was built from.
          *
-         * Normally yes, trivially: the state came from walking the log. It is false for
-         * a replica that restored a snapshot the log does not cover — one keeping no
-         * history, or one whose history stops short of where its state got to.
+         * Normally yes, trivially: the state came from walking the log. It is false in
+         * exactly one case — a snapshot restored on its own authority, by a replica that
+         * keeps no history at all. That is a client of a dedicated market, and it is the
+         * case the Host gate exists for: it would bind a port, advertise a market, and
+         * have no lines to send anybody who joined.
          *
          * Here because there is no cheap way to ask afterwards, and the obvious way to
          * ask is wrong. {@code log.lastSeq()} is primed from the state after a load, so
          * a slot with a nought-byte log answers with the state's head — which is exactly
          * what the Host gate asked, and exactly why it let a replica with no history
          * offer to serve one.
+         *
+         * <b>Not a statement that the log can be read through.</b> It never was on the
+         * ordinary path, where a walk that stops at a damaged line reports the state it
+         * built and calls it covered; for one session the snapshot path answered a
+         * stricter question by accident, and charged every load a full pass over the
+         * file for it. Damage is {@link #chainBrokenAt}'s question, and "could I serve
+         * this history to somebody" is asked at the moment somebody tries — see
+         * {@code MarketStateHolder.startHosting}.
          */
         public final boolean logCoversHead;
 
@@ -454,6 +464,27 @@ public class EventApplier {
         return result;
     }
 
+    /**
+     * The same answer as {@link #load}, for somebody who is only looking.
+     *
+     * {@code load} is a load path, and does two things a question has no business
+     * doing: it primes the log's head from the state it just built, and it writes a
+     * snapshot once the log has run far enough. Both are right for a world opening.
+     * Neither is right for the reset confirmation, which asks this from a button
+     * handler about a branch that is usually about to be deleted — a primed head is
+     * the exact shape of the bug that let a historyless replica offer to host, and a
+     * snapshot written for a history being discarded is one more thing to delete.
+     *
+     * The plain path does not verify the chain, matching {@link #replay} rather than
+     * {@code load}: a caller here is asking what this market holds, not whether the log
+     * is sound, and {@link #verifyAndReplay} is where that second question lives. Below
+     * a snapshot nothing is re-verified, exactly as in {@code load}.
+     */
+    public static Replayed inspect(EventLog log) throws IOException {
+        MarketSnapshot.Restored snap = MarketSnapshot.loadIfValid(log);
+        return snap == null ? replayWithHead(log) : replayTail(log, snap);
+    }
+
     /** Carries on from a restored snapshot, verifying only what came after it. */
     private static Replayed replayTail(EventLog log, MarketSnapshot.Restored snap)
             throws IOException {
@@ -482,9 +513,24 @@ public class EventApplier {
 
         long broke = broken[0];
         if (broke == -1 && log.unreadableAtSoFar() != -1) broke = log.unreadableAtSoFar();
-        // Only asked when a snapshot was used, so the ordinary path pays nothing: a
-        // walk that read the log to its end plainly covers what it built.
-        boolean covered = log.headSeqOnDisk() >= head[0];
+
+        // Asked of the snapshot rather than of the file, and that is the whole cost of
+        // it. A snapshot accepted against the log's own hash has a log under it by
+        // definition — loadIfValid found the hash it names, at the sequence number it
+        // names — so the only state a log does not account for is the logless kind, and
+        // the snapshot already knows which it is. If the tail added anything on top,
+        // there is a log here whatever the file said a moment ago.
+        //
+        // This was log.headSeqOnDisk(), which is forEach(0, …): a parse of every line in
+        // the file, on the one path that exists to not do that. It cost the snapshot
+        // three quarters of its benefit — 740 ms of a 900 ms load at 100,000 events —
+        // and it was invisible because nothing in CI measures speed. What it bought was
+        // never the question this field asks: it also went false for a log with an
+        // unparseable line below the snapshot point, which is damage, and damage is
+        // chainBrokenAt's job. See MarketStateHolder.startHosting, which asks about
+        // readability once, when somebody is about to serve a history, rather than on
+        // every load of every world.
+        boolean covered = !snap.logless || head[0] > snap.seq;
         return new Replayed(state, head[0], hash[0], broke, snap.seq, covered);
     }
 

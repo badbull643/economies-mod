@@ -31,13 +31,15 @@ behaviour are all still guesses — see §8.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `721 / 15 / 5 / 16 / 51 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
+Expect `735 / 15 / 5 / 16 / 51 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
 since 2026-08-23, so a failure here that passes there — or the reverse — is about the
 machine rather than the code, and is worth chasing as such.
 
-*`coreTests` was 572 two days before this line; L7–L18 are items 2 and 8. Nothing in CI
-launches Minecraft and nothing in CI measures speed, so the numbers in
+*`coreTests` was 572 four days before this line; L7–L18 are items 2 and 8, and X3c is §11.
+Nothing in CI launches Minecraft and nothing in CI measures speed, so the numbers in
 `docs/design/log-compaction.md` are the one claim here that will rot without warning.*
+**They rotted, and it took four days** — §11 has the measurement and the correction is in
+the note itself.
 
 **Where the code is.** Branch `trust-model-and-migration`. Don't trust a number written in
 this header — the count has been wrong here twice. Ask git:
@@ -120,13 +122,18 @@ new observation to argue from, but nothing forces it today.
 
 ### Housekeeping nobody has done
 
-- **Eighteen commits are unpushed**, on a branch now well past sixty without a PR. The
-  paragraph above about merging becoming a leap rather than a step has only got truer.
+- ~~**Eighteen commits are unpushed**~~ — three, as of 2026-08-24, on a branch now well
+  past sixty without a PR. The push happened; the PR still has not. The paragraph above
+  about merging becoming a leap rather than a step has only got truer. *Do not trust this
+  line either: `git rev-list --left-right --count origin/<branch>...HEAD` is the only
+  version of it that cannot be stale.*
 - **`run/saves/test5/economiesmod/market.jsonl.snapshot.json` carries `"logless": true`**,
   written by a self-connect before that was fixed. Harmless while its log is intact; if
   that log were ever deleted it would hand the market back instead of resetting it.
   Deleting the snapshot costs one slow load.
-- **`smoke-market.jsonl`** sits untracked in the repository root, left by a play session.
+- ~~**`smoke-market.jsonl`** sits untracked in the repository root, left by a play
+  session.~~ It is tracked now, which is worse rather than better: it was committed
+  rather than decided about, the same way the two predecessor logs below were.
 - **`docs/EconomiesMod-PROJECT-LOG.md` and `docs/EconomiesMod-SESSION-LOG-2026-08-16b.md`**
   were committed by a careless `git add -A` in `1c94e59` rather than by a decision. They
   look like genuine predecessors of this file; nobody has said whether they should be
@@ -1246,3 +1253,184 @@ And one in this session's own feature work: the first draft of the item 8 tests 
 `apply` whether events were refused, so three refusals passed that were never refused. The
 rules live in `validate`. That is §0.2's distinction, made while writing tests *for* rules
 that had just been put in `validate`.
+
+---
+
+## 11. The two walks behind a button, and a number that had already rotted
+
+*2026-08-24. One loose end, flagged by the author and never closed: `BranchDiff` still
+walked the log four times per reset dialog, two of them materialising it, on the client
+thread. Small, and it only bites on a large market. What it turned up on the way is worth
+more than the fix.*
+
+### What was wrong, and it is item 2's own problem statement
+
+`docs/design/log-compaction.md` opens by naming **five** call sites that walk the whole
+log. The plan fixed three. The other two were `BranchDiff`, and they were missed for a
+reason worth naming: **they are behind a button rather than on a load path**, so every
+measurement taken that session — all of which timed a world opening — was blind to them.
+The note listed them and then stopped thinking about them in the same breath.
+
+Four walks per `resetCost()`, and eight across a confirmed reset, because `resetLog()`
+deliberately calls it a second time so the confirmation and the action are one
+computation. That second call is right and stays.
+
+The sharpest detail is that two of the four *looked* partial and were not. Each did
+`readFrom(0)` and then broke out of the loop at the split point — but `readFrom`
+materialises the entire log into an `ArrayList` before the caller sees its first event, so
+the break skipped iteration over a list that had already been built. A walk that stops
+early and a walk that reads everything and then stops looking are the same code shape and
+opposite costs.
+
+### The fix
+
+`EventApplier.inspect` — `load` without the two things a load path does and a question
+must not: priming the log's head from the state it built, and writing a snapshot. Both
+would be wrong here, and the first is exactly the primed-`lastSeq` shape that let a
+historyless replica offer to host (§10). The two prefix walks stream now: one stops at the
+split, the other steps over everything below it as lines.
+
+```
+  before        2500 ms      and OutOfMemoryError in a 64 MB heap
+  after         1800 ms      1937 ms in a 64 MB heap
+```
+
+The heap column is the real result. The old code could not open a 100,000-event market's
+reset dialog in 64 MB at all, and "slower" and "fails hard" are not the same complaint.
+
+### The guard, which is the part that is not about speed
+
+Taking the head from a snapshot and the prefix from the log is **two sources of truth
+where there was one** — §4, in a change made to fix something else. A snapshot stays valid
+in two cases where the log is not the whole story: a replica keeping no history at all,
+and a damaged line *below* the snapshot point, which the hash check never looks at. In
+either case "resting now" knows about events "resting at the split" never saw, and every
+order in between is offered back for re-placing while the host still holds it. That is the
+duplicate `BranchDiff` exists to prevent, produced by a performance change.
+
+`logCoversHead` is false in both cases and both methods refuse to answer when it is. Which
+means `BranchDiff` now depends on that field being settled by **a walk that stops where
+the parsing does, rather than by a count of lines** — a property of how it is computed and
+not of what it is called. That is written into `BranchDiff` where anyone making it cheaper
+would have to read it, which is §10's mechanical step applied forwards for once rather
+than after the fact.
+
+*The measurements above are from before the second half of this session. With
+`logCoversHead` no longer costing a pass over the file, one `resetCost()` on the same
+market is **930 ms** with a snapshot beside it and 1655 ms without.*
+
+### The number that had already rotted
+
+Measuring the fix meant measuring `EventApplier.load`, and the headline figure of the
+whole compaction session is **wrong by 4×**:
+
+```
+  100,000 events, no snapshot      1178 ms       (the note says 1135 — still right)
+  100,000 events, with a snapshot  740-900 ms    (the note says 190)
+```
+
+One line explains it. `replayTail` asks `log.headSeqOnDisk()` to settle `logCoversHead`,
+and that is `forEach(0, …)` — a parse of every line in the file, which is exactly what a
+snapshot exists to skip. It arrived in `07a8b68`, the fix for the Host gate, *after* the
+numbers were taken. Nobody was careless: the question it answers is real, and nothing in
+the change said it cost a full pass.
+
+The note's own last section predicted this — *"nothing in CI will notice if these numbers
+rot"* — and the Start-here section repeated it four days ago as the one claim in this
+project that would rot without warning. It took four days. **A measurement with no test
+behind it is a claim with a date on it**, and the date is when it was taken rather than
+when it stops being true.
+
+### What `logCoversHead` costs, decided and built
+
+*This section was an open decision for about an hour. Reading the four call sites closed
+it, and the answer was not any of the three options the question was framed around.*
+
+**It costs nothing now, and is asked of the snapshot rather than of the file.** A snapshot
+accepted against the log's own hash has a log under it by definition; only the logless
+kind does not, and `MarketSnapshot.Restored` carries which it is. `load` on a
+100,000-event market is **174–221 ms** with a snapshot again, against 740–900 before and
+1196 with no snapshot. The design note's 190 ms is a true statement once more.
+
+**The framing was wrong, and this is the part worth carrying.** I described the choice as
+trading strictness for speed: the full pass answered *can this replica read its own
+history*, and cheap versions answer *does the file have enough lines*. Both true, and it
+does not follow that the field was strict — `walkLog` reports `covered = true` for a
+damaged log as well, because a walk that stops at a bad line reports the state it built
+and covers it trivially. **Only one of the two paths was strict, by accident, and the
+whole codebase paid for it on every load.** Reading what the field is *for* — its own
+javadoc, and the refusal message it produces — settles it in a way that arguing about the
+trade-off could not: it exists so a snapshot-only replica cannot offer to host a history
+it does not have. That is one question, and it is free.
+
+The accident was not even a good one. When it fired, the Host button greyed with *"turn on
+archiving for this market and reconnect once to fetch it"* — advice for somebody who chose
+to keep no history, given to somebody whose file is corrupt.
+
+**The readability question is real, and moved to the two places that need it.**
+`BranchDiff` asks it of the walk it was already doing, which is free and — unlike the
+version folded into `logCoversHead` — a check that can actually fail. `startHosting` asks
+it once, at the click, because hosting is when a broken chain gets handed to somebody who
+will verify it. That check costs a pass over the file and could not live on the button:
+`hostButton.active` is set from a render path, and a parse per frame is not a trade
+anybody would make. So the button can be live and the click refuse, which this file
+usually treats as a defect — argued rather than assumed, in the comment there, on the
+grounds that the case is rare and the message says exactly what is wrong.
+
+**What it gives up**, stated so nobody has to find it: a damaged prefix under a valid
+snapshot is no longer noticed at world load. It was only ever noticed as a greyed button
+with the wrong explanation; the state on screen is right either way, since the snapshot is
+bound to the chain hash at its own sequence number; and the moment it can do harm is the
+moment it is now checked. `coreTests` pins that deliberately — *"and the load calls that
+covered, because it is"* — so if the strict meaning ever creeps back, a check goes red
+rather than a load quietly getting slower.
+
+### The live check, which found two defects the gate did not have
+
+*`E24` in `docs/testing/group-e.md`, run 2026-08-24.* The refusal fired first time and the
+reason was exactly right — in the console. **On screen there was nothing**, and both
+reasons for that were older and larger than the thing being tested.
+
+**The reason was thrown away one statement after it was written.** `startHosting` reports
+refusals through `onRejected`, which writes the screen's status field; the thread that
+called it then set that same field to `"Failed to start host"` unconditionally. So every
+refusal that path can produce reached the player as a generic failure — **including the
+snapshot-without-history one, which means the Host gate from the compaction session has
+never once shown its explanation in game.** It was verified by the button greying, which
+is a different thing from clicking through to the refusal.
+
+`onConnect`, forty lines above it in the same file, already said this in a comment: *"Only
+report success here. Failures already went through onRejected with the actual reason and
+what to do about it."* Two threads doing one job, one corrected and one not. §4's shape,
+and the correction went where the bug was seen rather than everywhere it lived.
+
+**Both refusal messages were too long to be read.** The footer draws one trimmed line,
+about 50–70 characters depending on GUI scale; both messages ran past 150 and were cut off
+mid-sentence, losing the half that says what to do. Short form on screen, reasoning to the
+console. One of the two was mine, written the same day, in a codebase whose §0 records *a
+warning running off the panel edge* as a defect found by looking at a screen.
+
+**And the run itself went wrong in a way worth copying.** The first attempt was made
+against the control by mistake — the world had been swapped back to the undamaged log —
+and hosting succeeded, which read as the check failing. Nothing in the game distinguishes
+the two: same market, same screen, same everything. The console line `restored a snapshot
+at event N` and the state of line 2 are the only difference, and `E24` now makes confirming
+that a step of its own. **A check whose setup is invisible from inside the thing being
+checked needs a way to prove which case it is in.**
+
+### Three trials, and what the third one caught
+
+Every guard here was tried with itself removed, and one of the three did not fail.
+
+The `logCoversHead` guard in `ordersOnlyAfter` passed with the guard torn out, because the
+prefix guard catches the historyless replica too on its way past — a walk that reads
+nothing cannot reach the split. Not redundant, though: **at a fork with nothing shared
+there is no split to fall short of**, the walk is trivially complete at zero, and that
+guard is the only thing between a snapshot-only replica and offering back every order in
+the market. A check for exactly that input is in `X3c` now, and the guard fails without it.
+
+The same trial on `depositsOnlyAfter` showed a guard that could not fire under any input,
+so it is gone rather than kept for symmetry — with a line saying why its sibling has one.
+**A guard that cannot fire is the same defect as a check that cannot fail**, one step
+earlier: it implies a protection that is not there, and the next person reads it as
+covering something.

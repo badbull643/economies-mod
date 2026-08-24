@@ -18,6 +18,10 @@ call sites do it — `MarketStateHolder.loadLocal`, the `HostServer` constructor
 `MarketClient` constructor, and `BranchDiff` twice, which `resetCost()` calls twice more,
 so opening the reset dialog is four full walks from a UI thread.
 
+*[2026-08-24] `BranchDiff` was the last of those five left, and is done — see "The two
+walks the plan forgot" at the end of this note. It also turned up the fact that the
+190 ms figure below is no longer true.*
+
 That was the whole of the original problem statement, and it was reasoned about without a
 single number. What follows is measured, on this machine, against chains built through
 `EventLog.append` so they verify like real ones. Method is at the bottom; the numbers
@@ -309,6 +313,26 @@ to log length and never to `dedicated`. Loading a 100,000-event market:
 
 The snapshot file is 6.5 MB against a 57 MB log.
 
+> **[2026-08-24] These numbers went stale and were put back the same day.** For one
+> session the figure was **740–900 ms** rather than 190, because `replayTail` asked
+> `log.headSeqOnDisk()` to settle `logCoversHead` — `forEach(0, …)`, a parse of every
+> line in the file, on the one path that exists to not do that. It arrived in `07a8b68`
+> with the Host-gate fix, after these measurements were taken, and nothing said it cost a
+> full pass.
+>
+> `logCoversHead` is answered by the snapshot now instead of by the file — a snapshot
+> accepted against the log's own hash has a log under it by definition, so only the
+> logless kind is not covered, and the snapshot already knows which it is. Re-measured:
+> **1196 ms** with no snapshot, **174–221 ms** with one. The line above stands.
+>
+> The strictness that was lost with it was never this field's question, and is not lost:
+> see "What `logCoversHead` costs" below.
+>
+> Worth keeping for the shape of it. This is exactly the rot the "Reproducing the
+> measurements" section predicted, in exactly the way it predicted, four days later — and
+> it was found only because somebody measured a different change. **A measurement with no
+> test behind it is a claim with a date on it.**
+
 *Three things that were not obvious while building it.*
 
 **The remaining cost was the `EventLog` constructor**, which walked the whole file to find
@@ -440,13 +464,91 @@ signature and hash.
 - **Also known:** a snapshot is written on load and not while a session runs, so a long
   sitting still replays its whole tail next time. `STRIDE` bounds that at 5,000 events,
   which is under a tenth of a second.
-- **Open:** nothing in this note. B for a dedicated server was the last of it, and closed
-  2026-08-24 once the pressure behind it turned out to be two materialisation faults
-  rather than the cost of verifying. Whether the log's storage format is worth revisiting
-  — two-thirds of it is signature and hash — is the thing to look at first if a real
-  market ever does press against the download.
+- ~~**Open:** what `logCoversHead` should cost.~~ **Decided and built 2026-08-24** — see
+  the section at the end of this note. Nothing here is open now. B for a dedicated server
+  was the last of the rest, and closed 2026-08-24 once the pressure behind it turned out to be two
+  materialisation faults rather than the cost of verifying. Whether the log's storage
+  format is worth revisiting — two-thirds of it is signature and hash — is the thing to
+  look at first if a real market ever does press against the download.
 
 ---
+
+## The two walks the plan forgot
+
+*2026-08-24. The problem statement at the top of this note named five call sites and the
+plan fixed three, because the other two were behind a button rather than on a load path
+and nothing in the plan went looking for them again.*
+
+`BranchDiff` reads the log twice per question and is asked two questions, so the reset
+dialog was four full walks — and, because `resetCost()` is deliberately called again by
+`resetLog()` so the confirmation and the action are one computation, eight across a
+confirmed reset. Two of the four materialised the whole log through `readFrom(0)`, which
+is the several-hundred-megabyte allocation `forEach`'s note was written about. The early
+`break` in each read as a partial walk and was not one: the list was already built before
+the loop saw its first event.
+
+Now: the state at the head comes from `EventApplier.inspect` — `load` without the two
+things a load path does and a question must not, priming the log's head and writing a
+snapshot — and the two prefix walks stream, one stopping at the split and one stepping
+over everything below it as lines. Measured on the same 100,000-event market, one
+`resetCost()`:
+
+```
+  before                    2500 ms      OutOfMemoryError in a 64 MB heap
+  after                     1655 ms      1937 ms in a 64 MB heap, which is the point
+  after, with a snapshot     930 ms
+```
+
+The heap column is the real result: the old code could not open the reset dialog of a
+100,000-event market in 64 MB at all, and "slower" and "fails hard" are different
+complaints. What remains is the walk to the split, which is a real question about a real
+part of the file and is not going away.
+
+The guard that came with it is the reason this is not purely a speed change. Taking the
+head from a snapshot and the prefix from the log is two sources of truth where there was
+one, and a snapshot stays valid in two cases where the log is not the whole story: a
+replica keeping no history, and a damaged line below the snapshot point that the hash
+check never looks at. Either one would offer back every order placed since, for
+re-placing, while the host still holds them.
+
+They are asked separately, because they are two questions. `logCoversHead` is the
+historyless replica and costs nothing. The unreadable prefix is asked of the walk this
+code was doing anyway: if it did not reach the split while the head knows about events
+beyond where it stopped, the two halves describe different amounts of history and neither
+answer is given. Both refusals answer nothing, which is the safe direction — this can
+under-offer and must never over-offer.
+
+## What `logCoversHead` costs
+
+*Decided 2026-08-24, after the measurement above turned up the 740 ms.*
+
+**Nothing, and it is asked of the snapshot rather than of the file.** A snapshot accepted
+against the log's own hash has a log under it by definition, so the only state a log does
+not account for is the logless kind, and `MarketSnapshot.Restored` carries which it is.
+
+The stricter meaning it briefly had — *can this replica read its own history* — was an
+accident of the implementation and was never uniform: `walkLog` reports `covered = true`
+for a damaged log too, because a walk that stops at a bad line reports the state it built.
+Only the snapshot path noticed, only via `headSeqOnDisk`, and it charged every world load
+a full pass for it. It also gave the wrong advice when it fired: the Host button greyed
+with *"turn on archiving and reconnect"*, which is guidance for a replica that chose to
+keep no history, not for one whose file is corrupt.
+
+The readability question is real and has moved to the two places that need it, both of
+which get it cheaply:
+
+- **`BranchDiff`** asks it of the walk it was already doing — free, and now a check that
+  can actually fail, which the version folded into `logCoversHead` could not.
+- **`MarketStateHolder.startHosting`** asks it once, at the click. Hosting is what makes
+  the answer matter: a log that stops mid-file hands a joiner a chain that breaks. It
+  costs a pass over the file, which is affordable once when a server is being started and
+  is not affordable on the render path that greys the button — hence the click and not the
+  button. The refusal names damage and points at Reset.
+
+What this gives up: a damaged prefix under a valid snapshot is no longer noticed at world
+load. It was only ever noticed as a greyed button with a misleading explanation, the state
+on screen is correct either way — the snapshot is bound to the chain hash at its own
+sequence number — and the moment it can do harm is the moment it is now checked.
 
 ## Reproducing the measurements
 
