@@ -51,9 +51,24 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 
 `origin/main` carries commits this branch does not, and they are all merge commits *of
 this branch*, so nothing on `main` is missing from here. Local `main` is far behind
-`origin/main`; nothing depends on that. **This branch has run to well over forty commits
-without a PR** — merging is a decision nobody has made rather than a task nobody has done,
-and the longer it runs the more it becomes a leap rather than a step.
+`origin/main`; nothing depends on that.
+
+~~**This branch has run to well over forty commits without a PR** — merging is a decision
+nobody has made rather than a task nobody has done, and the longer it runs the more it
+becomes a leap rather than a step.~~ **That was false, and had been for a while.** This
+branch merges through pull requests regularly — `origin/main` holds *"Merge pull request
+#8 from badbull643/trust-model-and-migration"*, dated 2026-08-24, and seven before it. The
+unmerged part is however many commits have landed since the last merge, which is normally
+a handful:
+
+```
+git log --oneline origin/main..HEAD          # what a PR would actually contain
+```
+
+Left in, struck through, because of how it survived: it sat two paragraphs below an
+instruction to ask git rather than trust this header, and was repeated four times in one
+session by somebody who never ran the command in it. **The warning was right and was
+aimed at the wrong number.**
 
 There is one other branch worth knowing about: `claude/practical-diffie-e9fbf4` holds a
 443-line `MigrationCapTest` rescued from an abandoned worktree. See §9.
@@ -122,11 +137,11 @@ new observation to argue from, but nothing forces it today.
 
 ### Housekeeping nobody has done
 
-- ~~**Eighteen commits are unpushed**~~ — three, as of 2026-08-24, on a branch now well
-  past sixty without a PR. The push happened; the PR still has not. The paragraph above
-  about merging becoming a leap rather than a step has only got truer. *Do not trust this
-  line either: `git rev-list --left-right --count origin/<branch>...HEAD` is the only
-  version of it that cannot be stale.*
+- ~~**Eighteen commits are unpushed.**~~ **Nothing is, as of 2026-08-24** — pushed at
+  `a350260`, five commits ahead of `origin/main` and waiting on a pull request. This line
+  has now been wrong in three different ways in four days, and the count is not the point:
+  *`git rev-list --left-right --count origin/<branch>...HEAD` is the only version of it
+  that cannot be stale.* Anything else here is a photograph.
 - **`run/saves/test5/economiesmod/market.jsonl.snapshot.json` carries `"logless": true`**,
   written by a self-connect before that was fixed. Harmless while its log is intact; if
   that log were ever deleted it would hand the market back instead of resetting it.
@@ -139,17 +154,44 @@ new observation to argue from, but nothing forces it today.
   look like genuine predecessors of this file; nobody has said whether they should be
   tracked.
 
-### Three decisions nobody has made
+### Two decisions nobody has made
 
 - **`--creator-key` on the next dedicated-server start.** Its market was deleted so the
   config and the log would stop describing different economies, and the restart that
   recreates it is the *only* moment this can be chosen. Without it the box is its own
   creator and that market's policy is frozen for good. §9, and §7 for why.
+
+  **Three things established 2026-08-24, which make this less open than it reads.** The
+  config levers named in §7 are *bootstrap-only*: `cfg.welcomeGrant`, `cfg.listingFee` and
+  `cfg.stipendAmount` are read inside `bootstrap()` and nowhere else, so on an existing
+  market editing `server-config.json` changes nothing. Frozen means frozen. The creator
+  key must be a **fresh** one — Alice's and Bob's were published, and a market whose policy
+  is frozen *and* forgeable is worse than either. And `creatorUserId` is not in the config
+  yet; bootstrap refuses the flag without it.
+
+  Worth doing first, since the choice is permanent: bootstrap into a scratch `--config`
+  and `--log`, join as that identity, watch the tax change from the Market screen, then
+  delete the pair and do it for real.
+
+  **And move `logFile` before starting it.** It is `server-market.jsonl` in the repository
+  root, and it was tracked once — added in `b1f35e7`, removed in `0d4e11b`. Started as
+  configured, a live market commits every trade it settles to a public repository.
 - ~~**`server-identity.key` is tracked, unencrypted.** If that repository is public, so is
   the key.~~ **It was public. Answered 2026-08-24** — and it was three keys, not one. See
   §12.
-- **Whether to port anything from `MigrationCapTest`.** `depositCapTest` is six checks and
-  `admissionTest` twenty-five, and between them they never read a `MigrateBalance`.
+- **Whether to port anything from `MigrationCapTest`.** ~~`depositCapTest` is six checks
+  and `admissionTest` twenty-five, and between them they never read a `MigrateBalance`.~~
+  **Read properly on 2026-08-24, and the gap is narrower than that.** `MarketTests` reads
+  `MigrateBalance` twelve times, so the core arithmetic is covered, and `admissionTest` —
+  fifty-one checks now, not twenty-five — already refuses a migration on admission
+  grounds. What nothing covers is the **host** side: migration against `maxMigratedCredits`,
+  against attestation refusals (silent world, creative), against the statistics objection,
+  and against the free allowance. Four checks, and `depositCapTest` and `attestationTest`
+  already have the fixtures for them.
+
+  **Port those four; do not merge the branch.** It carries a 188-line `HostServer` diff of
+  its own, so its tests were written against host code that took a different shape here —
+  it is not a drop-in, and reading it is what the entry in §9 was actually asking for.
 
 ### The one habit worth copying
 
@@ -1115,12 +1157,20 @@ out to be is worth more than the fact that it is gone.*
   `claude/practical-diffie-e9fbf4` still holds all of it. Nothing there is claimed to
   build against the current tree — it sits on `4fb4ec5` and the code around it has moved a
   very long way. **Whether any of those checks are worth porting is an open question**;
-  `depositCapTest` is six checks and `admissionTest` twenty-five, and neither reads a
-  `MigrateBalance`.
+  ~~`depositCapTest` is six checks and `admissionTest` twenty-five, and neither reads a
+  `MigrateBalance`.~~ **Four of them are worth porting and the branch is not worth
+  merging** — the reasoning is in "Two decisions nobody has made" above, where somebody
+  deciding will actually look.
 
   The lesson is the entry itself. It said "safe to remove" for four days, in a file that
   is otherwise careful, because whoever wrote it knew what the worktree was *for* and did
   not look at what was *in* it. A directory's purpose and its contents are two facts.
+
+  *And it happened a second time, to this same entry.* The count beside it — "neither
+  reads a `MigrateBalance`" — was written about two host-side suites and read for four
+  days as a statement about the whole tree. `MarketTests` reads one twelve times. **A fact
+  scoped in the writer's head is not scoped on the page**, which is the same failure as
+  the paragraph it sits under, one level down.
 
 - ~~`server-market.jsonl` disagrees with `server-config.json`.~~ **Done 2026-08-23.** The
   market held five events — genesis, one policy, one key registration and two welcome
