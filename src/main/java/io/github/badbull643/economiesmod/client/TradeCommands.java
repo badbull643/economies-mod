@@ -131,12 +131,25 @@ public final class TradeCommands {
         Settings settings = MarketStateHolder.settings();
         boolean on = settings != null && settings.archives(market.marketId());
 
+        // The setting and the history are two facts, and reporting only the first is
+        // what made this command useless to somebody testing it: they turned archiving
+        // on, were told the history would arrive, watched it arrive, asked again, and
+        // were told the same thing. Whether it is here is the question being asked.
+        boolean here = MarketStateHolder.hasFullHistory();
+
         head(src, "Archiving '" + market.marketName() + "'");
         info(src, on
                 ? "On — this copy keeps every event, and could serve this market if"
                   + " whoever hosts it stops."
                 : "Off — this copy keeps a snapshot of the balances and books, not the"
                   + " history behind them.");
+        info(src, here
+                ? "The history is here: " + MarketStateHolder.localHeadSeq() + " events on"
+                  + " disk, and this copy could host."
+                : "The history is not here — only a snapshot of where the market got to.");
+        if (on && !here) {
+            info(src, "Connect once and the host will send it from the beginning.");
+        }
         if (!on) {
             info(src, "That is the default for a market a dedicated server serves, and"
                     + " has no effect on a market your friends take turns hosting.");
@@ -169,8 +182,17 @@ public final class TradeCommands {
         settings.setArchives(market.marketId(), on);
         head(src, "Archiving '" + market.marketName() + "' is now " + (on ? "on" : "off"));
         if (on) {
-            info(src, "The history is not here yet. Connect once and the host will send"
-                    + " what this copy is missing; until then it is still a snapshot.");
+            // Asked rather than assumed. This line used to say the history was on its
+            // way whatever the truth was, so it went on saying it after the history had
+            // arrived — which reads as nothing having happened, and is how somebody
+            // testing this concluded the feature did not work when it had.
+            if (MarketStateHolder.hasFullHistory()) {
+                info(src, "The history is already here — " + MarketStateHolder.localHeadSeq()
+                        + " events on disk. Nothing to fetch.");
+            } else {
+                info(src, "The history is not here yet. Connect once and the host will send"
+                        + " it from the beginning; until then this is still a snapshot.");
+            }
         } else {
             info(src, "Events already written stay on disk. Nothing new is added, and"
                     + " this copy stops being one of the ones keeping the market alive.");
