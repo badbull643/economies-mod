@@ -9,7 +9,6 @@ import io.github.badbull643.economiesmod.core.PlayerKeys;
 import io.github.badbull643.economiesmod.core.ServerConfig;
 
 import java.io.IOException;
-import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -149,7 +148,7 @@ public class SplitPointTest {
         check("their branch grew", theirs.lastSeq(), shared + 25);
         check("ours grew differently", ours.lastSeq(), shared + 11);
 
-        int port = freePort();
+        int port = TestPorts.free();
         HostServer host = serve(hostLog, port);
         try {
             check("the split is the last shared event",
@@ -184,6 +183,33 @@ public class SplitPointTest {
             MarketBootstrap.createMarket(stranger, HOST, "a different market", keys);
             check("two chains sharing nothing split at zero",
                     MarketClient.findSplitPoint("127.0.0.1", port, stranger), 0);
+
+            // The single question the discovery poll asks, which is not a search. A peer
+            // whose head is above ours is either extending our chain or on a different
+            // one, and a probe cannot tell them apart — it carries a head and nothing
+            // below it. This is what separates them.
+            check("a host answers for a point on its chain",
+                    MarketClient.hashAt("127.0.0.1", port, shared) != null ? 1 : 0, 1);
+            check("with the hash that chain actually has",
+                    theirs.hashAt(shared).equals(
+                            MarketClient.hashAt("127.0.0.1", port, shared)) ? 1 : 0, 1);
+
+            // The answer that matters: our hash at the same point differs, which is the
+            // whole fork test. Same seq, two chains, two hashes.
+            check("and a forked chain of ours disagrees there",
+                    ours.hashAt(shared + 1) == null
+                            || ours.hashAt(shared + 1).equals(
+                                    MarketClient.hashAt("127.0.0.1", port, shared + 1))
+                            ? 0 : 1, 1);
+
+            // Above the host's head there is no answer to give. Null is "could not be
+            // had", and the caller has to hold no opinion rather than read it as a
+            // mismatch — a peer that is simply shorter is not a fork.
+            check("beyond a host's head there is nothing to answer",
+                    MarketClient.hashAt("127.0.0.1", port,
+                            theirs.headSeqOnDisk() + 500) == null ? 1 : 0, 1);
+            check("and zero is refused without a round trip",
+                    MarketClient.hashAt("127.0.0.1", port, 0) == null ? 1 : 0, 1);
 
             // An empty log has nothing to compare and says so without asking.
             Path emptyLog = dir.resolve("split-empty.jsonl");
@@ -230,11 +256,5 @@ public class SplitPointTest {
         IOException bindError = host.awaitBound(5000);
         if (bindError != null) throw bindError;
         return host;
-    }
-
-    private static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
-        }
     }
 }

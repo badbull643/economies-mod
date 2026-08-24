@@ -8,20 +8,33 @@ is right.*
 
 ## Start here
 
-**The build is green and the tree is clean.** Nothing is half-finished; there is no
-in-progress edit to pick up.
+*Written 2026-08-23 as a cold handoff. If you have just opened this project and know
+nothing else about it, this section is enough to start work from.*
+
+### The state in one paragraph
+
+**The build is green, the tree is clean, and nothing is half-finished.** There is no
+in-progress edit to pick up. The roadmap finished some time ago; everything since has been
+inspection, play-testing, and the defects both turned up — twenty-seven of them, in §0 —
+and then log compaction, which is backlog item 2 and is three-fifths built.
+
+### Check it still holds
 
 ```
 ./gradlew coreTests chunkTest replayGuardTest gapRecoveryTest admissionTest \
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`. If any of it fails on a clean
-checkout, that is news — it has only ever been run on one machine (backlog item 4).
+Expect `646 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
+since 2026-08-23, so a failure here that passes there — or the reverse — is about the
+machine rather than the code, and is worth chasing as such.
 
-**Where the code is.** Branch `trust-model-and-migration`, ahead of its remote and 0
-behind. Don't trust that sentence for a number — the count has been wrong in this header
-twice. Ask git:
+*`coreTests` was 572 before 2026-08-23; L7–L12 are the compaction work. Nothing in CI
+launches Minecraft and nothing in CI measures speed, so the numbers in
+`docs/design/log-compaction.md` are the one claim here that will rot without warning.*
+
+**Where the code is.** Branch `trust-model-and-migration`. Don't trust a number written in
+this header — the count has been wrong here twice. Ask git:
 
 ```
 git rev-list --left-right --count origin/trust-model-and-migration...HEAD
@@ -29,24 +42,91 @@ git log --no-merges origin/main ^HEAD        # empty ⇒ main holds no work of i
 ```
 
 `origin/main` carries commits this branch does not, and they are all merge commits *of
-this branch*, so nothing on `main` is missing from here. The branch has been pushed
-before and merged to `main` through PR #6. Local `main` is far behind `origin/main`;
-nothing depends on that.
+this branch*, so nothing on `main` is missing from here. Local `main` is far behind
+`origin/main`; nothing depends on that. **This branch has run to well over forty commits
+without a PR** — merging is a decision nobody has made rather than a task nobody has done,
+and the longer it runs the more it becomes a leap rather than a step.
 
-**What to read, in order.**
+There is one other branch worth knowing about: `claude/practical-diffie-e9fbf4` holds a
+443-line `MigrationCapTest` rescued from an abandoned worktree. See §9.
 
-1. **§4 below** — one paragraph, and it predicted most of two sessions' worth of bugs.
+### What to read, in order
+
+1. **§4 below** — one paragraph, and it predicted most of three sessions' worth of bugs.
    If you read nothing else, read that.
-2. **§0** — an inspection that found seventeen defects behind 437 passing checks, then
-   what a play session found on top. Long, but it is the current state of the code.
+2. **§0** — twenty-seven defects found behind 437 passing checks, by reading and then by
+   playing. Long, and it is the current state of the code rather than history.
 3. **`docs/BACKLOG.md`** — everything deliberately not built, in the order worth doing,
-   each saying what it costs to keep not doing it. This is where the next work is.
-4. **`docs/testing/group-e.md`** — done as of 2026-08-22, with six items wanting a short
-   re-check because their code moved afterwards or is newer than the sitting.
+   each saying what it costs to keep not doing it. **This is where the next work is.**
+4. **`docs/testing/group-e.md`** — the live checklist, and the only thing standing between
+   a green CI tick and a claim that this works. Nothing in CI launches Minecraft.
 
-**What is being worked on right now:** nothing. The last thing finished was §0.21 — a fork
-warning that no longer outlives the fork. **`E17`, `E17b`, `E19b`, `E20` and the
-`E13`/`E14` re-checks are all unrun**, and backlog item 7 is open from the same sitting.
+### What to do next
+
+**Backlog item 2's steps 1–3 are done (2026-08-23); step 4 is next.** Read
+`docs/design/log-compaction.md`, which was rewritten that day against measurements and
+disagrees with what everything older says about this. A 100,000-event load went **4208 ms
+→ 190 ms**, and the old code could not open that market in a 128 MB heap at all.
+
+Three things worth carrying forward from it. A load was 45% `String.format("%02x")` and
+44% parsing the file four separate times, and **1% rebuilding `MarketState` — which was
+the only thing the snapshot this note recommended would have removed**; the measurement
+changed what got built. *25,000 events is not a large-server number, it is a
+market-that-lasted-a-season number*, which is why this jumped item 5. And a snapshot is
+kept honest by a **shape fingerprint** reflected off `MarketState`, so adding a field
+discards every old snapshot without anybody remembering to — because the serialiser going
+stale is the only failure here that produces a wrong balance.
+
+**Step 4** is snapshot-only clients on dedicated markets, and it is a design question
+before it is code: `MarketClient` still replays its whole local log on every connect, and
+whether a client of a dedicated server should hold that log at all is the open part.
+
+**Item 5, splitting `MarketScreen`, is next after it.** 4,293 lines, and the evidence is
+much stronger than the line count ever was: four separate lists in that file stacked
+content downwards with no scroll and lost the far end of it, and **every one was found by
+a person looking at a screen rather than by a test**. Split by component, never by layer —
+a layer split makes §4's defect structural. Item 6 says to read item 5 first, so those two
+go in order.
+
+The other open item is **8** (host rules a group can agree once, as defaults rather than
+enforcement).
+
+**And one open decision came out of item 2 that is larger than item 2.** Option B — a host
+handing out state — is refused for rotating mode and was never priced for a dedicated
+server, where a new joiner must otherwise download and verify ~511 MB of a year-old
+hundred-player market before playing. Nothing older in this file treats that as open. It
+is.
+
+### What is waiting on a person, not on code
+
+- **`E9` and `E23`** in `docs/testing/group-e.md`, which the author has said they will run.
+- **`E13`, `E14`, `E17`, `E17b`, `E19b`, `E21`, `E22`** are marked unrun because there is
+  only log evidence for `E18`, `E19` and `E20`. The author believes most were run; the
+  file deliberately understates rather than claiming something unverified. **Ask before
+  trusting either reading.**
+- **The first CI run has never executed anywhere.** If it goes red on `Assemble` rather
+  than on the suites, that is the toolchain and not the code — the steps are split so the
+  two can be told apart.
+
+### Three decisions nobody has made
+
+- **`--creator-key` on the next dedicated-server start.** Its market was deleted so the
+  config and the log would stop describing different economies, and the restart that
+  recreates it is the *only* moment this can be chosen. Without it the box is its own
+  creator and that market's policy is frozen for good. §9, and §7 for why.
+- **`server-identity.key` is tracked, unencrypted**, along with all of `run/`, because
+  `.gitignore` was removed on purpose. Raised and reaffirmed before — but this branch is
+  now pushed to GitHub. **If that repository is public, so is the key.**
+- **Whether to port anything from `MigrationCapTest`.** `depositCapTest` is six checks and
+  `admissionTest` twenty-five, and between them they never read a `MigrateBalance`.
+
+### The one habit worth copying
+
+Every engine fix in this log was verified to **fail with the fix disabled** before being
+trusted. It has repeatedly caught tests that could not fail — a check against a default
+config where the field was null anyway, a ceiling compared as a substring where
+`1000000` contains `10000`. A test written and passed first time is a test that has not
+been checked.
 
 ---
 
@@ -54,14 +134,14 @@ warning that no longer outlives the fork. **`E17`, `E17b`, `E19b`, `E20` and the
 
 *Added after §1–§9 below, which describe the session that built Group E. Nothing was
 built here: the whole of it was an inspection plus what the first play session turned up,
-and it found twenty-one defects in code that had 437 passing checks behind it — one a whole
+and it found twenty-seven defects in code that had 437 passing checks behind it — one a whole
 feature that could not be switched on, one an unbounded mint that the guard written to
 stop it never fired against, and one a button that did not do what it said.
 Read this before §4, which predicted almost all of them.*
 
 Six of the first seven are the §4 shape exactly — **two things that must agree, kept in two
 places** — and two of them are in the code §4 was written about. The suites are now
-`565 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 22`, the eighth being a new `hostTrustTest`, and each
+`572 / 6 / 5 / 16 / 25 / 6 / 12 / 16 / 27`, the eighth being a new `hostTrustTest`, and each
 engine fix was verified to **fail** with the fix disabled before being trusted.
 
 1. **A sell you could not afford duplicated the items.** `DepositAndList` was validated
@@ -526,6 +606,216 @@ And a twenty-first, reported from the same evening:
       backlog item 2's territory — a long log walked on world load — and it will scale
       with the log rather than appearing at 71 events.
 
+And a twenty-second and twenty-third, from re-running `E19` and `E20` the same night:
+
+22. **§0.21's fix works, and the run it was verified on under-refunded by five items.**
+    `E20` passed — Alice's banner went the moment Bob joined her. The reset that followed
+    handed back **9 cobblestone** against **14** deposited on the losing branch.
+
+    That run took the **AHEAD** path rather than FORK: Bob at 98, Alice at 90, and Bob's
+    hash at 90 not matching hers. `offerCatchUp` handles that case and set a `Divergence`
+    with no split point, so `depositsLostToReset` fell back to `hostSeq - 1` = 89 and
+    offered back only what came after event 89 — nine deposits, and nine of fourteen
+    orders on the re-place checklist.
+
+    **The comment sitting over it said the fallback was safe, and its reasoning was false
+    in the one branch it was written in:** *"AHEAD means their head is below ours, so
+    anything after it on our chain is genuinely ours alone."* That is true when our chain
+    extends theirs, and this branch is reached only when it demonstrably does not — their
+    hash at their own head disagrees with ours. A shorter chain is not a prefix, and its
+    head number says nothing about where two chains parted. Alice's events 85 to 90 were
+    her own deposits; Bob's 85 to 98 were his. They had parted at or below 84.
+
+    `findSplitPoint` was already there, and `offerCatchUp` already had the host and port
+    in hand — it just never asked. It asks now, exactly as `noteForkFromRefusal` does.
+    Backlog item 7 is down to the discovery poll alone.
+
+    Two things worth keeping from how this was found. It was **invisible from inside**:
+    every number the program printed was consistent, nothing failed, and the only way to
+    see it was to compare what the console said was deposited against what it said was
+    returned. And it was **quiet by construction** — under-refunding cannot create items,
+    which is the bound the whole feature was designed around, and that bound is exactly
+    what let a wrong answer go unnoticed for two sittings. A guard that makes failure
+    safe also makes it silent.
+
+23. **The re-place list could not be scrolled, and it is the only record of what to put
+    back.** Nine orders after the reset; the box fits fewer; the rest were drawn nowhere
+    and reachable by nothing. `renderReplaceList` broke out of its loop at
+    `panelBottom()` and no `noteScrollable` had ever been written for it.
+
+    **Fourth time in this file.** §0.4 was the Market column, §0.16 the market switcher,
+    §0.20 the reset overlay, and now this — all four stacked content downwards with no
+    bound and lost the far end. §0.16 closed by saying *"anything else in this file that
+    stacks without a scroll is the next one"*, and this was the next one, four days later,
+    found by a player rather than by anybody going to look.
+
+    Fixed the way §0.16 was: the scroll subtracts inside `replaceRowY`, which the render
+    and the hit test both already came through, and `replaceRowVisible` is asked by both
+    — a row you cannot see that still re-places an order when clicked is §4 exactly, and
+    scrolling creates that at the top as well as the bottom. `E21`.
+
+    The pattern across all four is worth stating plainly, because a fifth is likely:
+    **every one was found by a person looking at a screen, and none by a test.** The
+    geometry is arithmetic and could be tested; what cannot be tested is noticing that a
+    list has more in it than the box was built for. That is the argument for backlog item
+    5 that the line count never made.
+
+And a twenty-fourth and twenty-fifth, closing backlog item 7:
+
+24. **The poll could not tell a longer chain from a different one, and guessed.** A probe
+    carries a host's head and nothing below it, so when that head is *above* ours there
+    is no point the two chains can be compared at. `observeHostHead` returned without an
+    opinion, and two things went wrong with that.
+
+    A fork with a longer peer stayed **invisible** until somebody pressed Connect — so
+    which side saw the warning was decided by nothing but which branch happened to be
+    longer. Both sittings show it: on the first, Alice at 90 against Bob's 98 saw nothing
+    and Bob saw everything; on the second, roles reversed, the poll flagged it before
+    anybody connected. Same code, opposite outcome, decided by an accident.
+
+    And the height was recorded **anyway**. `observeMarketHeight` was the first line of
+    the method, before a single hash had been compared, so a forked peer's head was filed
+    as this market advancing. Alice came away permanently "8 events behind" a branch that
+    was never hers, in a mark that is monotonic and persisted. Not cosmetic: `eventsBehind`
+    gates Host, and it told the participant on the chain everybody else shared that
+    hosting it would split the market, then advised catching up from a peer who would
+    refuse them. **The warning designed to prevent a fork was fired by one, at the only
+    person who had not caused it.**
+
+    It asks now. One `HashQuery` for their hash at **our** head: matching means our chain
+    is a prefix of theirs and they genuinely extend us, so the height is real and "behind"
+    is true; not matching means a fork, the height is not ours to record, and the split is
+    worth finding. `MarketClient.hashAt` is a single question with a yes-or-no answer,
+    deliberately not `findSplitPoint` — searching is for after the answer is no.
+
+    **What it costs, which is what kept it out.** One round trip per peer, and only when
+    that peer's head has moved: `checkedHeads` was already keyed by (peer, head) and its
+    early return pays for this, so a peer sitting still costs nothing, which is the
+    ordinary case for a poll on a timer. The split point is looked up before it is
+    searched for, because it does not move — two branches that have parted stay parted,
+    and both only grow — so an active fork does not re-run a bracketing search every time
+    either side places an order.
+
+25. **Discovering any host on a different market wiped the watermark.**
+    `MarketHighWater.observe` starts a fresh record when the id it is handed differs from
+    the one on file — reasonably, since it holds one market — and `observeHostHead` called
+    it **before** checking the market id was ours. So a poll that found a friend serving
+    something else reset the note of how far our market had reached.
+
+    That destroys precisely what the thing exists for. Its own design note says checking
+    live peers is not enough because *"someone returns after a week, nobody else happens
+    to be online, discovery finds nothing, and they host a log that is hundreds of events
+    behind"* — the watermark is what survives to tell them. A watermark that any foreign
+    host can clear does not survive anything.
+
+    Fixed by where §0.24 put the call: after the market id is confirmed ours, and after
+    the chain is confirmed ours too. Found by reading the call order while moving it,
+    which is the only way it could have been found — nothing observable changes until the
+    day somebody needed the warning and it had been quietly zeroed.
+
+    `hashAt` is pinned by `splitPointTest`, now 27 checks. Neither of these two is
+    testable where it lives: `observeHostHead` is client code with a `MinecraftClient` in
+    it, which is the same reason `E13` has no unit test. `E22` is the live half, and it is
+    the one that matters, because both defects were about what happens between two
+    machines rather than inside one.
+
+And a twenty-sixth, from re-running the fork test with §0.24 in place:
+
+26. **A watermark taken honestly is invalidated by your own later fork, and a bare number
+    cannot notice.** Reported as the "connect to catch up" alert still standing after the
+    fork was over. §0.24 was working; this is a different defect underneath it.
+
+    The timing is the whole thing:
+
+    ```
+    00:00:57  Bob hosting, replayed 123 events
+    00:01:13  high-water.json written: 129
+    00:01:17  [host] seq 124        ← Bob's first event on his own branch
+    ```
+
+    At 00:01:13 Bob was at **123**, and Alice's 129-event chain genuinely contained his —
+    they agreed through 123. His poll asked, got a match, and recorded 129. **That was the
+    correct answer at that moment.** Four seconds later he appended his own event 124 and
+    left the chain he had just verified. The 129 then described a branch nobody was on,
+    `eventsBehind` read 1, and since it gates Host he was told that serving his own market
+    would split it.
+
+    Nothing could notice, because the record was `{marketId, seq}` — no hash, no source.
+    §0.24 stopped bad marks being written; it cannot retract one that was good when
+    written.
+
+    **A claim now belongs to whoever made it.** The record carries `fromUserId`, and a
+    peer's current head replaces their previous one **in either direction**: they are not
+    asserting a record, they are saying where they are, and when they come back lower —
+    because they reset, or because the branch they were on is gone — the evidence for the
+    old number went with it. A *different* peer can only raise it, because their being at
+    50 says nothing about whether somebody else's 300 was real. Bob's case resolves
+    exactly: Alice reported 129, Alice now reports 128 on his chain, so 129 is withdrawn.
+
+    **Files written before provenance are discarded on load**, with a line saying so.
+    There is nobody to withdraw them, so they cannot be reasoned about at all — and every
+    file that exists today is one of them, including the 129 that caused this. The cost is
+    the offline warning being unavailable until the next poll rebuilds it, which is one
+    poll cycle when anybody is around and exactly the situation the mark is for when
+    nobody is.
+
+    `L6` covers all of it and both halves were verified failing with the rule disabled.
+    Worth noting what the three sittings did to this one area: §0.24 fixed what the poll
+    records, §0.25 fixed a foreign market silently zeroing it, and this fixes a mark
+    outliving the chain it described. **Three defects in a nine-line class**, all of the
+    same kind — a fact stored without enough of itself to be checked later.
+
+*A note for backlog item 4.* Running the nine suites in one gradle invocation failed the
+build twice tonight with every suite reporting all checks passed, and succeeded on an
+immediate re-run. Nothing in the checks; most likely a port race in the suites that bind
+sockets — `freePort()` picks one, closes it, and hands it to a server to rebind. Worth
+knowing before somebody writes the CI workflow and concludes the tests are broken.
+
+And a twenty-seventh, which is the flake from §0.26's closing note, found on purpose:
+
+27. **Every suite picked its port from the range the operating system hands to outgoing
+    connections.** Eight copies of the same five lines:
+
+    ```java
+    try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
+    ```
+
+    which opens a port, **closes it**, and hands the number to a HostServer to bind.
+    Between those two steps the port belongs to nobody — and port 0 asks for one from the
+    *ephemeral* range, which is where the OS also draws source ports for outbound sockets.
+    These suites open a great many outbound sockets. So the number reserved could be taken
+    by this very process before the server bound it.
+
+    It went red twice on 2026-08-22 with **every check passing**, which is the failure
+    shape that teaches people to ignore a CI tick — so it was fixed before the workflow
+    that would have hit it. `TestPorts` draws from 20000–30000, below the ephemeral range
+    on both Linux and Windows; remembers what it has handed out, so two suites in one JVM
+    cannot collide; and probes a candidate exactly as the server will bind it —
+    `new ServerSocket(port)` on the wildcard address, not loopback, because a probe that
+    binds more narrowly than the server proves nothing. Three consecutive full runs green.
+
+    The window between probe and bind is still there. Closing it means handing the bound
+    socket itself to `HostServer`, which is changing production code to suit its tests;
+    what changed instead is that nothing else is competing for the number.
+
+    §4 again, eight times over, in the one place nobody thinks to look for it — a helper
+    duplicated across eight files, all wrong in the same way because they were copied from
+    each other. Worth noting it took a CI plan to find: the suites had run hundreds of
+    times on one machine, in ones and twos, and only running all nine together made it
+    likely enough to see.
+
+**And backlog item 4 is done.** `.github/workflows/tests.yml` runs the nine suites on
+every push and then builds. Two JDKs, since Gradle 9 needs 17 to run itself and the mod
+compiles against 8. The checkout's tracked `build/` and `.gradle/` directories are deleted
+before anything is built — this repository carries one machine's compiled classes and
+Gradle file hashes by design, and leaving them in place would prove only that this
+machine's build state still works, which was never in doubt.
+
+What it does **not** cover is worth being clear about, because a green tick is persuasive.
+Nothing in CI launches Minecraft, so every item in `docs/testing/group-e.md` is still a
+person at a keyboard — and four of the defects in §0 were geometry, a list drawn past the
+bottom of its box, which no suite here would have seen.
+
 `E8` and `E9` in `docs/testing/group-e.md` cover what wants an eye in game.
 
 **What this says about the balance of effort.** §3 below says nearly every bug that
@@ -541,13 +831,13 @@ The roadmap is finished. Everything in Phases 0–5 is done or deliberately clos
 session went on what running it turned up, then on one new feature.
 
 ```
-coreTests 565   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
+coreTests 572   chunkTest 6   replayGuardTest 5   gapRecoveryTest 16
 admissionTest 25   depositCapTest 6   attestationTest 12   hostTrustTest 16
-splitPointTest 22
+splitPointTest 27
 ```
 
-*(437 across seven suites when this section was written; the extra 57 checks and the
-eighth suite belong to §0.)*
+*(Seven suites totalling 437 when this section was written. Nine suites and 685 checks
+now; the difference belongs to §0 and the sittings after it.)*
 
 Every engine change below was verified to **fail** with its fix disabled before being
 trusted, per the project's existing discipline. Three failed the first time for a reason
@@ -577,9 +867,13 @@ Disconnect not stopping hosting, and a migration guard that turned away the seco
 to leave a shared market. **Most of those were introduced by fixes made earlier the same
 day**, which is the thing to carry forward from this list rather than any item on it.*
 
-*Two items want a five-minute re-check, because their code moved at 13:58 after the
-sitting ended — `docs/testing/group-e.md` names exactly which and why. Nothing else has
-changed since it was run.*
+*[2026-08-23] **And then most of it changed again.** Nine more live items were added or
+rewritten across two further sittings — `E17`, `E17b`, `E18`, `E19`, `E19b`, `E20`, `E21`,
+`E22`, `E23` — because the sittings kept finding defects and the fixes kept needing their
+own checks. `E18`, `E19` and `E20` were run and are correct, verified against the world
+logs afterwards. `E9` and `E23` are outstanding by agreement. The rest are marked unrun
+because nothing evidences them either way, which understates what was actually done —
+`docs/testing/group-e.md` is the file to fix that in, not this one.*
 
 *The paragraph above is what this looked like beforehand. Worth leaving: "zero live
 minutes" was the right thing to have been worried about, and the ratio held — a day of
@@ -663,25 +957,45 @@ grant finally has a control — see §7.
   finished, so nothing else says "this is known about and not done" — and without such a
   file an unbuilt thing cannot be told apart from an overlooked one. §0.10 was exactly
   that failure in miniature: a feature nobody had noticed was switched off.
-- **Log compaction unbuilt**, deliberately. `docs/design/log-compaction.md` has the full
-  pass; its recommendation is build option A only, when it is worth a session of its own.
-  Backlog item 2.
-- **A forked market cannot be recovered from**, only reset away from — and a reset
-  destroys items that have already left somebody's Minecraft inventory. This is the case
-  a friend group hits by splitting into two play groups and both continuing: same market
-  id, so migration is refused, and no merge exists. `docs/design/fork-rebase.md` is the
-  pass; backlog item 1, and split-point discovery is the small piece to do first.
+- ~~**Log compaction unbuilt**, deliberately.~~ **Built 2026-08-23**, except for the part
+  that is a trust decision. `docs/design/log-compaction.md` was rewritten against
+  measurements first, and the old recommendation here ("build option A only") survived
+  only in corrected form: rebuilding `MarketState` is 1% of a load, so the snapshot saves
+  far less than assumed, and two cheap fixes nobody had considered were worth 3× on their
+  own. A 100,000-event load is 190 ms against 4208 ms. Backlog item 2; step 4 is next and
+  step 5 is open.
+- ~~**A forked market cannot be recovered from**, only reset away from.~~ **Closed
+  2026-08-23.** A reset now says where the two branches parted and hands back the items
+  deposited since, which were the only thing it destroyed that no history could recreate.
+  Orders come back as a checklist. **The rebase is refused, not deferred** — everything it
+  could still restore is either credits nobody paid, which is minting, or fills against a
+  book that no longer exists. Backlog item 1 carries the audit.
+
+  One residual, named there rather than fixed: deposit after the split, *sell* it on the
+  losing branch, then reset, and those goods are gone. The bound that causes it is
+  deliberate — somebody else may still be hosting that branch and holding them.
 - **`.gitignore` is gone**, removed deliberately, so `build/`, `run/` and
   `server-identity.key` are tracked. That last is an unencrypted private key. Raised, and
   the decision reaffirmed — recorded here because it is not obvious from the tree.
-- **Never built from a clean checkout, and no CI.** Every claim that this works rests on
-  one machine.
-- **Host rules do not travel.** Deposit caps, admission, attestation and now
+- ~~**Never built from a clean checkout, and no CI.**~~ Both since 2026-08-23 — see §0.27
+  and backlog item 4. What CI does not do is launch Minecraft, so every live item in
+  `docs/testing/group-e.md` still rests on somebody running it, and four of §0's defects
+  were geometry no suite would have caught.
+- **Host rules do not travel, and should not.** Deposit caps, admission, attestation and
   `maxMigratedCredits` are per-host, read from that host's own `host-config.json`, so they
-  change when hosting rotates and a group cannot agree them once. Market rules — fees,
-  grant, stipend — live in the log and are uniform for everyone. §0.12 is the sharpest
-  case of this: the migration cap protects whoever happens to be hosting when somebody
-  arrives, and rotating to a host that has not set it opens the door again.
+  change when hosting rotates. Market rules — fees, grant, stipend — live in the log and
+  are uniform for everyone. §0.12 is the sharpest case: the migration cap protects whoever
+  happens to be hosting when somebody arrives, and rotating to a host that has not set it
+  opens the door again.
+
+  **Asked properly on 2026-08-23 and decided.** They cannot travel — a time-windowed rule
+  would be enforced against a client-set timestamp, the world checks judge evidence that
+  is not in the log, and item 3 already showed a deployment-dependent default forks the
+  market when hosting rotates. And they need not: host rules are a host's defence against
+  its clients, not the market's defence against its host, so travelling would add
+  consistency rather than security. What is worth building is making them **agreeable
+  once** — published as defaults each host adopts, never as replicated enforcement. That
+  is backlog item 8, and this bullet is a decision now rather than an oversight.
 - **The play-hour rule is kept but off**, with the reasoning on the config field. It
   weighs a rolling window against a lifetime, and is a rate limit applied to a stock.
 
@@ -726,25 +1040,60 @@ of the same items is §4 again, in prose.*
   this treated the symptom; and no real market has been seen pressing against the price
   floor. See the Dropped section there for the one constraint worth keeping.
 - Whether `MarketScreen` gets split — backlog item 5.
+- ~~Whether host rules should travel with the market.~~ **Decided 2026-08-23: no.** They
+  cannot — a time-windowed cap would judge a client-set timestamp, the world checks weigh
+  evidence no replica receives, and a deployment-dependent default forks the market when
+  hosting rotates (item 3). And they need not, because a host rule is a host's defence
+  against its clients rather than the market's against its host, so replicating one buys
+  consistency and not safety. Making them **agreeable once** is worth building and is
+  backlog item 8; making them travel is refused, not deferred.
 
 ## 9. Loose ends in the tree
 
-- A worktree at `.claude/worktrees/practical-diffie-e9fbf4` sits at `4fb4ec5`. It was for
+*Cleared 2026-08-23. Both entries below are done; they are kept because what each turned
+out to be is worth more than the fact that it is gone.*
+
+- ~~A worktree at `.claude/worktrees/practical-diffie-e9fbf4` sits at `4fb4ec5`. It was for
   a background task on the migration bypass that never ran; that bug was fixed here
-  instead. Safe to remove.
-- ~~`server-market.jsonl` is the dedicated server's live market, bootstrapped during C4
-  with `welcomeGrant: 50`.~~ **Recreated 2026-08-22, and it disagrees with its own
-  config.** The market on disk holds `grantAmount 1000, listingFee 0, stipendAmount 0`;
-  `server-config.json` says `50 / 2 / 20`. It was created during an E6 run at a moment
-  when the config file was absent, so it took the compiled defaults, and **genesis is
-  permanent** — that market was bootstrapped without `--creator-key`, so its creator is
-  the server itself and its policy is frozen forever.
+  instead. **Safe to remove.**~~ **It was not safe to remove, and "never ran" was wrong.**
+  It held eight modified files and a **443-line `MigrationCapTest`** that exists nowhere
+  else — migration weighed against deposit caps, attestation, creative worlds, the
+  statistics multiple and the free allowance. The bug it was written for was indeed fixed
+  on this branch instead, so none of it was ever needed; that is a reason not to merge it
+  and not a reason to delete it unread.
 
-  Nothing is broken by this; the server serves that market perfectly well. But the two
-  files describe different economies, and anyone reading the config to learn what the
-  server does will be wrong. To make them agree, stop the server, delete
-  `server-market.jsonl`, and start it — E6's first instruction, for exactly this reason.
+  Committed to its own branch as `c22abf6` before the directory went, so
+  `claude/practical-diffie-e9fbf4` still holds all of it. Nothing there is claimed to
+  build against the current tree — it sits on `4fb4ec5` and the code around it has moved a
+  very long way. **Whether any of those checks are worth porting is an open question**;
+  `depositCapTest` is six checks and `admissionTest` twenty-five, and neither reads a
+  `MigrateBalance`.
 
-  The config also predates `maxWelcomeGrant`, since it is only rewritten when the server
-  has no identity yet. Absent means the default, which for a dedicated box is the
-  compiled ceiling — see backlog item 3.
+  The lesson is the entry itself. It said "safe to remove" for four days, in a file that
+  is otherwise careful, because whoever wrote it knew what the worktree was *for* and did
+  not look at what was *in* it. A directory's purpose and its contents are two facts.
+
+- ~~`server-market.jsonl` disagrees with `server-config.json`.~~ **Done 2026-08-23.** The
+  market held five events — genesis, one policy, one key registration and two welcome
+  grants — with no trade or deposit in it, so deleting it discarded nothing anybody had
+  done. It is gone, and the next start bootstraps from the config, which is what makes the
+  two agree.
+
+  `server-config.json` was rewritten through `--write-config` at the same time, which
+  validated it (the `50 / 2 / 20` grant, fee and stipend pass the interlock) and added
+  `maxWelcomeGrant: 1000000` — the compiled dedicated ceiling, previously absent and
+  therefore invisible, which is §0.18's whole argument applied to the file it was written
+  about.
+
+  **One thing to decide before starting it**, and it is the only moment the decision can
+  be made: bootstrapping without `--creator-key` makes the box itself the creator, and a
+  market whose creator is a machine with no screen has its policy frozen for good. That is
+  recorded in §7 as a known trap, and this restart is the one chance to avoid it. Passing
+  `--creator-key` with a player's key, and that player's uuid in `creatorUserId`, leaves
+  the policy changeable from the Market screen afterwards.
+
+- **`server-identity.key` is tracked, unencrypted**, along with the rest of `run/`, because
+  `.gitignore` was removed on purpose. Raised before and reaffirmed, so this is not a new
+  objection — but CI now exists and this branch is pushed to GitHub, so the question is no
+  longer theoretical. If that repository is public, so is the key. Worth answering
+  deliberately rather than by default.

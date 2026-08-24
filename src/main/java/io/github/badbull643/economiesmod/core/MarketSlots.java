@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.UUID;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -149,6 +150,44 @@ public final class MarketSlots {
     }
 
     /**
+     * Which market a slot holds, or null if it holds none.
+     *
+     * From the log's genesis where there is one, and from the snapshot where there is
+     * not — see {@link #marketNameIn} for why a slot can have no genesis to read.
+     */
+    public static UUID marketIdIn(Path worldDir, String slot) {
+        Path log = logPath(worldDir, slot);
+        if (log == null || !Files.exists(log)) return null;
+        try {
+            EventLog opened = new EventLog(log);
+            UUID fromLog = opened.marketId();
+            return fromLog != null ? fromLog : MarketSnapshot.marketIdFor(opened);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Another slot in this world already holding that market, or null.
+     *
+     * Exists to stop one world keeping the same market twice, which nothing prevented
+     * and which a player found by simply adding a market and joining the same server
+     * again. Two copies of one market on one machine is not a second market: it is two
+     * heads that can drift apart, and hosting from whichever is behind forks the market
+     * with nobody else involved — the one thing design/fork-rebase.md says has no way
+     * back. It also gives the switcher two rows nobody can tell apart, and leaves the
+     * per-market archive setting describing one slot's history and not the other's.
+     */
+    public static String slotHolding(Path worldDir, UUID marketId, String exceptSlot) {
+        if (worldDir == null || marketId == null) return null;
+        for (String slot : list(worldDir)) {
+            if (exceptSlot != null && exceptSlot.equalsIgnoreCase(slot)) continue;
+            if (marketId.equals(marketIdIn(worldDir, slot))) return slot;
+        }
+        return null;
+    }
+
+    /**
      * The name the market in this slot calls itself, or null when it holds none yet.
      *
      * Reads the genesis event and stops, which EventLog is built to make cheap. Worth
@@ -159,7 +198,13 @@ public final class MarketSlots {
         Path log = logPath(worldDir, slot);
         if (log == null || !Files.exists(log)) return null;
         try {
-            return new EventLog(log).marketName();
+            EventLog opened = new EventLog(log);
+            String fromLog = opened.marketName();
+            if (fromLog != null) return fromLog;
+            // A slot that keeps a snapshot and no history has no genesis event to read a
+            // name from, and returning null here left the switcher drawing a row nobody
+            // could identify. The snapshot knows what the market is called.
+            return MarketSnapshot.marketNameFor(opened);
         } catch (Exception e) {
             return null;   // damaged or half-written; the slot still exists
         }

@@ -30,6 +30,9 @@ public class TradeHistory {
 
     private final Map<String, Deque<Trade>> byItem = new HashMap<>();
 
+    /** The live history, for MarketSnapshot to write out and read back. */
+    synchronized Map<String, Deque<Trade>> byItem() { return byItem; }
+
     /** Called only by MarketState, which is called only by EventApplier. */
     synchronized void record(Trade trade) {
         Deque<Trade> q = byItem.computeIfAbsent(trade.itemId, k -> new ArrayDeque<>());
