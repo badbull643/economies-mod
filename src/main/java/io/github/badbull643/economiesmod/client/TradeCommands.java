@@ -36,45 +36,60 @@ import java.util.UUID;
  * no mixin — verified present in fabric-command-api-v1 1.1.3 before being written
  * against.
  *
- * <h2>Why only queries, and the one exception</h2>
+ * <h2>What may be a command, and what may not</h2>
  *
- * Every command here reads the market. Nothing buys, sells, cancels, resets or migrates.
+ * This used to read "every command here reads the market", with an exception bolted on
+ * beneath it. Then a second exception arrived, and two exceptions with good arguments
+ * and no rule between them is how a boundary turns into a habit — the next person has a
+ * precedent to argue from rather than a test to apply. So the test is written down here
+ * instead, and the exceptions are gone because they were never exceptions to the thing
+ * that actually mattered.
  *
- * The reading ones are free: they duplicate no mutation logic, need no confirmation
- * design, and cannot cost anybody anything if they are wrong. Trading verbs are not
- * free, and the constraint that decides whether they stay cheap is that a command and
- * the screen must submit through one path — two paths mean two validations, and they
- * drift silently until someone reports a bug. That work belongs with the verbs, not
- * before them.
+ * <b>A command may write when getting it wrong cannot cost anybody their items, their
+ * credits, or their market.</b>
  *
- * Lifecycle verbs — reset, migrate, import, host — are deliberately never coming. Those
- * are exactly what the guided Market screen exists to protect: it works out which of
- * Reset and Migrate applies and refuses to offer the wrong one, behind a DANGER overlay
- * with a double-click guard. A command would put a market-destroying action one typo
- * from execution with none of that.
+ * That is the whole rule. It is about the harm, not the mechanism: "does this touch the
+ * ledger" was never the question, because the ledger is only frightening for what it
+ * cannot take back.
  *
- * <b>Two commands here are not queries, and both are argued rather than assumed.</b>
+ * What it admits, and each of these is here now:
  *
- * <b>hostconfig write writes a file rather than the market.</b>
- * The rule above is about the ledger — an append-only chain with no undo, where a wrong
- * command costs somebody their items. A host-config.json costs nothing: it takes effect
- * only when hosting next starts, every value in it can be edited back by hand, and it
- * cannot be written over anything (write refuses when the file is already there). It is
- * here because there was no other way to reach it. Host rules — admission, deposit caps,
- * attestation, acceptsMigration, maxWelcomeGrant — have no control anywhere in the UI,
- * and the file they live in is one nothing creates, in a directory the game never names
- * until you have already hosted once. A setting nobody can find is a setting that does
- * not exist, which is how the free-order allowance shipped switched permanently off.
+ * <ul>
+ *   <li><b>Queries.</b> They cannot be wrong in a way that costs anything.</li>
+ *   <li><b>A local file</b> — {@code hostconfig write}. It takes effect only when
+ *       hosting next starts, every value can be edited back by hand, and it refuses to
+ *       overwrite. It is here because there was no other way to reach it: host rules had
+ *       no control anywhere in the UI and live in a file nothing creates, in a directory
+ *       the game never names until you have hosted once.</li>
+ *   <li><b>A local preference</b> — {@code archive}. It decides what this machine keeps
+ *       on its own disk and can be reversed by typing the opposite.</li>
+ *   <li><b>An advisory record</b> — {@code hostrules publish}. It appends to the log,
+ *       and passes anyway: it moves no balance, creates and destroys nothing, is read by
+ *       no rule in EventApplier, and publishing again replaces it entirely. What a wrong
+ *       one costs is a figure future hosts start from until somebody corrects it, which
+ *       is a message rather than a market.</li>
+ * </ul>
  *
- * <b>hostrules publish is the second exception, and it does write to the ledger.</b> The
- * rule above is about a chain with no undo where a wrong command costs somebody their
- * items. This event moves no balance, creates and destroys nothing, is read by no rule
- * anywhere, and publishing again replaces it entirely — so what it costs to get wrong is
- * a figure future hosts start from until somebody corrects it. That is a message rather
- * than a market. It lives here rather than on the Market screen because that screen is
- * 4,700 lines and backlog item 6 defers adding to it until item 5 has split it; the
- * alternative was shipping a feature reachable from nowhere, which is the same mistake
- * the paragraph above exists to describe.
+ * What it permanently excludes, and why each fails the same test:
+ *
+ * <ul>
+ *   <li><b>Trading verbs</b> — buy, sell, cancel. A wrong one costs credits or goods
+ *       immediately. They fail for a second reason too: a command and the screen would
+ *       have to submit through one path, or two validations drift silently until
+ *       somebody reports a bug.</li>
+ *   <li><b>Lifecycle verbs</b> — reset, migrate, import, host. A wrong one costs a
+ *       market. These are exactly what the guided screen exists to protect: it works out
+ *       which of Reset and Migrate applies, refuses to offer the wrong one, and puts a
+ *       DANGER overlay and a double-click guard in front of it. A command would put a
+ *       market-destroying action one typo from execution with none of that.</li>
+ * </ul>
+ *
+ * The two admitted writes are both here for the same reason, and it is worth stating
+ * because it is the argument that will be made next: <b>a setting nobody can find is a
+ * setting that does not exist</b>, which is how the free-order allowance shipped
+ * switched permanently off for its entire life. That reason justifies reaching for a
+ * command; it does not justify failing the test above. Something that would cost
+ * somebody their market and has no control anywhere needs a control, not a command.
  */
 public final class TradeCommands {
 
@@ -131,9 +146,8 @@ public final class TradeCommands {
     /**
      * What host rules this market's group has agreed, and what this host does with them.
      *
-     * Reading half. The publishing half below is the second command in this class that
-     * does not only read, and the first that touches the ledger at all — see its own
-     * note for why that line is drawn where it is.
+     * Reading half. The publishing half below writes, and the rule on this class is what
+     * says it may.
      */
     private static int hostRules(CommandContext<FabricClientCommandSource> ctx) {
         FabricClientCommandSource src = ctx.getSource();
@@ -172,18 +186,13 @@ public final class TradeCommands {
     /**
      * Publishes this host's rules into the market, for every future host to start from.
      *
-     * <b>The second exception to "every command here reads", and the first that writes
-     * to the ledger.</b> The class note above refuses lifecycle verbs because they mutate
-     * a chain with no undo and can cost somebody their items. This event can do neither:
-     * it moves no balance, creates and destroys nothing, is enforced by no rule anywhere,
-     * and publishing again replaces it completely. What it costs to get wrong is that
-     * future hosts start from a figure somebody has to correct — which is a message, not
-     * a market.
+     * Writes to the log, and is allowed to under the rule on this class: getting it
+     * wrong cannot cost anybody their items, their credits or their market. See there
+     * for what that admits and what it will never admit — the reasoning lives in one
+     * place so the next write can be tested against it rather than argued beside it.
      *
-     * It is here rather than on the Market screen because that screen is 4,700 lines and
-     * backlog item 6 defers adding to it until item 5 has split it. The alternative was
-     * shipping a feature reachable from nowhere, which is exactly how the free-order
-     * allowance spent its entire life switched off.
+     * It is a command rather than a screen control because that screen is 4,700 lines
+     * and backlog item 6 defers adding to it until item 5 has split it.
      */
     private static int publishHostRules(CommandContext<FabricClientCommandSource> ctx) {
         FabricClientCommandSource src = ctx.getSource();
@@ -236,6 +245,9 @@ public final class TradeCommands {
      * play from, the events were each checked as they arrived, and a hundred players do
      * not need a hundred copies of a half-gigabyte log to keep one market alive. A few
      * do, though, and this is how somebody becomes one of them.
+     *
+     * Sets a local preference, which the rule on this class admits: getting it wrong
+     * costs a slower load and nothing else, and typing the opposite undoes it.
      *
      * Here rather than only in `economiesmod-settings-<name>.json` for §0.18's reason,
      * which cost this project a whole entry: a rule whose default does something, with no
