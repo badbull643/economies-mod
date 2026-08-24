@@ -142,6 +142,21 @@ public final class MarketSnapshot {
         long seq;
         String chainHash;
 
+        /**
+         * Whether this was written by a replica that deliberately keeps no history.
+         *
+         * The difference between "there is no log because I chose not to keep one" and
+         * "there is no log because it went missing", and the whole reason a snapshot
+         * with no log beside it can be trusted at all. Without it, deleting a market's
+         * log stopped resetting the market — the snapshot beside it would be taken on
+         * its own authority and hand the old market straight back, which is the opposite
+         * of what deleting a log has always meant.
+         *
+         * Absent in a file written before this existed, and Gson leaves a missing
+         * boolean false, which is the safe answer: an old snapshot needs its log.
+         */
+        boolean logless;
+
         String marketId;
         String marketName;
         String creator;
@@ -213,8 +228,20 @@ public final class MarketSnapshot {
      */
     public static void save(EventLog log, MarketState state, long seq, String chainHash)
             throws IOException {
+        save(log, state, seq, chainHash, false);
+    }
+
+    /**
+     * The same, for a replica that keeps no history and needs this to be its memory.
+     *
+     * Says so in the file, because a snapshot with no log beside it is only trustworthy
+     * when the missing log was a decision. See Body.logless.
+     */
+    public static void save(EventLog log, MarketState state, long seq, String chainHash,
+                            boolean logless) throws IOException {
         Path target = pathFor(log);
         Body b = capture(state, seq, chainHash);
+        b.logless = logless;
 
         Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
         try (java.io.BufferedWriter w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
@@ -356,7 +383,7 @@ public final class MarketSnapshot {
             }
 
             String onDisk = log.hashAtSeqFast(b.seq);
-            if (onDisk == null && log.headSeqOnDisk() == 0) {
+            if (onDisk == null && b.logless && log.headSeqOnDisk() == 0) {
                 // No log at all beside it. That is a client of a dedicated market, which
                 // keeps a snapshot and does not archive the history — see the persist
                 // rule in MarketClient. There is nothing here to contradict the snapshot

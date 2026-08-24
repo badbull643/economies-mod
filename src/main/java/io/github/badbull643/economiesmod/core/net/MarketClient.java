@@ -130,9 +130,38 @@ public class MarketClient {
         // rather than dishonesty, and the answer is the same as before — carry on with
         // what replayed. The verdict is deliberately not acted on here.
         EventApplier.Replayed replayed = EventApplier.load(log);
-        this.state = replayed.state;
-        this.appliedSeq = replayed.headSeq;
-        this.lastHash = replayed.headHash;
+
+        // Somebody who has turned archiving on for a market they only hold a snapshot of
+        // has to start again, and this is the moment to decide it.
+        //
+        // The snapshot leaves the log object believing the market ends where the
+        // snapshot does, which is what stops it re-reading the file — so appending to it
+        // succeeds, and writes event 5,001 as the first line of an empty log. That is not
+        // a history, it is a fragment: no genesis, nothing that verifies, nothing anybody
+        // could ever be served from. The check was there (appendRaw refuses a gap) and
+        // the primed head walked straight past it.
+        //
+        // So the history is fetched rather than resumed: forget the snapshot, tell the
+        // host we have nothing, and take the market from the beginning. That is what
+        // "connect once and it arrives" has to mean, and the whole reason anybody turns
+        // this on is to be able to host, which a fragment would never allow.
+        if (persist && replayed.restoredFrom > 0
+                && archiveDedicated.test(replayed.state.marketId())
+                && log.headSeqOnDisk() == 0) {
+            System.out.println("[client] archiving this market, but only a snapshot is"
+                    + " here — fetching the history from the start");
+            replayed = null;
+        }
+        if (replayed == null) {
+            this.state = new MarketState();
+            this.appliedSeq = 0;
+            this.lastHash = EventLog.GENESIS_HASH;
+            log.headIs(0, EventLog.GENESIS_HASH);
+        } else {
+            this.state = replayed.state;
+            this.appliedSeq = replayed.headSeq;
+            this.lastHash = replayed.headHash;
+        }
     }
     /**
      * A host declining the handshake, carrying the reason in a form the UI can act on.
@@ -254,9 +283,16 @@ public class MarketClient {
         hello.hostPort = myHostPort;
         hello.displayName = displayName;
         hello.protocolVersion = HostServer.PROTOCOL_VERSION;
-        UUID myMarket = log.marketId();
+        // From the state, for the same reason lastSeq is: the two have to come from one
+        // source or they describe different moments. This used to read the log's genesis
+        // event, which is the same answer whenever there is a log — and no answer at all
+        // for a replica that keeps a snapshot instead of a history. It sent "I am at
+        // event 3 of no market", the host refused it as a log that predates market
+        // identity, and every snapshot-only client was locked out from its second
+        // session onwards. Which market we hold and where we are in it are one fact.
+        UUID myMarket = state.marketId() != null ? state.marketId() : log.marketId();
         hello.marketId = myMarket != null ? myMarket.toString() : null;
-        hello.marketName = log.marketName();
+        hello.marketName = state.marketName() != null ? state.marketName() : log.marketName();
         hello.attestation = attestation;
 
         System.out.println("[client] hello: lastSeq=" + hello.lastSeq
@@ -292,6 +328,23 @@ public class MarketClient {
             System.out.println("[client] " + sync.marketName + " is served by a dedicated"
                     + " server, so this copy keeps a snapshot rather than the whole"
                     + " history — /trade archive on to keep all of it");
+        }
+
+        // Last guard, and it catches what the rule above cannot: we are still set to
+        // write, and the file cannot take what we are about to be sent. The constructor
+        // fetches from the start when it can see that coming, but it decides from the
+        // archive setting, and the host has just told us something it did not know —
+        // a market we chose not to archive, now served by somebody who is not the box.
+        //
+        // Writing anyway would put event 5,001 at the top of an empty file. Better to
+        // keep the snapshot and say so: nothing is lost that was not already absent, and
+        // /trade archive on then does the fetch properly on the next connect.
+        if (persist && appliedSeq > 0 && log.headSeqOnDisk() < appliedSeq) {
+            persist = false;
+            System.out.println("[client] this copy holds a snapshot of " + sync.marketName
+                    + " and not its history, so new events are not being written to a"
+                    + " log that could never verify — /trade archive on, then reconnect,"
+                    + " to fetch the whole thing");
         }
 
         // The host already refused a mismatch, but check our own copy too — a client
@@ -857,7 +910,7 @@ public class MarketClient {
         if (appliedSeq <= 0) return;
         if (state.marketId() == null) return;
         try {
-            MarketSnapshot.save(log, state, appliedSeq, lastHash);
+            MarketSnapshot.save(log, state, appliedSeq, lastHash, true);
         } catch (Exception e) {
             System.err.println("[client] could not keep a snapshot of this market: " + e);
         }

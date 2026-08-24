@@ -4101,7 +4101,8 @@ public class MarketTests {
                 Path bare = scratch("test-nolog-client.jsonl");
                 Files.deleteIfExists(bare);
                 Files.deleteIfExists(pathOfSnapshot(bare));
-                MarketSnapshot.save(new EventLog(bare), real.state, real.headSeq, real.headHash);
+                MarketSnapshot.save(new EventLog(bare), real.state, real.headSeq,
+                        real.headHash, true);
                 Files.write(bare, new byte[0]);
 
                 check("the log really is empty", new EventLog(bare).lastSeq(), 0);
@@ -4130,6 +4131,23 @@ public class MarketTests {
                 Files.write(shortLog, firstFew);
                 check("a log too short to reach the snapshot is a disagreement, not a gap",
                         MarketSnapshot.loadIfValid(new EventLog(shortLog)) == null ? 1 : 0, 1);
+
+                // And the distinction the whole rule turns on. An ordinary snapshot —
+                // one written beside a log that was being kept — is NOT usable without
+                // that log. Otherwise deleting a market's log would stop resetting the
+                // market: the snapshot beside it would hand the old market straight
+                // back. Only a replica that deliberately keeps no history says so in
+                // the file, and only that one is taken on its own word.
+                Path deleted = scratch("test-nolog-deleted.jsonl");
+                Files.deleteIfExists(deleted);
+                Files.deleteIfExists(pathOfSnapshot(deleted));
+                MarketSnapshot.save(new EventLog(deleted), real.state, real.headSeq,
+                        real.headHash);            // the ordinary kind, log kept
+                Files.write(deleted, new byte[0]);  // ...and then the log goes missing
+                check("deleting a log still resets the market",
+                        MarketSnapshot.loadIfValid(new EventLog(deleted)) == null ? 1 : 0, 1);
+                check("and the market really is gone",
+                        EventApplier.load(new EventLog(deleted)).headSeq, 0);
             } finally {
                 MarketSnapshot.thresholdsForTesting(was[0], was[1]);
             }
