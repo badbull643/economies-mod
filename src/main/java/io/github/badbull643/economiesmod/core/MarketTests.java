@@ -4217,6 +4217,56 @@ public class MarketTests {
                     s.archives(null) ? 1 : 0, 1);
         }
 
+        section("L16: one world does not keep the same market in two slots");
+        {
+            // Found by a player adding a market and joining the same server again, which
+            // nothing stopped. Two copies of one market on one machine are two heads that
+            // drift apart, and hosting the older one forks the market with nobody else
+            // involved.
+            Path world = scratch("dup-world");
+            Files.createDirectories(world);
+            Path a = MarketSlots.logPath(world, MarketSlots.DEFAULT);
+            Path b = MarketSlots.logPath(world, "market-2");
+            for (Path p : new Path[]{a, b}) {
+                Files.createDirectories(p.getParent());
+                Files.deleteIfExists(p);
+                Files.deleteIfExists(p.resolveSibling(p.getFileName() + ".snapshot.json"));
+            }
+
+            EventLog logA = new EventLog(a);
+            MarketState liveA = new MarketState();
+            Event.MarketCreated mc = seedMarket(logA, liveA);
+            UUID theMarket = liveA.marketId();
+
+            check("a slot's market is readable", theMarket.equals(
+                    MarketSlots.marketIdIn(world, MarketSlots.DEFAULT)) ? 1 : 0, 1);
+            check("an empty slot holds nothing",
+                    MarketSlots.marketIdIn(world, "market-2") == null ? 1 : 0, 1);
+            check("the slot that does hold it is found when it is not the exception",
+                    MarketSlots.DEFAULT.equals(
+                            MarketSlots.slotHolding(world, theMarket, "market-2"))
+                            ? 1 : 0, 1);
+            check("and the slot itself is never its own duplicate",
+                    MarketSlots.slotHolding(world, theMarket, MarketSlots.DEFAULT) == null
+                            ? 1 : 0, 1);
+
+            // Now make market-2 a snapshot-only copy of the same market, which is the
+            // shape the real one had — the duplicate this must see is the one with no
+            // log to read an identity from.
+            EventApplier.Replayed replayed = EventApplier.verifyAndReplay(new EventLog(a));
+            MarketSnapshot.save(new EventLog(b), replayed.state, replayed.headSeq,
+                    replayed.headHash, true);
+            Files.write(b, new byte[0]);
+            check("a snapshot-only slot still says which market it is",
+                    theMarket.equals(MarketSlots.marketIdIn(world, "market-2")) ? 1 : 0, 1);
+            check("and is found as a duplicate of the first",
+                    "market-2".equals(
+                            MarketSlots.slotHolding(world, theMarket, MarketSlots.DEFAULT))
+                            ? 1 : 0, 1);
+            check("a market nobody holds is found nowhere",
+                    MarketSlots.slotHolding(world, UUID.randomUUID(), null) == null ? 1 : 0, 1);
+        }
+
         section("L12: the shape fingerprint sees the fields it has to see");
         {
             List<String> shape = MarketSnapshot.shapeLines();

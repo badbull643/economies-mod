@@ -365,6 +365,27 @@ public final class MarketSnapshot {
         }
     }
 
+    /**
+     * The market id recorded in the snapshot beside this log, or null.
+     *
+     * Same reasoning as {@link #marketNameFor}: a slot keeping a snapshot and no history
+     * has no genesis event to read an identity from, and "which market is in this slot"
+     * is a question the world has to be able to answer about every slot — otherwise two
+     * slots can end up holding the same market without anything noticing.
+     */
+    public static UUID marketIdFor(EventLog log) {
+        try {
+            Path file = pathFor(log);
+            if (!Files.exists(file)) return null;
+            try (java.io.BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                Body b = GSON.fromJson(r, Body.class);
+                return b == null || b.marketId == null ? null : UUID.fromString(b.marketId);
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** A snapshot that was found, checked against the log, and rebuilt. */
     public static final class Restored {
         public final MarketState state;
