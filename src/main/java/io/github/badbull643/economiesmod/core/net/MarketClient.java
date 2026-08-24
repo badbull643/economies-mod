@@ -323,6 +323,25 @@ public class MarketClient {
         // Only ever narrows what gets written: a caller that asked not to persist
         // (a host's self-connect) still does not.
         UUID theirs = sync.marketId == null ? null : UUID.fromString(sync.marketId);
+
+        // Refuse to adopt a market this machine is already keeping in another slot.
+        //
+        // Only when we hold nothing ourselves: a slot that already has this market is
+        // reconnecting, which is the ordinary case, and a slot holding a different one
+        // is refused by the host a few lines below. What is left is an empty slot about
+        // to become a second copy of something we have — and two copies of one market on
+        // one machine is not a second market. They are two heads that drift apart, and
+        // hosting from whichever is behind forks the market with nobody else involved.
+        //
+        // Before the synced lines are read, so a refusal costs nothing and leaves the
+        // empty slot exactly as empty as it was.
+        if (myMarket == null && theirs != null && heldElsewhere.test(theirs)) {
+            channel.close();
+            throw new IOException("this world already holds '" + sync.marketName + "' in"
+                    + " another market slot — switch to that slot instead of keeping the"
+                    + " same market twice, which would give you two copies that drift"
+                    + " apart and can fork if you ever host the older one");
+        }
         if (persist && hostDedicated && !archiveDedicated.test(theirs)) {
             persist = false;
             snapshotInsteadOfHistory = true;
@@ -931,6 +950,19 @@ public class MarketClient {
 
     /** Set only by the rule that stops this replica writing history. See above. */
     private volatile boolean snapshotInsteadOfHistory = false;
+
+    /**
+     * Asks whether this machine already holds the host's market somewhere else.
+     *
+     * Set from outside for the same reason the attestation is: knowing what else is on
+     * this machine means knowing about worlds and slots, and core does not. Default
+     * answers no, so nothing that does not set it changes behaviour.
+     */
+    private java.util.function.Predicate<UUID> heldElsewhere = id -> false;
+
+    public void setHeldElsewhere(java.util.function.Predicate<UUID> p) {
+        if (p != null) this.heldElsewhere = p;
+    }
 
     /** So the two paths that end a session do not both write the same file. */
     private final java.util.concurrent.atomic.AtomicBoolean snapshotKept =

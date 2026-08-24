@@ -770,6 +770,44 @@ public class AdmissionTest {
             selfish.disconnect();
             check("a caller that never wanted a log gets no snapshot either",
                     Files.exists(selfSnap) ? 1 : 0, 0);
+
+            // An empty slot is refused when this machine already holds the host's market
+            // somewhere else. Over the wire rather than against the predicate, because
+            // the half that matters is where it happens: before a single synced line is
+            // read, so a refusal leaves the empty slot exactly as empty as it was.
+            Path dupLog = dir.resolve("refetch-duplicate.jsonl");
+            Files.deleteIfExists(dupLog);
+            Files.deleteIfExists(dupLog.resolveSibling(dupLog.getFileName() + ".snapshot.json"));
+            MarketClient dup = new MarketClient(INVITED, "joiner", mine,
+                    new EventLog(dupLog), true, cache, 0, id -> true);
+            dup.setHeldElsewhere(id -> true);
+            int refused = 0;
+            String why = "";
+            try {
+                dup.connect("127.0.0.1", cfg.port);
+            } catch (IOException e) {
+                refused = 1;
+                why = e.getMessage() == null ? "" : e.getMessage();
+            }
+            check("a second slot for a market we already hold is refused", refused, 1);
+            check("and says which way out there is",
+                    why.contains("another market slot") ? 1 : 0, 1);
+            check("and the empty slot is left empty",
+                    new EventLog(dupLog).lastSeq(), 0);
+
+            // The ordinary case must not be caught by it. Deliberately with the guard
+            // answering yes — this slot already holds the market, and holding it is what
+            // exempts it, not the predicate saying no. Testing this with the default
+            // predicate proved nothing: dropping the "we hold nothing" condition left
+            // the check green, because a client that never sets the guard can never
+            // trip it.
+            MarketClient normal = new MarketClient(INVITED, "joiner", mine,
+                    new EventLog(clientLog), true, cache, 0, id -> true);
+            normal.setHeldElsewhere(id -> true);
+            normal.connect("127.0.0.1", cfg.port);
+            check("but a slot reconnecting to its own market still gets in",
+                    normal.lastSeq() > 0 ? 1 : 0, 1);
+            normal.disconnect();
         } finally {
             host.stop();
         }
