@@ -1,5 +1,5 @@
 {
-  "port": 25523,
+  "port": 26452,
   "maxConnections": 64,
   "outboundQueueDepth": 256,
   "maxDepositUnitsPerWindow": 0,
