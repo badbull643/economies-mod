@@ -326,21 +326,37 @@ public class EventApplier {
          */
         public final long restoredFrom;
 
+        /**
+         * Whether the log itself holds the events this state was built from.
+         *
+         * Normally yes, trivially: the state came from walking the log. It is false for
+         * a replica that restored a snapshot the log does not cover — one keeping no
+         * history, or one whose history stops short of where its state got to.
+         *
+         * Here because there is no cheap way to ask afterwards, and the obvious way to
+         * ask is wrong. {@code log.lastSeq()} is primed from the state after a load, so
+         * a slot with a nought-byte log answers with the state's head — which is exactly
+         * what the Host gate asked, and exactly why it let a replica with no history
+         * offer to serve one.
+         */
+        public final boolean logCoversHead;
+
         Replayed(MarketState state, long headSeq, String headHash) {
-            this(state, headSeq, headHash, -1, 0);
+            this(state, headSeq, headHash, -1, 0, true);
         }
 
         Replayed(MarketState state, long headSeq, String headHash, long chainBrokenAt) {
-            this(state, headSeq, headHash, chainBrokenAt, 0);
+            this(state, headSeq, headHash, chainBrokenAt, 0, true);
         }
 
         Replayed(MarketState state, long headSeq, String headHash, long chainBrokenAt,
-                 long restoredFrom) {
+                 long restoredFrom, boolean logCoversHead) {
             this.state = state;
             this.headSeq = headSeq;
             this.headHash = headHash;
             this.chainBrokenAt = chainBrokenAt;
             this.restoredFrom = restoredFrom;
+            this.logCoversHead = logCoversHead;
         }
 
         /**
@@ -457,7 +473,10 @@ public class EventApplier {
 
         long broke = broken[0];
         if (broke == -1 && log.unreadableAtSoFar() != -1) broke = log.unreadableAtSoFar();
-        return new Replayed(state, head[0], hash[0], broke, snap.seq);
+        // Only asked when a snapshot was used, so the ordinary path pays nothing: a
+        // walk that read the log to its end plainly covers what it built.
+        boolean covered = log.headSeqOnDisk() >= head[0];
+        return new Replayed(state, head[0], hash[0], broke, snap.seq, covered);
     }
 
     /**

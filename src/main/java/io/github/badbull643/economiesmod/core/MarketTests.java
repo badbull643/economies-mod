@@ -4126,9 +4126,27 @@ public class MarketTests {
                             describeState(kept.state).equals(describeState(real.state))
                                     ? 1 : 0, 1);
                 }
-                EventApplier.Replayed viaLoad = EventApplier.load(new EventLog(bare));
+                EventLog bareLog = new EventLog(bare);
+                EventApplier.Replayed viaLoad = EventApplier.load(bareLog);
                 check("loading it reaches that head too", viaLoad.headSeq, real.headSeq);
                 check("and says it was restored", viaLoad.restoredFrom, real.headSeq);
+
+                // And says the log does not hold what the state was built from. The
+                // obvious way to ask this afterwards — log.lastSeq() — is primed from
+                // the state by the load, so a nought-byte log answers with the state's
+                // head. That is what the Host gate asked, which is why it let a replica
+                // with no history at all offer to serve one. Measured on a real slot:
+                // nought bytes, lastSeq() of nine.
+                check("a restored load knows its log does not cover it",
+                        viaLoad.logCoversHead ? 1 : 0, 0);
+                // On the log object the load used — which is the one the holder keeps as
+                // localLog, and the one the gate was asking.
+                check("the loaded log still gives the misleading answer",
+                        bareLog.lastSeq(), real.headSeq);
+                check("while the file itself says otherwise",
+                        bareLog.headSeqOnDisk(), 0);
+                check("a full replay covers its own head",
+                        EventApplier.load(new EventLog(full)).logCoversHead ? 1 : 0, 1);
 
                 // The distinction that makes this safe: an empty log is "nothing to
                 // check against", a SHORT log is "we disagree" and must be refused.
