@@ -20,6 +20,7 @@
   "welcomeGrant": 1000,
   "listingFee": 0,
   "stipendAmount": 0,
+  "policy": {},
   "acceptsMigration": false,
   "maxWelcomeGrant": 1000000
 }
