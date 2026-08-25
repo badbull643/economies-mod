@@ -2062,6 +2062,38 @@ public class MarketStateHolder {
     public static Refund nextResetRefund() { return resetRefunds.poll(); }
 
     /**
+     * Puts one back when the hand-over could not happen at all.
+     *
+     * Only ever called with a refund {@code InventoryBridge.give} refused outright, which
+     * it does before touching an inventory — so this cannot duplicate anything, and the
+     * next tick with a world to give into settles it. Draining a queue is not the same as
+     * delivering it, and until this existed the two were the same line of code.
+     */
+    public static void returnResetRefund(Refund refund) {
+        if (refund != null) resetRefunds.add(refund);
+    }
+
+    /**
+     * The same for a refused deposit whose journal entry was already cleared.
+     *
+     * {@code nextRefundDue} clears before handing over on purpose — an entry that
+     * survives a *completed* refund pays it twice at the next start, and that is the one
+     * direction this must never fail in. That argument holds only while "handed over" and
+     * "attempted" are the same thing. When give refuses outright, nothing was handed over
+     * and nothing was touched, so recording it again is safe and losing it is not.
+     */
+    public static void returnRefundDue(PendingOps.Op op) {
+        if (op == null || pendingOps == null || op.userId == null) return;
+        pendingOps.recordDeposit(UUID.fromString(op.userId), op.clientEventId,
+                op.itemId, op.quantity);
+        // Back on the queue as well as back in the journal, so this session retries
+        // rather than leaving it for the next startup. The journal alone would settle it
+        // eventually — that is what makes this safe — but "eventually" here means after
+        // a restart, for items the player is standing there waiting for.
+        if (op.clientEventId != null) refusedDeposits.add(op.clientEventId);
+    }
+
+    /**
      * What this reset would destroy that no history can restore.
      *
      * Items deposited after the split left a Minecraft inventory, and the branch holding
