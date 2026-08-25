@@ -31,7 +31,7 @@ behaviour are all still guesses — see §8.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `746 / 15 / 5 / 16 / 51 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
+Expect `746 / 15 / 5 / 16 / 51 / 6 / 12 / 26 / 27`. CI runs the same nine on every push
 since 2026-08-23, so a failure here that passes there — or the reverse — is about the
 machine rather than the code, and is worth chasing as such.
 
