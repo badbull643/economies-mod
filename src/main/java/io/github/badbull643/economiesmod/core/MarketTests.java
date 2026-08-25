@@ -1540,6 +1540,41 @@ public class MarketTests {
                     "evt-b".equals(ops.all().get(0).clientEventId) ? 1 : 0, 1);
         }
 
+        section("O2b: an entry can be put back when the hand-over did not happen");
+        {
+            // The property the client leans on after a refund could not be handed over.
+            // Every refund path clears the journal entry *before* giving the items back,
+            // deliberately: an entry that survives a completed refund pays it twice at
+            // the next start, and paying twice is the direction that must never fail.
+            //
+            // That reasoning holds only while "attempted" and "delivered" are the same
+            // thing, and they stopped being the same the moment the hand-over could
+            // refuse outright — no world to give into, nothing touched, nothing given.
+            // Then the clear has thrown away the only record of something owed. So the
+            // caller puts it back, and this is the check that putting it back works.
+            Path file = scratch("test-pending-o2b.json");
+            Files.deleteIfExists(file);
+
+            PendingOps ops = new PendingOps(file);
+            ops.recordDeposit(ALICE, "evt-r", IRON, 12);
+            ops.clearDeposit("evt-r");
+            check("cleared, as a refund path does before handing back", ops.size(), 0);
+
+            ops.recordDeposit(ALICE, "evt-r", IRON, 12);
+            check("and recording it again restores it", ops.size(), 1);
+            check("with the quantity intact",
+                    ops.all().get(0).quantity, 12L);
+            check("and it survives a restart, which is when it is settled",
+                    new PendingOps(file).size(), 1);
+
+            // The put-back must not stack up if it happens twice — a refund retried on
+            // two ticks would otherwise owe the player double.
+            ops.clearDeposit("evt-r");
+            ops.recordDeposit(ALICE, "evt-r", IRON, 12);
+            ops.clearDeposit("evt-r");
+            check("clearing removes every copy of that id", ops.size(), 0);
+        }
+
         section("O3: a damaged journal doesn't stop the world loading");
         {
             Path file = scratch("test-pending-o3.json");
@@ -4759,6 +4794,14 @@ public class MarketTests {
         throw new IllegalStateException("no " + eventType + " event in the log");
     }
 
+    /**
+     * Two distinguishable values for a field type, so a signature check can tell whether
+     * changing one changes the payload.
+     *
+     * Returns null for a type it cannot make, and the caller counts how many fields were
+     * actually exercised — a helper that silently covered nothing would leave the check
+     * passing while testing nothing.
+     */
     private static Path scratch(String name) {
         try {
             Files.createDirectories(SCRATCH_DIR);
