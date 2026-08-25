@@ -145,10 +145,29 @@ public class InventoryBridge {
      * insertStack also mutates the stack as it fills what space there is, so a partly
      * accepted stack leaves its remainder behind — that remainder is what gets dropped,
      * not the whole stack again.
+     *
+     * <h2>What the return value means, and why it has to mean exactly this</h2>
+     *
+     * <b>False means nothing happened at all</b> — not "some of it failed", not "it went
+     * badly". The only way to get false is the server being unreachable, which is checked
+     * before a single stack is built, so no inventory was touched and nothing was
+     * dropped. True means the whole quantity is either in the inventory or on the floor
+     * beside the player.
+     *
+     * Every caller leans on that. A journal entry may only be cleared when this returns
+     * true, and may be safely put back when it returns false — putting one back after a
+     * *partial* hand-over would pay it twice, which is why "false" is not allowed to
+     * cover partial anything. If a future change makes this able to fail halfway, it
+     * needs a third answer rather than a wider false.
+     *
+     * This used to return void, and the one caller that mattered could not tell the
+     * difference between a hand-over and a no-op. The failure it hid is the same one the
+     * paragraph above describes, one level up: the ledger debited, the items nowhere,
+     * and the journal cleared by the same lambda that failed to deliver.
      */
-    public static void give(PlayerEntity player, Item item, int qty) {
+    public static boolean give(PlayerEntity player, Item item, int qty) {
         ServerPlayerEntity sp = serverPlayer(player);
-        if (sp == null) return;
+        if (sp == null) return false;
 
         int maxStack = item.getMaxCount();
         while (qty > 0) {
@@ -164,5 +183,6 @@ public class InventoryBridge {
 
         sp.inventory.markDirty();
         sp.playerScreenHandler.sendContentUpdates();
+        return true;
     }
 }
