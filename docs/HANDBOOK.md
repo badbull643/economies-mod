@@ -45,6 +45,7 @@ argument rather than repeating it.
 24. [Rules this codebase keeps rediscovering](#24-rules-this-codebase-keeps-rediscovering)
 25. [Tests](#25-tests)
 26. [Where to read more](#26-where-to-read-more)
+27. [Running a server, and how the jar is put together](#27-running-a-server-and-how-the-jar-is-put-together)
 
 ---
 ---
@@ -295,6 +296,10 @@ anything.
 From the repository you can equally run `./gradlew hostServer --args="…"`. Every command
 below works either way — substitute `./gradlew hostServer --args="<flags>"` for
 `java -jar economies-server.jar <flags>`.
+
+Keeping one running, updating it, and what to back up are in
+[§27](#27-running-a-server-and-how-the-jar-is-put-together), along with what is inside
+that jar and why.
 
 #### Setting one up
 
@@ -1251,3 +1256,91 @@ not see. The live checklist is `docs/testing/group-e.md`, and it is not optional
 The javadoc in `core` is not decoration. Most classes there open with why they exist and
 what was tried first; `MarketSnapshot`, `WorldAttestation`, `PendingOps`, `MarketSlots` and
 `MarketHighWater` in particular carry arguments that are not repeated anywhere else.
+
+---
+
+## 27. Running a server, and how the jar is put together
+
+[§6](#6-playing-together) is the walkthrough. This is what is underneath it, for whoever
+has to keep one alive or change how it ships.
+
+### Why a separate jar exists at all
+
+The mod jar cannot run a server. Minecraft supplies gson at runtime, so a bare JVM loading
+it dies on `NoClassDefFoundError: com/google/gson/JsonElement` before printing a line —
+and the failure names a missing class rather than a missing dependency, which tells an
+operator nothing.
+
+`serverJar` builds a self-contained one instead:
+
+```groovy
+from(sourceSets.main.output) { include 'io/github/badbull643/economiesmod/core/**' }
+from configurations.runtimeClasspath.filter { it.name.startsWith('gson') }
+        .collect { zipTree(it) }
+manifest { attributes 'Main-Class': '…core.net.HostServer' }
+```
+
+Three decisions in nine lines:
+
+**Only `core`.** That package imports no Minecraft — the same property that lets the test
+suites run on a bare JVM in milliseconds — so it needs nothing else to run. `client` and
+`mixin` would drag the game in behind them, and there is nothing in either that a server
+uses.
+
+**Gson unpacked rather than nested.** `java -jar` reads no classpath from inside a jar, so
+a nested dependency is invisible. It has to be flattened in beside the classes that call
+it.
+
+**A `Main-Class` manifest**, so the command is `java -jar` and not a classpath incantation.
+
+The result is about 600 KB, and roughly half of it is gson.
+
+### What a server does not know
+
+Nothing in that jar understands Minecraft. Item ids are opaque strings — `minecraft:iron_ingot`
+is matched, counted and priced without the server having any idea what an iron ingot is,
+and a modded item id works exactly as well. That is why the ledger can be an engine on its
+own, and it is worth remembering before writing anything server-side that wants to reason
+about items.
+
+### Updating one
+
+The jar is disposable; the log is the state. Stop the process, replace the jar, start it
+again. Nothing in the market is stored anywhere but `market.jsonl`, and the config is read
+fresh on every start.
+
+Two version cautions, both of which fail loudly rather than quietly:
+
+- **A snapshot written by a different build is discarded**, because `MarketState`'s shape
+  fingerprint changed. The console says so and the market replays in full — one slow start,
+  then it is gone.
+- **An event type an older build does not know stops it reading the log at that line.** A
+  server downgraded past a feature that has already been used will report a damaged log
+  rather than skip events it cannot understand, which is the right way round.
+
+### Keeping it up
+
+It runs in the foreground and logs to stdout, so it wants whatever the host uses for that
+— `systemd`, `screen`, `nohup`. There is **no shutdown hook**: the process is meant to be
+stoppable at any moment, and it is safe to stop at any moment, because durability comes
+from how each event is written rather than from a clean exit.
+
+Every append opens the file, writes one line, and closes it. There is no in-memory buffer
+holding events that a stop could lose — an event that has been acknowledged to a client is
+already on disk.
+
+### Backups
+
+`market.jsonl` is the only irreplaceable file. `server-identity.key` is worth keeping —
+losing it means the server becomes a new identity, and if it created the market it also
+loses the ability to change that market's policy — but it can be regenerated if you accept
+that. `server-peers.json` and `known-keys.json` rebuild themselves.
+
+The log is append-only, so copying it from a running server is safe in the way that
+matters: the copy is a prefix of the real thing. The worst case is a torn final line, and
+a torn line is refused rather than half-applied — you lose the last event, never the
+integrity of the ones before it.
+
+**What no backup gives you:** a market restored from an old copy is *behind*, and if
+anybody kept playing on the live one, restoring it forks the market. The high-water mark
+exists to notice exactly that, but it can only warn — see [§18](#18-divergence-noticing-and-locating-a-fork).
