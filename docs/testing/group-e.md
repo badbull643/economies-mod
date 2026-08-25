@@ -897,7 +897,28 @@ Then confirm the thing it must not break, which is the whole reason the mark exi
 
 ## E24. Hosting a log that stops being readable
 
-**Run 2026-08-24, and it found two defects that had nothing to do with the gate itself.**
+**RUN PROPERLY 2026-08-25, with its control.** The first attempt (2026-08-24) refused
+correctly but was read through a build that overwrote the reason, and the run after it was
+made against the control by mistake. This one is the clean pass:
+
+```
+04:54:38  now using market slot 'market-5'   (restored a snapshot at event 6002)
+04:55:36  not hosting: this world's log stops being readable at event 1 while the
+          market is at 6002 … Reset the local history and rejoin whoever else holds it.
+04:56:29  [host] serving 'damaged history' — restored a snapshot at event 6002
+04:56:29  [host] listening on port 25555
+```
+
+Refused on the damaged log; hosted on the pristine one after the swap. The market showed
+6,002 events and no damage banner throughout, which is correct — the snapshot is bound to
+the chain hash at its own sequence number, so the state on screen really is right. What is
+broken is the file under it, and it is caught at the one moment that can do harm.
+
+*The fixture lives as a market slot rather than a whole world now — nine megabytes in a
+directory that can be deleted, instead of fifteen in a world that has to be created first.*
+
+**The earlier run, 2026-08-24, and the two defects it found that had nothing to do with
+the gate itself.**
 
 A snapshot is bound to the chain hash at its own sequence number and never looks below
 it, so a log with a line this build cannot parse, under a valid snapshot, loads perfectly:
