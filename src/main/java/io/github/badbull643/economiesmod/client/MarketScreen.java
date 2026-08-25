@@ -1008,9 +1008,14 @@ public class MarketScreen extends Screen {
         final String host = parsed.host;
         final int port = parsed.port;
 
-        Path worldDir = mc.getServer() != null
-                ? mc.getServer().getSavePath(WorldSavePath.ROOT) : null;
-        if (worldDir == null) return;
+        Path worldDir = MarketStateHolder.worldDirOrNull();
+        if (worldDir == null) {
+            // Was a bare return. Correct and silent, which is the pair this project keeps
+            // paying for: a button that does nothing teaches nothing, and once Create and
+            // Host started explaining themselves this was the only one left that did not.
+            status = NO_WORLD;
+            return;
+        }
         String myName = mc.getSession().getUsername();
 
         showDanger("Migrate to " + host + ":" + port + "?",
