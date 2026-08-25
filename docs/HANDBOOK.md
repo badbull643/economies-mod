@@ -276,28 +276,48 @@ A standalone process — no Minecraft, no world — that keeps a market up wheth
 anybody is playing. Hosting rotates for a friend group; a server is for a group that would
 rather one machine always be there.
 
+#### What the operator needs
+
+**One jar and a Java 8 runtime. Nothing else** — no Minecraft, no Gradle, no copy of this
+repository.
+
+```
+./gradlew serverJar          # produces build/libs/economies-server.jar, about 600 KB
+```
+
+Hand that file to whoever is running the server. It is self-contained: `core` imports no
+Minecraft, and gson is packed in beside it.
+
+*The mod jar is not the same thing and will not work.* Minecraft supplies gson at runtime,
+so a standalone JVM loading the mod jar dies on `NoClassDefFoundError` before it prints
+anything.
+
+From the repository you can equally run `./gradlew hostServer --args="…"`. Every command
+below works either way — substitute `./gradlew hostServer --args="<flags>"` for
+`java -jar economies-server.jar <flags>`.
+
 #### Setting one up
 
-**1. Pick a folder that is not the repository.** Everything the server creates lands
-beside its log file, and one of those things is a private key. Committing a market's
+**1. Put the jar in a folder that is not the repository.** Everything the server creates
+lands beside its log file, and one of those things is a private key. Committing a market's
 history to source control by accident is easy and permanent.
 
 ```
-mkdir ~/economies-server
+mkdir ~/economies-server && cp economies-server.jar ~/economies-server/ && cd ~/economies-server
 ```
 
 **2. Write a config.** Nothing exists yet, so this creates one with every setting in it:
 
 ```
-./gradlew hostServer --args="--config ~/economies-server/server.json --write-config"
+java -jar economies-server.jar --config server.json --write-config
 ```
 
 **3. Edit it.** The three that matter before a first start:
 
 ```jsonc
-"logFile": "/home/you/economies-server/market.jsonl",   // NOT inside the repository
+"logFile": "market.jsonl",              // beside the jar; anywhere but the repository
 "port": 25555,
-"hostName": "our server",                               // what players see in the list
+"hostName": "our server",              // what players see in the host list
 
 "policy": {                    // the market's own economics — see below
   "taxBps": 100,               // 1% trading fee, taken from the seller and destroyed
@@ -312,7 +332,7 @@ mkdir ~/economies-server
 **4. Start it.**
 
 ```
-./gradlew hostServer --args="--config ~/economies-server/server.json"
+java -jar economies-server.jar --config server.json
 ```
 
 The first start with an empty log creates the market. Expect roughly:
