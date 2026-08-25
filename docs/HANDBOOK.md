@@ -1067,6 +1067,15 @@ to be 1% of the cost. And numbers rot — a headline measurement in the design n
 by 4× four days after it was taken, because a later change added a full pass over the file
 that nobody re-measured.
 
+**A note asking somebody to remember is not a mechanism.** `EventCanonical` opens with
+*"if you add a field to an event type, add it here too — anything omitted is unsigned and
+therefore tamperable in transit."* Correct, prominent, and insufficient: a whole event
+type was added and never appeared in the file, so its eight fields travelled unsigned. The
+warning was right about the failure and could not prevent it. It is backed by two
+mechanisms now — the chain throws on a type it does not know, and a reflection check walks
+every declared field of every event subclass and fails if changing one does not change the
+signed payload.
+
 **A name is not an identity.** Two markets can share a name and share nothing else.
 
 ---
