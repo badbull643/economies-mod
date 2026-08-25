@@ -741,7 +741,8 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        final Path worldDir = mc.getServer().getSavePath(WorldSavePath.ROOT);
+        final Path worldDir = MarketStateHolder.worldDirOrNull();
+        if (worldDir == null) { status = NO_WORLD; return; }
         final UUID me = MinecraftIds.userIdOf(mc.player);
 
         showConfirm("Create '" + name + "'?",
@@ -951,7 +952,8 @@ public class MarketScreen extends Screen {
             return;
         }
 
-        Path worldDir = mc.getServer().getSavePath(WorldSavePath.ROOT);
+        Path worldDir = MarketStateHolder.worldDirOrNull();
+        if (worldDir == null) { status = NO_WORLD; return; }
         UUID me = MinecraftIds.userIdOf(mc.player);
         String playerName = mc.getSession().getUsername();
 
@@ -3486,9 +3488,30 @@ public class MarketScreen extends Screen {
         }
     }
 
+    /**
+     * Shown wherever a control needs a world of ours and there is not one.
+     *
+     * Short enough to survive the footer's trim, and it names the two places the mod does
+     * work rather than only the place it does not — "singleplayer only" leaves somebody
+     * playing with friends thinking it is useless to them, when Open to LAN is exactly
+     * what they want.
+     */
+    static final String NO_WORLD =
+            "Singleplayer and Open to LAN only — no market on somebody else's server";
+
     /** What is currently wrong, worst first. Empty when there is nothing to say. */
     private List<Alert> alerts() {
         List<Alert> out = new ArrayList<>();
+
+        // Before everything, including a damaged log: on somebody else's server there is
+        // no market here to be damaged, and every other line this method could produce
+        // would be answering a question the player cannot act on. Said plainly and once,
+        // because the alternative — which is what shipped until now — is a screen full of
+        // live buttons, two of which crashed the game.
+        if (!MarketStateHolder.hasOwnWorld()) {
+            out.add(new Alert(NO_WORLD, 0xFFDD66, -1));
+            return out;
+        }
 
         if (MarketStateHolder.chainBrokenAt() != -1) {
             String why = MarketStateHolder.damageReason();
