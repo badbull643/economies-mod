@@ -323,6 +323,7 @@ public class HostServer {
                 + state.marketId() + ") — " + loaded.describe());
 
         warnIfGrantDisagrees();
+        applyConfiguredPolicy();
     }
 
     /**
@@ -402,6 +403,144 @@ public class HostServer {
         if (warning != null) {
             System.err.println("[host] welcome grant mismatch: " + warning);
         }
+    }
+
+    /**
+     * Applies the config's policy block to a market this server created.
+     *
+     * The same twelve lines as {@code MarketScreen.submitPolicy}, which is the only
+     * other place policy is authored: read all six values off the current state, change
+     * the ones the caller named, submit the whole thing. Reading first is what stops a
+     * MarketPolicy zeroing every field it does not restate — a trap this codebase has
+     * fallen into twice, and one nobody should have to remember, which is why both
+     * callers get it from the shape of the code rather than from a comment.
+     *
+     * Authored by this server because this server is the creator. That is not a host
+     * applying its own figures — the objection {@link #issueWelcomeGrant} exists to
+     * respect — it is the identity the market recorded at genesis, exercising the
+     * authority it was given, through a file instead of a screen. Every replica
+     * validates it exactly as it would validate a player's.
+     *
+     * Silent when the block is empty, which is the ordinary case. Loud when it changes
+     * something, because the complaint this answers was a setting that did nothing
+     * quietly, and doing something quietly would be no better.
+     */
+    private void applyConfiguredPolicy() throws IOException {
+        ServerConfig.Policy wanted = config.policy;
+        if (wanted == null || wanted.isEmpty()) return;
+
+        UUID me = hostUserIdAsUuid();
+        if (me == null || state.creator() == null || !state.creator().equals(me)) {
+            // NOT the thing that enforces this. EventApplier.validate refuses a policy
+            // from anybody but the creator, and would refuse this one a few lines below
+            // whether or not this branch existed — removing it leaves every check in
+            // H4 green, which is exactly how a guard that guards nothing gets written.
+            //
+            // What it buys is the explanation. Falling through would tell an operator
+            // "refused: only the market's creator can set policy", which is true and
+            // leaves them wondering whether they mistyped an identity. This says the
+            // settings are inert here, why, and what is actually in force — and an
+            // operator who writes a tax into a file and sees nothing happen otherwise
+            // has no way to tell an ignored setting from an applied one that did
+            // nothing.
+            System.err.println("[host] the policy block in this config is not being"
+                    + " applied: this market was created by " + state.creator()
+                    + " and only its creator may set policy. These values reach a market"
+                    + " this server creates itself, and nothing else. What is in force"
+                    + " now: " + describePolicy(state.taxBps(), state.welcomeGrant(),
+                            state.listingFee(), state.listingFreeOrders(),
+                            state.stipendAmount(), state.stipendEveryFills()));
+            return;
+        }
+
+        Event.MarketPolicy policy = new Event.MarketPolicy();
+        policy.userId = me;
+        policy.marketId = state.marketId();
+        policy.taxBps = state.taxBps();
+        policy.grantAmount = state.welcomeGrant();
+        policy.listingFee = state.listingFee();
+        policy.listingFreeOrders = state.listingFreeOrders();
+        policy.stipendAmount = state.stipendAmount();
+        policy.stipendEveryFills = state.stipendEveryFills();
+
+        StringBuilder changed = new StringBuilder();
+        if (wanted.taxBps != null && wanted.taxBps != policy.taxBps) {
+            note(changed, "tax", policy.taxBps, wanted.taxBps);
+            policy.taxBps = wanted.taxBps;
+        }
+        if (wanted.welcomeGrant != null && wanted.welcomeGrant != policy.grantAmount) {
+            note(changed, "welcome grant", policy.grantAmount, wanted.welcomeGrant);
+            policy.grantAmount = wanted.welcomeGrant;
+        }
+        if (wanted.listingFee != null && wanted.listingFee != policy.listingFee) {
+            note(changed, "listing fee", policy.listingFee, wanted.listingFee);
+            policy.listingFee = wanted.listingFee;
+        }
+        if (wanted.listingFreeOrders != null
+                && wanted.listingFreeOrders != policy.listingFreeOrders) {
+            note(changed, "free orders", policy.listingFreeOrders, wanted.listingFreeOrders);
+            policy.listingFreeOrders = wanted.listingFreeOrders;
+        }
+        if (wanted.stipendAmount != null && wanted.stipendAmount != policy.stipendAmount) {
+            note(changed, "stipend", policy.stipendAmount, wanted.stipendAmount);
+            policy.stipendAmount = wanted.stipendAmount;
+        }
+        if (wanted.stipendEveryFills != null
+                && wanted.stipendEveryFills != policy.stipendEveryFills) {
+            note(changed, "stipend interval", policy.stipendEveryFills,
+                    wanted.stipendEveryFills);
+            policy.stipendEveryFills = wanted.stipendEveryFills;
+        }
+
+        if (changed.length() == 0) return;      // the file already describes the market
+
+        policy.clientEventId = UUID.randomUUID().toString();
+        policy.timestamp = System.currentTimeMillis();
+
+        SequencedEvent probe = new SequencedEvent();
+        probe.seq = log.lastSeq() + 1;
+        probe.event = policy;
+        EventApplier.Result check = EventApplier.validate(state, probe);
+        if (!check.accepted) {
+            // Refused rather than thrown: the market is fine, the file is not, and a
+            // server that refused to start over a rate would strand everybody trading
+            // on it. The interlock and the ceilings are the usual reasons — both say
+            // exactly what is wrong, so the reason is passed straight through.
+            System.err.println("[host] the policy block in this config was refused: "
+                    + check.reason + " — the market is running on its existing policy: "
+                    + describePolicy(state.taxBps(), state.welcomeGrant(),
+                            state.listingFee(), state.listingFreeOrders(),
+                            state.stipendAmount(), state.stipendEveryFills()));
+            return;
+        }
+
+        String signature;
+        try {
+            signature = hostKeys.sign(EventCanonical.canonicalPayload(policy));
+        } catch (GeneralSecurityException e) {
+            // Same treatment as a welcome grant that cannot be signed: report and carry
+            // on serving. The market is unharmed — the policy simply stays as it was.
+            System.err.println("[host] could not sign the policy change: " + e.getMessage()
+                    + " — the market keeps its existing policy");
+            return;
+        }
+
+        SequencedEvent written = log.append(policy, signature);
+        EventApplier.apply(state, written);
+        System.out.println("[host] policy updated from this config at event "
+                + written.seq + " — " + changed);
+    }
+
+    private static void note(StringBuilder sb, String what, long from, long to) {
+        if (sb.length() > 0) sb.append(", ");
+        sb.append(what).append(' ').append(from).append(" → ").append(to);
+    }
+
+    private static String describePolicy(int taxBps, long grant, long fee, int freeOrders,
+                                         long stipend, long everyFills) {
+        return "tax " + taxBps + " bps, grant " + grant + ", listing fee " + fee
+                + ", free orders " + freeOrders + ", stipend " + stipend
+                + " every " + everyFills + " fills";
     }
 
     private final CountDownLatch bound = new CountDownLatch(1);

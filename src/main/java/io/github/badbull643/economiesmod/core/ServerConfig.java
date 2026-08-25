@@ -507,6 +507,57 @@ public class ServerConfig {
     /** Lives here rather than on HostServer: it is policy, and this is where policy is. */
     public static final long DEFAULT_WELCOME_GRANT = 1000L;
 
+    /**
+     * The market's own economics, for a server that created the market it serves.
+     *
+     * <h2>Why this is a block and not six more fields at the top</h2>
+     *
+     * Everything else in this file is a <b>host rule</b>: what this box does with the
+     * people connecting to it. Change one, restart, done — it is nobody's business but
+     * the operator's. What is in here is different in kind. These are recorded in the
+     * market's log, every replica replays them, and they are the same for everyone
+     * hosting it. The file gave no sign of that distinction, so three of them sat
+     * among the host rules looking like ordinary settings while quietly doing nothing
+     * after the first start — which is exactly what somebody reading the file assumed
+     * was not happening.
+     *
+     * <h2>How it is applied</h2>
+     *
+     * On start, a server that is the market's creator publishes a MarketPolicy event
+     * for whatever differs here, exactly as a player would from the Market screen. That
+     * is not a host overruling policy: the creator is who this server is, and the event
+     * is validated by every replica like any other. A server hosting a market it did
+     * not create says so and changes nothing, because it has no authority to.
+     *
+     * <h2>null means leave alone</h2>
+     *
+     * Every field is boxed on purpose, following {@link #maxWelcomeGrant} and
+     * {@link #acceptsMigration}. An absent value is not zero — it is "do not touch",
+     * which is the only safe reading when a freshly written config meets a market that
+     * has been running for a month. A primitive here would let an unmentioned listing
+     * fee reset a real market's fee to nothing on the next restart.
+     */
+    public Policy policy = new Policy();
+
+    /** @see #policy */
+    public static class Policy {
+        /** Transaction tax in basis points. 100 = 1%. */
+        public Integer taxBps;
+        public Long welcomeGrant;
+        public Long listingFee;
+        /** Orders each identity may hold open before the listing fee escalates. */
+        public Integer listingFreeOrders;
+        public Long stipendAmount;
+        /** Fills between stipend claims. */
+        public Long stipendEveryFills;
+
+        public boolean isEmpty() {
+            return taxBps == null && welcomeGrant == null && listingFee == null
+                    && listingFreeOrders == null && stipendAmount == null
+                    && stipendEveryFills == null;
+        }
+    }
+
     // ─────────── loading ───────────
 
     /**
