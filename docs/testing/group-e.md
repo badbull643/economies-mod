@@ -1107,7 +1107,7 @@ sync refused on a signature at the `HostDefaults` event, and the fix is to publi
 
 ## E27. Two machines, a real network, an hour of ordinary play
 
-**RUN 2026-08-24. An hour, two machines, no issues.**
+**RUN 2026-08-25. An hour, two machines, a normal Fabric install, no issues.**
 
 The first time this mod has been used across a network rather than between two clients on
 one box. Every other multi-client run in this project's history — the whole of Group E,
@@ -1115,38 +1115,27 @@ one box. Every other multi-client run in this project's history — the whole of
 addresses are trivial, latency is nil, and nothing can be firewalled.
 
 Nothing was found. That is worth recording as plainly as a defect would be: an hour of two
-people trading, with a build from that day, and nothing to report.
+people trading the current build, and nothing to report.
 
 **What it covers, and it is the part nobody had evidence for:** discovery and connection to
 a machine that is not this one, the handshake over a real link, ordering and fan-out with
 genuine latency between the two, and a session long enough for the ordinary things — orders
 resting, fills arriving, balances agreeing at the end.
 
-**What it does not cover**, because the build predates them. Anything wanting a second
-sitting is here:
+**It was run on a build carrying everything up to `4131224`**, which is the release
+content: the inventory listings panel, the withdrawal hand-over gating, the `HostDefaults`
+canonical form, the snapshot discard, the configurable server policy and the
+singleplayer-only guard were all in it. So this is not only evidence about the network — it
+is an hour of two people using the current feature set and finding nothing.
 
-- **The inventory listings panel.** New, drawn beside the inventory every frame, and the
-  one addition since that a player sees constantly rather than occasionally.
-- **The withdrawal hand-over.** `InventoryBridge.give` returns a boolean now and every
-  caller gates on it. `E25` forced the failure case, but no ordinary withdrawal has been
-  made across two machines since.
-- **Published host rules.** `HostDefaults` gained a canonical form, so its signature
-  changed shape. Verified headlessly and through an import in `E26`, but never synced
-  between two machines. **A pre-0.1.0 host and a 0.1.0 client will disagree about one of
-  these**, which is the one incompatibility in the release.
-- The snapshot discard, the configurable server policy, and the singleplayer-only guard,
-  none of which a two-player LAN session exercises.
+**What came after it is wording and nothing else** — three commits that shortened messages
+and removed em-dashes from the text a player reads. No behaviour, no protocol, no storage.
+A repeat is therefore optional rather than owed, and if one happens the only thing worth
+watching is that the shortened guidance and dialogs still fit their panels at a normal
+window size, which is a one-screen check and not a session.
 
-**The short repeat, ten minutes, worth doing before shipping a build to strangers:**
-
-- Both machines on the release jar, same version on each
-- Host, connect, and confirm the listings panel shows the other player's orders and not
-  your own
-- One deposit, one listing, one buy that fills it, and check both sides agree on the
-  balances
-- One withdrawal, and confirm the items arrive and the next world load reports nothing owed
-- `/trade hostrules publish` on the host, then check `/trade hostrules` on the client shows
-  what was published
-
-That last one is the only step that is about the release rather than about the mod: it is
-the case where an old build and a new one genuinely differ.
+**Worth knowing for the release rather than for the mod:** `HostDefaults` gained a
+canonical form in `e025e9e`, so a host older than that and a client newer than it disagree
+about whether a published rules event verifies. Inside a single release that is nothing;
+across the boundary it is the one incompatibility, and it is why the first release is where
+it is rather than an upgrade of something already in the wild.
