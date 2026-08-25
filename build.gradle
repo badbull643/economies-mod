@@ -67,6 +67,45 @@ jar {
     }
 }
 
+/**
+ * One file somebody can run a dedicated server from, without this repository.
+ *
+ * The mod jar cannot do it. Gson is provided by Minecraft at runtime, so a standalone JVM
+ * loading that jar dies on NoClassDefFoundError before it prints anything — and the
+ * answer "also download gson and put it on the classpath" is not one to give somebody who
+ * just wants to run a server.
+ *
+ * Only `core` goes in. That package imports no Minecraft, which is the same property the
+ * test suites rely on, and it is what makes 600 KB enough. `client` and `mixin` are
+ * excluded because they would drag the game in behind them.
+ *
+ * java -jar economies-server.jar --write-config
+ */
+tasks.register('serverJar', Jar) {
+    group = 'build'
+    description = 'A standalone runnable jar for the dedicated server.'
+    archiveBaseName = 'economies-server'
+    archiveVersion = ''
+    destinationDirectory = layout.buildDirectory.dir('libs')
+
+    manifest {
+        attributes 'Main-Class': 'io.github.badbull643.economiesmod.core.net.HostServer'
+    }
+
+    from(sourceSets.main.output) {
+        include 'io/github/badbull643/economiesmod/core/**'
+    }
+    // Unpacked rather than nested: java -jar reads no classpath from inside a jar, so a
+    // dependency has to be flattened in beside the classes that use it.
+    from configurations.runtimeClasspath
+            .filter { it.name.startsWith('gson') }
+            .collect { zipTree(it) }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'module-info.class'
+
+    from("LICENSE")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 // The core engine imports no Minecraft, so the whole suite runs on a bare JVM in
 // milliseconds. Exits non-zero on failure, so this is safe to gate on.
 tasks.register('coreTests', JavaExec) {
