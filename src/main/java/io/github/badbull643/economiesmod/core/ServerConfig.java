@@ -485,10 +485,11 @@ public class ServerConfig {
      * Without this, a market created by a server the ordinary way could never charge a
      * listing fee at all — its creator is the box, and only a creator may change policy.
      *
-     * The way round it was always --creator-key, which names a player as creator and
-     * lets them set policy from their client. That still works and is still the better
-     * answer for a market with a person behind it. This is for the server that has
-     * nobody.
+     * Superseded for everything after genesis by {@link #policy}, which lets a server
+     * that created its market change these whenever it likes. This field still writes the
+     * OPENING fee, and --creator-key still names a player as creator when a person should
+     * own the market from their own screen — but neither is any longer the difference
+     * between a tunable market and a frozen one.
      */
     public long listingFee = 0;
 
