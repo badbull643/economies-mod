@@ -2104,9 +2104,18 @@ public class HostServer {
             // unedited changes nothing.
             if (cfg.policy == null) cfg.policy = new ServerConfig.Policy();
             try {
-                EventLog existing = new EventLog(Paths.get(cfg.logFile));
-                MarketState market = existing.lastSeq() == 0
-                        ? null : EventApplier.replay(existing);
+                // Only if it is already there. The EventLog constructor creates the file
+                // it is handed, so opening one here to ask what policy is in force left
+                // an empty market.jsonl behind on a path the operator was about to change
+                // — a write-config that writes two files, one of them a market nobody
+                // asked for. Found by running the jar the way an operator would rather
+                // than by reading this back.
+                Path existingLog = Paths.get(cfg.logFile);
+                MarketState market = null;
+                if (Files.exists(existingLog)) {
+                    EventLog existing = new EventLog(existingLog);
+                    market = existing.lastSeq() == 0 ? null : EventApplier.replay(existing);
+                }
                 if (market != null && market.marketId() != null) {
                     cfg.policy.fillFrom(market);
                 } else {
