@@ -485,10 +485,11 @@ public class ServerConfig {
      * Without this, a market created by a server the ordinary way could never charge a
      * listing fee at all — its creator is the box, and only a creator may change policy.
      *
-     * The way round it was always --creator-key, which names a player as creator and
-     * lets them set policy from their client. That still works and is still the better
-     * answer for a market with a person behind it. This is for the server that has
-     * nobody.
+     * Superseded for everything after genesis by {@link #policy}, which lets a server
+     * that created its market change these whenever it likes. This field still writes the
+     * OPENING fee, and --creator-key still names a player as creator when a person should
+     * own the market from their own screen — but neither is any longer the difference
+     * between a tunable market and a frozen one.
      */
     public long listingFee = 0;
 
@@ -506,6 +507,99 @@ public class ServerConfig {
 
     /** Lives here rather than on HostServer: it is policy, and this is where policy is. */
     public static final long DEFAULT_WELCOME_GRANT = 1000L;
+
+    /**
+     * The market's own economics, for a server that created the market it serves.
+     *
+     * <h2>Why this is a block and not six more fields at the top</h2>
+     *
+     * Everything else in this file is a <b>host rule</b>: what this box does with the
+     * people connecting to it. Change one, restart, done — it is nobody's business but
+     * the operator's. What is in here is different in kind. These are recorded in the
+     * market's log, every replica replays them, and they are the same for everyone
+     * hosting it. The file gave no sign of that distinction, so three of them sat
+     * among the host rules looking like ordinary settings while quietly doing nothing
+     * after the first start — which is exactly what somebody reading the file assumed
+     * was not happening.
+     *
+     * <h2>How it is applied</h2>
+     *
+     * On start, a server that is the market's creator publishes a MarketPolicy event
+     * for whatever differs here, exactly as a player would from the Market screen. That
+     * is not a host overruling policy: the creator is who this server is, and the event
+     * is validated by every replica like any other. A server hosting a market it did
+     * not create says so and changes nothing, because it has no authority to.
+     *
+     * <h2>null means leave alone</h2>
+     *
+     * Every field is boxed on purpose, following {@link #maxWelcomeGrant} and
+     * {@link #acceptsMigration}. An absent value is not zero — it is "do not touch",
+     * which is the only safe reading when a freshly written config meets a market that
+     * has been running for a month. A primitive here would let an unmentioned listing
+     * fee reset a real market's fee to nothing on the next restart.
+     */
+    public Policy policy = new Policy();
+
+    /** @see #policy */
+    public static class Policy {
+        /** Transaction tax in basis points. 100 = 1%. */
+        public Integer taxBps;
+        public Long welcomeGrant;
+        public Long listingFee;
+        /** Orders each identity may hold open before the listing fee escalates. */
+        public Integer listingFreeOrders;
+        public Long stipendAmount;
+        /** Fills between stipend claims. */
+        public Long stipendEveryFills;
+
+        public boolean isEmpty() {
+            return taxBps == null && welcomeGrant == null && listingFee == null
+                    && listingFreeOrders == null && stipendAmount == null
+                    && stipendEveryFills == null;
+        }
+
+        /**
+         * Fills in whatever is unset from the numbers actually in force.
+         *
+         * For {@code --write-config}, and for that alone. Left to itself this block
+         * serialises as {@code "policy": {}} — every field null, and Gson omits nulls —
+         * which is the correct state and a useless document: an operator cannot discover
+         * from an empty object that six settings live in it, and the whole promise of
+         * --write-config is a file with every setting in it. The first person to run it
+         * after this block was added asked what was wrong with it, which is the answer.
+         *
+         * Written out with the market's own figures rather than the config's, so the file
+         * describes the market that exists. That also makes the next start a no-op: every
+         * value matches, nothing differs, no event is written. Editing one and restarting
+         * is then the whole interface.
+         */
+        public void fillFrom(MarketState market) {
+            if (market == null) return;
+            if (taxBps == null) taxBps = market.taxBps();
+            if (welcomeGrant == null) welcomeGrant = market.welcomeGrant();
+            if (listingFee == null) listingFee = market.listingFee();
+            if (listingFreeOrders == null) listingFreeOrders = market.listingFreeOrders();
+            if (stipendAmount == null) stipendAmount = market.stipendAmount();
+            if (stipendEveryFills == null) stipendEveryFills = market.stipendEveryFills();
+        }
+
+        /**
+         * The same for a config written before any market exists.
+         *
+         * The opening policy a bootstrap would lay down, so the file shows what the first
+         * start will create rather than nothing at all.
+         */
+        public void fillFromBootstrapDefaults(long grant, long fee, long stipend) {
+            if (taxBps == null) taxBps = 0;
+            if (welcomeGrant == null) welcomeGrant = grant;
+            if (listingFee == null) listingFee = fee;
+            if (listingFreeOrders == null) listingFreeOrders = 0;
+            if (stipendAmount == null) stipendAmount = stipend;
+            if (stipendEveryFills == null) {
+                stipendEveryFills = MarketState.DEFAULT_STIPEND_EVERY_FILLS;
+            }
+        }
+    }
 
     // ─────────── loading ───────────
 

@@ -702,7 +702,7 @@ public class MarketState {
         long available = itemBalances.getBalance(userId, itemId);
         if (available < qty) return false;
         itemBalances.adjust(userId, itemId, -qty);
-        withdrawn.merge(userId + " " + itemId, qty, Long::sum);
+        withdrawn.merge(userId + "\0" + itemId, qty, Long::sum);
         return true;
     }
 
@@ -720,7 +720,7 @@ public class MarketState {
      */
     public long withdrawnBy(UUID userId, String itemId) {
         if (userId == null || itemId == null) return 0;
-        Long n = withdrawn.get(userId + " " + itemId);
+        Long n = withdrawn.get(userId + "\0" + itemId);
         return n == null ? 0 : n;
     }
 

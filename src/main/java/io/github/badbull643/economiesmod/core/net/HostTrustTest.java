@@ -72,6 +72,7 @@ public class HostTrustTest {
         mintingHostIsRefused(dir, hostKeys, joinerKeys);
         honestHostStillSyncs(dir, hostKeys, joinerKeys);
         clientKnowsWhereItsOwnStateEnds(dir, hostKeys, joinerKeys);
+        configuredPolicy(dir, hostKeys);
 
         System.out.println();
         if (failures == 0) {
@@ -80,6 +81,108 @@ public class HostTrustTest {
             System.out.println(failures + " of " + checksRun + " checks FAILED");
         }
         System.exit(failures == 0 ? 0 : 1);
+    }
+
+
+    /**
+     * A server that created its market may set its policy from its config; one that did
+     * not, may not.
+     *
+     * Belongs in this suite because it is the same question from the other side. H1 is a
+     * host authoring an event it has no authority over. This is a host authoring one it
+     * does — the creator is the box, and a creator setting policy is exactly what
+     * MarketPolicy is for. The line between them is who genesis recorded, and validate
+     * is what holds it.
+     */
+    private static void configuredPolicy(Path dir, PlayerKeys hostKeys) throws Exception {
+        System.out.println();
+        System.out.println("  [H4: a creating server sets policy from its config,"
+                + " and only then]");
+
+        Path log = dir.resolve("trust-policy.jsonl");
+        Files.deleteIfExists(log);
+        Files.deleteIfExists(dir.resolve("trust-policy.jsonl.snapshot.json"));
+
+        UUID box = UUID.randomUUID();
+        MarketBootstrap.createMarket(new EventLog(log), box, "policy market", hostKeys,
+                1000L, 2L, 0L);
+        long afterBootstrap = new EventLog(log).lastSeq();
+
+        // Nothing in the block: the ordinary case, and it must write nothing at all.
+        ServerConfig quiet = serverConfigFor(box);
+        new HostServer(quiet, log, hostKeys, new PeerCache(dir.resolve("trust-policy-peers.json")));
+        check("an empty policy block writes no event",
+                new EventLog(log).lastSeq(), afterBootstrap);
+
+        // One field named, the rest untouched. This is the property that makes the
+        // feature safe to restart into: a MarketPolicy zeroes every field it does not
+        // restate, so a config that mentions only the tax must not wipe the grant and
+        // the fee along with it.
+        ServerConfig taxed = serverConfigFor(box);
+        taxed.policy.taxBps = 150;
+        new HostServer(taxed, log, hostKeys, new PeerCache(dir.resolve("trust-policy-peers.json")));
+
+        io.github.badbull643.economiesmod.core.MarketState after =
+                io.github.badbull643.economiesmod.core.EventApplier.replay(new EventLog(log));
+        check("the tax it named is in force", after.taxBps(), 150);
+        check("the grant it did not name survives", after.welcomeGrant(), 1000L);
+        check("and so does the listing fee", after.listingFee(), 2L);
+        check("one event, not one per field", new EventLog(log).lastSeq(), afterBootstrap + 1);
+
+        // Idempotent: the file now describes the market, so a restart changes nothing.
+        new HostServer(taxed, log, hostKeys, new PeerCache(dir.resolve("trust-policy-peers.json")));
+        check("restarting with the same config writes nothing",
+                new EventLog(log).lastSeq(), afterBootstrap + 1);
+
+        // Refused rather than written. The interlock is the usual reason an operator
+        // gets this wrong, and the market must keep running on what it had.
+        ServerConfig greedy = serverConfigFor(box);
+        greedy.policy.stipendAmount = 900_000L;
+        greedy.policy.stipendEveryFills = 2L;
+        new HostServer(greedy, log, hostKeys, new PeerCache(dir.resolve("trust-policy-peers.json")));
+        check("a policy the market would refuse is not written",
+                new EventLog(log).lastSeq(), afterBootstrap + 1);
+        check("and the stipend is still off",
+                io.github.badbull643.economiesmod.core.EventApplier
+                        .replay(new EventLog(log)).stipendAmount(), 0L);
+
+        // And the whole point of the boundary: a server hosting somebody else's market
+        // has the same file and no authority. H1's rule, seen from the other side.
+        //
+        // These two pin the outcome, not the layer. HostServer checks the creator before
+        // building anything, but removing that check leaves both of these green, because
+        // EventApplier.validate refuses the policy regardless — which is the right place
+        // for it to be refused and the reason the earlier check is about the message
+        // rather than the rule. Worth knowing before anyone reads a pass here as proof
+        // that HostServer is what holds the line.
+        Path theirs = dir.resolve("trust-policy-foreign.jsonl");
+        Files.deleteIfExists(theirs);
+        Files.deleteIfExists(dir.resolve("trust-policy-foreign.jsonl.snapshot.json"));
+        UUID person = UUID.randomUUID();
+        MarketBootstrap.createMarket(new EventLog(theirs), person, "somebody else's",
+                PlayerKeys.generate(), 1000L, 2L, 0L);
+        long foreignHead = new EventLog(theirs).lastSeq();
+
+        ServerConfig meddling = serverConfigFor(box);
+        meddling.policy.taxBps = 5000;
+        new HostServer(meddling, theirs, hostKeys,
+                new PeerCache(dir.resolve("trust-policy-peers.json")));
+        check("a server that did not create the market writes no policy",
+                new EventLog(theirs).lastSeq(), foreignHead);
+        check("and its tax is untouched",
+                io.github.badbull643.economiesmod.core.EventApplier
+                        .replay(new EventLog(theirs)).taxBps(), 0);
+    }
+
+    /** A dedicated config owned by the given identity, with nothing in its policy block. */
+    private static ServerConfig serverConfigFor(UUID box) throws IOException {
+        ServerConfig cfg = new ServerConfig();
+        cfg.dedicated = true;
+        cfg.hostUserId = box.toString();
+        // Validated by problem() even though nothing here binds — the constructor
+        // refuses an unusable config before it looks at anything else.
+        cfg.port = 25555;
+        return cfg;
     }
 
     /**

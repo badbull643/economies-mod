@@ -897,7 +897,28 @@ Then confirm the thing it must not break, which is the whole reason the mark exi
 
 ## E24. Hosting a log that stops being readable
 
-**Run 2026-08-24, and it found two defects that had nothing to do with the gate itself.**
+**RUN PROPERLY 2026-08-25, with its control.** The first attempt (2026-08-24) refused
+correctly but was read through a build that overwrote the reason, and the run after it was
+made against the control by mistake. This one is the clean pass:
+
+```
+04:54:38  now using market slot 'market-5'   (restored a snapshot at event 6002)
+04:55:36  not hosting: this world's log stops being readable at event 1 while the
+          market is at 6002 … Reset the local history and rejoin whoever else holds it.
+04:56:29  [host] serving 'damaged history' — restored a snapshot at event 6002
+04:56:29  [host] listening on port 25555
+```
+
+Refused on the damaged log; hosted on the pristine one after the swap. The market showed
+6,002 events and no damage banner throughout, which is correct — the snapshot is bound to
+the chain hash at its own sequence number, so the state on screen really is right. What is
+broken is the file under it, and it is caught at the one moment that can do harm.
+
+*The fixture lives as a market slot rather than a whole world now — nine megabytes in a
+directory that can be deleted, instead of fifteen in a world that has to be created first.*
+
+**The earlier run, 2026-08-24, and the two defects it found that had nothing to do with
+the gate itself.**
 
 A snapshot is bound to the chain hash at its own sequence number and never looks below
 it, so a log with a line this build cannot parse, under a valid snapshot, loads perfectly:
@@ -946,3 +967,140 @@ was not:
 
 Neither would have been found by checking that the gate refuses. They were found by
 looking at the screen while it refused.
+
+## E25. A withdrawal that could not be handed over
+
+**RUN 2026-08-25, and it passed — including the failure case, which was forced rather
+than raced.** The deterministic four ran on `test4`: ordinary withdrawal, a refused
+deposit under `maxDepositUnitsPerWindow: 1` returning exactly once, and every journal in
+every slot left `[]`, which is the real pass condition — a failed hand-over now leaves an
+entry, so an empty journal after seven withdrawals means each was confirmed delivered
+before its record was cleared.
+
+The race was attempted on two worlds and never landed, which is the expected outcome: the
+window is one tick wide and only counts if the world finishes stopping inside it. **So it
+was held open instead.** One line in `InventoryBridge.serverPlayer` — `if (true) return
+null;` — makes every hand-over refuse, which is the same condition without the timing:
+
+```
+04:42:57  [host] seq 250 Withdraw
+04:42:57  could not hand over 1 minecraft:dirt for event 250 — the world was not there
+          to receive it. It is recorded as unsettled and will be reported at next start.
+04:43:15  withdrawal of 1 minecraft:dirt (event 250) may not have reached your inventory
+04:43:15  settled 1 interrupted inventory operation(s) from a previous session
+```
+
+and on screen, `1 withdrawal may not have reached you — see the log`. The ledger debited a
+dirt that never arrived, the record survived to say so, and the next load reported it. All
+four lines were silent before the fix.
+
+**The technique is the reusable part.** A condition that cannot be scheduled can usually be
+*held open* by the same one-line edit that would disable the fix — this project already
+trusts nothing until it has been seen to fail with its fix removed, and this is that move
+pointed at an input rather than at a guard. Cheaper than a race, and it either works or it
+does not. Revert it afterwards; it costs the market one item, which is real and is the
+point.
+
+*Below is the recipe as written before the run, kept because the deterministic four are
+worth repeating whenever this code is touched.*
+
+**Originally: new, never run.** `InventoryBridge.give` used to return void and quietly do nothing when
+the server was unreachable, and the withdraw path cleared its journal entry regardless — so
+the ledger recorded a withdrawal, the world contained nothing, and no record survived
+saying anything was owed. `give` returns a boolean now and the clear is gated on it.
+
+**The forced-failure case is a race, and this item says so rather than pretending
+otherwise.** The window is between the applied hook (network thread) and the deferred
+hand-over (game thread), which is only open while the integrated server is stopping. It
+cannot be widened from inside the game. Expect to need several attempts, and treat a run
+that does not land as *no evidence* rather than as a pass.
+
+- Alice hosts, Bob connects — the hand-over has to arrive from a peer, or the applied hook
+  is not the path being tested
+- Bob deposits something, then **withdraws it and quits to title in the same instant**
+  (Esc → Save and Quit, as fast as the click allows)
+- If the window was hit, the console carries `could not hand over N item for event S — the
+  world was not there to receive it. It is recorded as unsettled and will be reported at
+  next start.`
+- **Reopen Bob's world.** It must report the withdrawal as unsettled. Silence here is the
+  defect this item exists for: before the fix, that is exactly what happened, and the items
+  were gone with nothing anywhere recording it
+
+**The deterministic half, which is worth running every time and takes two minutes.** These
+cover the plumbing the race exercises, and they *can* fail:
+
+- **Ordinary withdrawal still works.** Nothing about the boolean should change the normal
+  path, and a fix that quietly stopped every hand-over would pass the race check above by
+  never reaching it
+- **Withdraw into a completely full inventory** — all 36 slots and the offhand. The items
+  must land at your feet rather than vanish, and the next start must report nothing. This
+  is the inner failure the same method was fixed for once before, and it shares the return
+  value now
+- **A refused deposit comes back exactly once.** Set `maxDepositUnitsPerWindow: 1` in the
+  host's `host-config.json`, deposit more than that, and watch the console: `returned N —
+  the host refused that deposit`, once. Twice means the put-back is duplicating; a repeating
+  line means the drain loop is spinning instead of breaking
+- **A reset refund comes back exactly once.** Fork a market, deposit on your branch, reset:
+  the items return and the console says so, once
+
+## E26. Published host rules that were altered in transit
+
+**RUN 2026-08-25, and it passed end to end.** Rules published to `newQ` (149 events) and
+to a fresh `newT`; a second player synced both markets whole — 149 events and 4 — so an
+honestly signed `HostDefaults` reproduces its signature across a real socket, which is the
+half that would break if the two ends built the payload differently. Hosting then reported
+*"this market publishes host rules, and they have been taken up where this host had not set
+its own"*. The tampered archive was refused by name:
+
+> `Archive rejected: event 3: bad signature — this history has been tampered with`
+
+and the honest one imported, with `admission: allowlist` and `maxWelcomeGrant: 1000`
+intact on disk afterwards. Nothing below is stale; it is kept as the recipe for the next
+time the canonical form changes.
+
+**One thing the run showed that the recipe did not predict:** a rejected import leaves *no
+console trace at all* — the failure goes to the screen's status line and nowhere else. So
+the console log of a successful run and a botched one look identical, and whoever runs this
+has to read the screen at the moment it happens. Worth knowing before you run it, and worth
+fixing if this becomes a routine check. `HostDefaults` was absent from
+`EventCanonical`, so its eight fields were unsigned — anybody relaying one, *including the
+host sequencing it*, could rewrite the creator's published rules and the signature would
+still verify, because the bytes they changed were never in it.
+
+A hand edit alone will not demonstrate this: the entry hash covers the event JSON, so
+editing a field breaks the chain and the market reports a damaged log rather than a bad
+signature. A relay does not have that problem — it alters the event *before* sequencing and
+the host then hashes the forged content into a perfectly valid chain. Reproducing it
+therefore means re-chaining, which the scratch fixture does.
+
+**The easy half — that honest rules still round-trip.** Fifteen minutes, no tools:
+
+- Creator publishes: `/trade hostrules publish`
+- A second player joins the market **in a fresh slot**, so the whole history syncs and every
+  event is verified on arrival rather than trusted from disk
+- The sync must complete. A `HostDefaults` whose signature no longer reproduces would be
+  refused here, which is what would happen if the payload were built differently on the two
+  sides — the sorted `allow` and `deny` lists exist for exactly that
+- `/trade hostrules` on the joiner shows what the creator published
+
+**The half that proves the fix.** Build a tampered market with the scratch `Tamper` fixture
+— it publishes rules, rewrites `admission` to `open`, `maxWelcomeGrant` to 1000000 and
+`acceptsMigration` to true, and re-chains — then drop the log into a world and connect to a
+host holding the honest copy.
+
+- The tampered replica must be refused, on the signature and not on the chain
+- Run the fixture against the build before `e025e9e` to see what it looked like: the forged
+  event verifies, and every host adopting those defaults believes the creator agreed to
+  them
+
+Headless, both ways, on the same fixture:
+
+```
+pre-fix  (fbdf3df)   chain still adds up: true    forged event verifies: true
+post-fix (e025e9e)   chain still adds up: true    forged event verifies: false  (bad signature)
+```
+
+**One consequence to check for if this market is old.** Rules published *before*
+`e025e9e` were signed over the short payload and will not verify against the new one. No
+log in this repository holds such an event, but a friend's copy might. The symptom is a
+sync refused on a signature at the `HostDefaults` event, and the fix is to publish again.

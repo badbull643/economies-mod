@@ -45,6 +45,7 @@ argument rather than repeating it.
 24. [Rules this codebase keeps rediscovering](#24-rules-this-codebase-keeps-rediscovering)
 25. [Tests](#25-tests)
 26. [Where to read more](#26-where-to-read-more)
+27. [Running a server, and how the jar is put together](#27-running-a-server-and-how-the-jar-is-put-together)
 
 ---
 ---
@@ -272,26 +273,153 @@ behind it. If it refuses on click it will say why.
 
 ### The dedicated server
 
-A standalone process that keeps the market up whether or not anybody is playing:
+A standalone process — no Minecraft, no world — that keeps a market up whether or not
+anybody is playing. Hosting rotates for a friend group; a server is for a group that would
+rather one machine always be there.
+
+#### What the operator needs
+
+**One jar and a Java 8 runtime. Nothing else** — no Minecraft, no Gradle, no copy of this
+repository.
 
 ```
-./gradlew hostServer --args="--config server-config.json"
+./gradlew serverJar          # produces build/libs/economies-server.jar, about 600 KB
 ```
 
-Flags: `--config`, `--write-config` (write the effective settings and exit),
-`--creator-key`, `--port`, `--log`, `--name`, `--market`, `--bind`.
+Hand that file to whoever is running the server. It is self-contained: `core` imports no
+Minecraft, and gson is packed in beside it.
 
-**Bootstrapping is a one-shot decision.** The first start with no history creates the
-market and records who owns it forever. Without `--creator-key` that owner is *the
-server itself* — which has no screen, and so that market's rules can never be changed
-again. Passing `--creator-key` with a player's key file and `creatorUserId` in the config
-leaves the rules changeable from the Market screen afterwards. The key is needed for
-that one start only.
+*The mod jar is not the same thing and will not work.* Minecraft supplies gson at runtime,
+so a standalone JVM loading the mod jar dies on `NoClassDefFoundError` before it prints
+anything.
+
+From the repository you can equally run `./gradlew hostServer --args="…"`. Every command
+below works either way — substitute `./gradlew hostServer --args="<flags>"` for
+`java -jar economies-server.jar <flags>`.
+
+Keeping one running, updating it, and what to back up are in
+[§27](#27-running-a-server-and-how-the-jar-is-put-together), along with what is inside
+that jar and why.
+
+#### Setting one up
+
+**1. Put the jar in a folder that is not the repository.** Everything the server creates
+lands beside its log file, and one of those things is a private key. Committing a market's
+history to source control by accident is easy and permanent.
+
+```
+mkdir ~/economies-server && cp economies-server.jar ~/economies-server/ && cd ~/economies-server
+```
+
+**2. Write a config.** Nothing exists yet, so this creates one with every setting in it:
+
+```
+java -jar economies-server.jar --config server.json --write-config
+```
+
+**3. Edit it.** The three that matter before a first start:
+
+```jsonc
+"logFile": "market.jsonl",              // beside the jar; anywhere but the repository
+"port": 25555,
+"hostName": "our server",              // what players see in the host list
+
+"policy": {                    // the market's own economics — see below
+  "taxBps": 100,               // 1% trading fee, taken from the seller and destroyed
+  "welcomeGrant": 500,         // what a newcomer starts with
+  "listingFee": 2,             // charged to place an order, never refunded
+  "listingFreeOrders": 0,      // orders held open before the fee escalates; 0 = never
+  "stipendAmount": 0,          // 0 = no stipend
+  "stipendEveryFills": 50
+}
+```
+
+**4. Start it.**
+
+```
+java -jar economies-server.jar --config server.json
+```
+
+The first start with an empty log creates the market. Expect roughly:
+
+```
+[host] created 'our server's market' owned by this server
+[host] policy updated from this config at event 3 — tax 0 → 100, listing fee 0 → 2
+[host] listening on port 25555
+```
+
+**5. Join it.** In game: **Network tab → address → Connect**, using `host:25555`. On the
+same machine `localhost:25555` works.
+
+#### What it creates, all beside the log
+
+| File | What it is |
+| --- | --- |
+| `market.jsonl` | The market. This is the only irreplaceable file — **back it up** |
+| `server-identity.key` | The server's private key. Never share it, never commit it |
+| `server-peers.json` | Who has connected, from where. The operator's own note |
+| `known-keys.json` | Identities seen before, for recognising them again |
+
+#### Changing things afterwards
+
+**Host rules** — admission, deposit caps, world checks, migration limits, the welcome-grant
+ceiling, port, name. Edit the config, restart. They belong to whoever is hosting and take
+effect immediately.
+
+**The market's economics** — the `policy` block. Edit, restart, and a server that created
+its market publishes the change as a `MarketPolicy` event, exactly as a player would from
+the Market screen. It is the creator, after all.
+
+Two things worth knowing:
+
+- **Anything left out is left alone.** A block that mentions only the tax will not touch
+  the grant or the fee. That is why the fields are absent rather than zero when unset.
+- **A policy the market would refuse is reported and skipped** — a stipend that outruns
+  its own listing fees, a grant above the host's ceiling — and the market keeps running on
+  what it had.
+
+Running `--write-config` again rewrites the file with the numbers actually in force, which
+is the quickest way to see what a market ended up with.
+
+#### Who owns the market
+
+By default the server does, and the operator changes policy through the config as above.
+
+**`--creator-key` names a player as creator instead**, so the rules are changed from the
+Market screen in game. Worth it when a person should own the market and the box is only
+hardware; otherwise the config is simpler and the key is one more thing to keep somewhere.
+It is used on the first start only, needs `creatorUserId` in the config, and cannot be
+changed afterwards — the creator is recorded at genesis and there is no event that moves
+it.
+
+#### If something looks wrong
+
+| It says | It means |
+| --- | --- |
+| `the policy block in this config is not being applied` | This server is hosting a market it did not create. Only the creator sets policy; these settings reach a market this server creates itself |
+| `the policy block in this config was refused: …` | The numbers break a market rule — usually the stipend interlock. The market is fine and unchanged |
+| `this market grants N, and welcomeGrant is set to M` | The grant amount is the market's, fixed when it was created. The config setting only chooses whether this server issues grants at all |
+| `port already in use` | Something else has 25555, or a previous run has not exited |
+
+#### Two differences from a friend hosting
+
+A dedicated server **does not hand out its peer list** — `server-peers.json` stays the
+operator's note rather than something clients learn from. And **clients keep only a
+snapshot** of a dedicated market rather than the whole history, since the box is always
+there; `/trade archive on` opts back in for anybody who wants a full copy.
 
 ### Who can join
 
-The host decides, through `host-config.json` (see [§9](#9-host-rules)). By default,
-anybody.
+The host decides, and **which file it reads depends on which kind of host it is** — one
+of the easier things to get wrong when moving between the two:
+
+| Hosting from | Reads |
+| --- | --- |
+| Your game | `host-config.json`, beside that world's market. `/trade hostconfig write` creates it |
+| A dedicated server | Its own `--config` file — the one `--write-config` produced |
+
+Both hold the same host rules and mean the same things; see [§9](#9-host-rules). By
+default, anybody may join either.
 
 ---
 
@@ -385,12 +513,17 @@ replica applies them identically, and only the **creator** can change them.
 ### Host rules — in a file, belonging to whoever is hosting
 
 Admission, deposit caps, world checks, migration limits, the welcome-grant ceiling. They
-live in `host-config.json` beside the market, and they **change when hosting rotates**,
-because they are that host's defence against its clients rather than the market's
-defence against its host.
+**change when hosting rotates**, because they are that host's defence against its clients
+rather than the market's defence against its host.
 
-`/trade hostconfig` prints them. `/trade hostconfig write` creates the file with every
-setting in it, ready to edit.
+Where they live depends on who is hosting: `host-config.json` beside that world's market
+when somebody hosts from their game, or the dedicated server's own `--config` file. Same
+settings, same meanings, two files — because they belong to the host and not to the
+market.
+
+`/trade hostconfig` prints the ones in force for a world. `/trade hostconfig write`
+creates the file with every setting in it, ready to edit. For a server it is
+`--write-config`.
 
 | Setting | What it does |
 | --- | --- |
@@ -1067,6 +1200,15 @@ to be 1% of the cost. And numbers rot — a headline measurement in the design n
 by 4× four days after it was taken, because a later change added a full pass over the file
 that nobody re-measured.
 
+**A note asking somebody to remember is not a mechanism.** `EventCanonical` opens with
+*"if you add a field to an event type, add it here too — anything omitted is unsigned and
+therefore tamperable in transit."* Correct, prominent, and insufficient: a whole event
+type was added and never appeared in the file, so its eight fields travelled unsigned. The
+warning was right about the failure and could not prevent it. It is backed by two
+mechanisms now — the chain throws on a type it does not know, and a reflection check walks
+every declared field of every event subclass and fails if changing one does not change the
+signed payload.
+
 **A name is not an identity.** Two markets can share a name and share nothing else.
 
 ---
@@ -1114,3 +1256,91 @@ not see. The live checklist is `docs/testing/group-e.md`, and it is not optional
 The javadoc in `core` is not decoration. Most classes there open with why they exist and
 what was tried first; `MarketSnapshot`, `WorldAttestation`, `PendingOps`, `MarketSlots` and
 `MarketHighWater` in particular carry arguments that are not repeated anywhere else.
+
+---
+
+## 27. Running a server, and how the jar is put together
+
+[§6](#6-playing-together) is the walkthrough. This is what is underneath it, for whoever
+has to keep one alive or change how it ships.
+
+### Why a separate jar exists at all
+
+The mod jar cannot run a server. Minecraft supplies gson at runtime, so a bare JVM loading
+it dies on `NoClassDefFoundError: com/google/gson/JsonElement` before printing a line —
+and the failure names a missing class rather than a missing dependency, which tells an
+operator nothing.
+
+`serverJar` builds a self-contained one instead:
+
+```groovy
+from(sourceSets.main.output) { include 'io/github/badbull643/economiesmod/core/**' }
+from configurations.runtimeClasspath.filter { it.name.startsWith('gson') }
+        .collect { zipTree(it) }
+manifest { attributes 'Main-Class': '…core.net.HostServer' }
+```
+
+Three decisions in nine lines:
+
+**Only `core`.** That package imports no Minecraft — the same property that lets the test
+suites run on a bare JVM in milliseconds — so it needs nothing else to run. `client` and
+`mixin` would drag the game in behind them, and there is nothing in either that a server
+uses.
+
+**Gson unpacked rather than nested.** `java -jar` reads no classpath from inside a jar, so
+a nested dependency is invisible. It has to be flattened in beside the classes that call
+it.
+
+**A `Main-Class` manifest**, so the command is `java -jar` and not a classpath incantation.
+
+The result is about 600 KB, and roughly half of it is gson.
+
+### What a server does not know
+
+Nothing in that jar understands Minecraft. Item ids are opaque strings — `minecraft:iron_ingot`
+is matched, counted and priced without the server having any idea what an iron ingot is,
+and a modded item id works exactly as well. That is why the ledger can be an engine on its
+own, and it is worth remembering before writing anything server-side that wants to reason
+about items.
+
+### Updating one
+
+The jar is disposable; the log is the state. Stop the process, replace the jar, start it
+again. Nothing in the market is stored anywhere but `market.jsonl`, and the config is read
+fresh on every start.
+
+Two version cautions, both of which fail loudly rather than quietly:
+
+- **A snapshot written by a different build is discarded**, because `MarketState`'s shape
+  fingerprint changed. The console says so and the market replays in full — one slow start,
+  then it is gone.
+- **An event type an older build does not know stops it reading the log at that line.** A
+  server downgraded past a feature that has already been used will report a damaged log
+  rather than skip events it cannot understand, which is the right way round.
+
+### Keeping it up
+
+It runs in the foreground and logs to stdout, so it wants whatever the host uses for that
+— `systemd`, `screen`, `nohup`. There is **no shutdown hook**: the process is meant to be
+stoppable at any moment, and it is safe to stop at any moment, because durability comes
+from how each event is written rather than from a clean exit.
+
+Every append opens the file, writes one line, and closes it. There is no in-memory buffer
+holding events that a stop could lose — an event that has been acknowledged to a client is
+already on disk.
+
+### Backups
+
+`market.jsonl` is the only irreplaceable file. `server-identity.key` is worth keeping —
+losing it means the server becomes a new identity, and if it created the market it also
+loses the ability to change that market's policy — but it can be regenerated if you accept
+that. `server-peers.json` and `known-keys.json` rebuild themselves.
+
+The log is append-only, so copying it from a running server is safe in the way that
+matters: the copy is a prefix of the real thing. The worst case is a torn final line, and
+a torn line is refused rather than half-applied — you lose the last event, never the
+integrity of the ones before it.
+
+**What no backup gives you:** a market restored from an old copy is *behind*, and if
+anybody kept playing on the live one, restoring it forks the market. The high-water mark
+exists to notice exactly that, but it can only warn — see [§18](#18-divergence-noticing-and-locating-a-fork).

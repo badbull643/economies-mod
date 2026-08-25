@@ -18,6 +18,13 @@ import java.util.UUID;
  *
  * IMPORTANT: if you add a field to an event type, add it here too — anything
  * omitted is unsigned and therefore tamperable in transit.
+ *
+ * That warning was here, correct, and insufficient: {@code HostDefaults} was added as a
+ * whole type and never appeared below, so all eight of its fields travelled unsigned for
+ * a day. A note telling somebody to remember is not a mechanism. Two now back it up —
+ * this chain throws on a type it does not know, and {@code coreTests} walks every
+ * declared field of every {@code Event} subclass and fails if changing one does not
+ * change the payload.
  */
 public class EventCanonical {
 
@@ -93,9 +100,61 @@ public class EventCanonical {
             Event.DepositAndList d = (Event.DepositAndList) e;
             sb.append('|').append(d.itemId).append('|').append(d.quantity)
                     .append('|').append(d.price);
+        } else if (e instanceof Event.HostDefaults) {
+            // Missing entirely until 2026-08-25, which meant the eight fields below were
+            // unsigned: the payload was the base fields alone, so anybody relaying one —
+            // including the host sequencing it — could rewrite the creator's published
+            // rules and the signature would still verify, because the bytes they changed
+            // were never in it. Flip acceptsMigration, raise maxWelcomeGrant, swap an
+            // allowlist for "open", and every host adopts the altered version as the
+            // creator's genuine instruction.
+            //
+            // Advisory rules, so this could not move a credit directly. What it could do
+            // is lower the floor those rules exist to raise, on exactly the hosts that
+            // had not set anything themselves — which is the whole population the
+            // mechanism was built for.
+            Event.HostDefaults hd = (Event.HostDefaults) e;
+            sb.append('|').append(hd.maxDepositUnitsPerWindow)
+                    .append('|').append(hd.depositWindowMinutes)
+                    .append('|').append(hd.maxMigratedCredits)
+                    .append('|').append(hd.maxWelcomeGrant)
+                    .append('|').append(hd.acceptsMigration)
+                    .append('|').append(hd.admission);
+            appendSorted(sb, hd.allow);
+            appendSorted(sb, hd.deny);
+        } else {
+            // Not a guess about the future: every Event subclass is declared in one file
+            // and this chain is the only place they are signed, so a type reaching here
+            // is a type somebody added without signing its contents. HostDefaults did
+            // exactly that and went a day unnoticed, because falling through silently
+            // produces a payload that verifies perfectly and covers nothing.
+            //
+            // Throwing turns "quietly unsigned forever" into "fails the first time
+            // anybody runs it". The reflection check in coreTests catches the same
+            // mistake earlier and at a finer grain — per field, not per type — but this
+            // is the one that holds when a test is not what runs.
+            throw new IllegalStateException("no canonical form for event type "
+                    + e.getClass().getSimpleName() + " — add it to EventCanonical before"
+                    + " it can be signed, or its contents travel unprotected");
         }
 
         return sb.toString();
+    }
+
+    /**
+     * A list of strings, ordered, so the same set always produces the same bytes.
+     *
+     * Sorted for the reason {@code MigrateBalance}'s maps and lists are: signer and
+     * verifier build this independently, and a list that arrived in a different order
+     * would produce a different payload for an identical event. The signature would then
+     * fail to reproduce and a legitimate event would be refused.
+     */
+    private static void appendSorted(StringBuilder sb, List<String> values) {
+        sb.append('|');
+        if (values == null) return;
+        List<String> sorted = new ArrayList<>(values);
+        Collections.sort(sorted);
+        for (String v : sorted) sb.append(v).append(',');
     }
 
 }
