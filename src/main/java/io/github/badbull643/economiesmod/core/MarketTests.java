@@ -1540,6 +1540,85 @@ public class MarketTests {
                     "evt-b".equals(ops.all().get(0).clientEventId) ? 1 : 0, 1);
         }
 
+        section("S1: every field of every event type is covered by the signature");
+        {
+            // The check that would have caught HostDefaults travelling unsigned, and the
+            // one this file's own header asks for in prose: "if you add a field to an
+            // event type, add it here too — anything omitted is unsigned and therefore
+            // tamperable in transit."
+            //
+            // Per field rather than per type, because both failures have happened: a
+            // whole type missing from EventCanonical, and — the shape the header was
+            // written about — a field added to a type that was already there. Setting a
+            // field to two different values must produce two different payloads. If it
+            // does not, that field is not signed, and anybody relaying the event can
+            // rewrite it without disturbing the signature.
+            int fieldsChecked = 0;
+            int unsigned = 0;
+            StringBuilder missing = new StringBuilder();
+
+            for (Class<?> sub : Event.class.getDeclaredClasses()) {
+                if (!Event.class.isAssignableFrom(sub)) continue;
+                if (java.lang.reflect.Modifier.isAbstract(sub.getModifiers())) continue;
+
+                for (java.lang.reflect.Field f : sub.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
+                    f.setAccessible(true);
+
+                    Event a = (Event) sub.getDeclaredConstructor().newInstance();
+                    Event b = (Event) sub.getDeclaredConstructor().newInstance();
+                    Object one = sampleValue(f, 1);
+                    Object two = sampleValue(f, 2);
+                    if (one == null) continue;          // a type this helper cannot make
+
+                    f.set(a, one);
+                    f.set(b, two);
+                    fieldsChecked++;
+
+                    boolean same;
+                    try {
+                        same = EventCanonical.canonicalPayload(a)
+                                .equals(EventCanonical.canonicalPayload(b));
+                    } catch (IllegalStateException noCanonicalForm) {
+                        // The type has no branch at all. Counted rather than thrown, so
+                        // the failure arrives as a list of unsigned fields instead of a
+                        // stack trace that stops the suite before the count is printed.
+                        same = true;
+                    }
+                    if (same) {
+                        unsigned++;
+                        missing.append(sub.getSimpleName()).append('.')
+                                .append(f.getName()).append(' ');
+                    }
+                }
+            }
+
+            // The count is checked too. A helper that quietly returned null for every
+            // type would leave nothing tested and this section green — which is the
+            // failure mode the suite calls worse than no check at all.
+            check("enough fields were actually exercised",
+                    fieldsChecked >= 25 ? 1 : 0, 1);
+            if (unsigned > 0) {
+                System.out.println("    unsigned fields: " + missing.toString().trim());
+            }
+            check("no event field is left out of the signature", unsigned, 0);
+
+            // And every declared type reaches a branch rather than falling through.
+            int types = 0;
+            for (Class<?> sub : Event.class.getDeclaredClasses()) {
+                if (!Event.class.isAssignableFrom(sub)) continue;
+                if (java.lang.reflect.Modifier.isAbstract(sub.getModifiers())) continue;
+                types++;
+                Event probe = (Event) sub.getDeclaredConstructor().newInstance();
+                try {
+                    EventCanonical.canonicalPayload(probe);
+                } catch (IllegalStateException unsignedType) {
+                    check("a canonical form exists for " + sub.getSimpleName(), 0, 1);
+                }
+            }
+            check("every event type was tried", types >= 12 ? 1 : 0, 1);
+        }
+
         section("O2b: an entry can be put back when the hand-over did not happen");
         {
             // The property the client leans on after a refund could not be handed over.
@@ -4802,6 +4881,43 @@ public class MarketTests {
      * actually exercised — a helper that silently covered nothing would leave the check
      * passing while testing nothing.
      */
+    private static Object sampleValue(java.lang.reflect.Field field, int which) {
+        Class<?> type = field.getType();
+        boolean first = which == 1;
+        if (type == String.class) return first ? "alpha" : "beta";
+        if (type == long.class || type == Long.class) return first ? 11L : 22L;
+        if (type == int.class || type == Integer.class) return first ? 33 : 44;
+        if (type == boolean.class || type == Boolean.class) return first;
+        if (type == UUID.class) {
+            return UUID.fromString(first
+                    ? "00000000-0000-0000-0000-0000000000c1"
+                    : "00000000-0000-0000-0000-0000000000c2");
+        }
+        if (type == java.util.List.class) {
+            // The element type matters and erasure hides it: foreignParticipants is a
+            // List<UUID> and allow/deny are List<String>, and canonicalPayload iterates
+            // each as its real type. Filling one with the other's elements sets cleanly
+            // and then throws a ClassCastException somewhere else entirely — which is
+            // what the first draft of this helper did.
+            List<Object> out = new ArrayList<>();
+            boolean ofUuids = field.getGenericType().toString().contains("UUID");
+            if (ofUuids) {
+                out.add(UUID.fromString(first
+                        ? "00000000-0000-0000-0000-0000000000d1"
+                        : "00000000-0000-0000-0000-0000000000d2"));
+            } else {
+                out.add(first ? "one" : "two");
+            }
+            return out;
+        }
+        if (type == java.util.Map.class) {
+            java.util.Map<String, Long> out = new java.util.HashMap<>();
+            out.put(first ? IRON : DIAMOND, first ? 5L : 6L);
+            return out;
+        }
+        return null;
+    }
+
     private static Path scratch(String name) {
         try {
             Files.createDirectories(SCRATCH_DIR);
