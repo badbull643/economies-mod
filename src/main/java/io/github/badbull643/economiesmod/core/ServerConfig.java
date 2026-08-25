@@ -557,6 +557,48 @@ public class ServerConfig {
                     && listingFreeOrders == null && stipendAmount == null
                     && stipendEveryFills == null;
         }
+
+        /**
+         * Fills in whatever is unset from the numbers actually in force.
+         *
+         * For {@code --write-config}, and for that alone. Left to itself this block
+         * serialises as {@code "policy": {}} — every field null, and Gson omits nulls —
+         * which is the correct state and a useless document: an operator cannot discover
+         * from an empty object that six settings live in it, and the whole promise of
+         * --write-config is a file with every setting in it. The first person to run it
+         * after this block was added asked what was wrong with it, which is the answer.
+         *
+         * Written out with the market's own figures rather than the config's, so the file
+         * describes the market that exists. That also makes the next start a no-op: every
+         * value matches, nothing differs, no event is written. Editing one and restarting
+         * is then the whole interface.
+         */
+        public void fillFrom(MarketState market) {
+            if (market == null) return;
+            if (taxBps == null) taxBps = market.taxBps();
+            if (welcomeGrant == null) welcomeGrant = market.welcomeGrant();
+            if (listingFee == null) listingFee = market.listingFee();
+            if (listingFreeOrders == null) listingFreeOrders = market.listingFreeOrders();
+            if (stipendAmount == null) stipendAmount = market.stipendAmount();
+            if (stipendEveryFills == null) stipendEveryFills = market.stipendEveryFills();
+        }
+
+        /**
+         * The same for a config written before any market exists.
+         *
+         * The opening policy a bootstrap would lay down, so the file shows what the first
+         * start will create rather than nothing at all.
+         */
+        public void fillFromBootstrapDefaults(long grant, long fee, long stipend) {
+            if (taxBps == null) taxBps = 0;
+            if (welcomeGrant == null) welcomeGrant = grant;
+            if (listingFee == null) listingFee = fee;
+            if (listingFreeOrders == null) listingFreeOrders = 0;
+            if (stipendAmount == null) stipendAmount = stipend;
+            if (stipendEveryFills == null) {
+                stipendEveryFills = MarketState.DEFAULT_STIPEND_EVERY_FILLS;
+            }
+        }
     }
 
     // ─────────── loading ───────────
