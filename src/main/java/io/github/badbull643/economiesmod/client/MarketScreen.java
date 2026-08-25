@@ -562,7 +562,7 @@ public class MarketScreen extends Screen {
                             : ".");
             body.append("\n\nComes back when you reconnect: everything up to event ")
                     .append(cost.splitAt)
-                    .append(" — your credits, holdings and trades are in their copy too.");
+                    .append(": your credits, holdings and trades are in their copy too.");
         } else {
             // No fork, or one whose split point could not be found. Either way there is
             // no known shared history, so nothing is promised.
@@ -746,7 +746,7 @@ public class MarketScreen extends Screen {
         final UUID me = MinecraftIds.userIdOf(mc.player);
 
         showConfirm("Create '" + name + "'?",
-                "This starts a SEPARATE economy. Anyone who joins it will not see trades"
+                "This starts a separate economy. Anyone who joins it will not see trades"
                         + " from any market your friends already use, and the two can"
                         + " never be merged afterwards. To join an existing one instead,"
                         + " use Connect.",
@@ -907,7 +907,7 @@ public class MarketScreen extends Screen {
                                     + " market right now (" + h.reply.lastSeq + " events),"
                                     + " and it does not stop. Hosting it as well means two"
                                     + " hosts sequencing one market, which splits it into"
-                                    + " two histories that can never be merged — you would"
+                                    + " two histories that can never be merged. You would"
                                     + " lose everything you traded on the losing side."
                                     + " Connect to it from the Network tab instead.",
                             null, null);
@@ -1019,8 +1019,8 @@ public class MarketScreen extends Screen {
         String myName = mc.getSession().getUsername();
 
         showDanger("Migrate to " + host + ":" + port + "?",
-                "Your position in '" + mine.marketName() + "' — "
-                        + MarketStateHolder.describeLoss(me) + " — is verified by that"
+                "Your position in '" + mine.marketName() + "' ("
+                        + MarketStateHolder.describeLoss(me) + ") is verified by that"
                         + " host and credited to you there. This market is then"
                         + " discarded. Only use this for a market with no history in"
                         + " common with theirs; if you have diverged from the same"
@@ -1938,7 +1938,7 @@ public class MarketScreen extends Screen {
         if (amount > ServerConfig.ROTATING_MAX_WELCOME_GRANT) {
             status = "The most a market hosted from a game may grant is "
                     + ServerConfig.ROTATING_MAX_WELCOME_GRANT
-                    + " — a grant far above what things trade for is the largest single"
+                    + ". A grant far above what things trade for is the largest single"
                     + " lever on what credits are worth";
             return;
         }
@@ -2165,18 +2165,24 @@ public class MarketScreen extends Screen {
                 break;
             case MS_NO_MARKET:
                 heading = "This world has no market";
-                body = "Create one to start an economy of your own, or import a file"
-                        + " someone exported. To join a market your friends already use,"
-                        + " go to Network and connect to whoever is hosting it — do NOT"
-                        + " create one, since two markets can never be merged.";
+                // The reason before the instruction. This read "do NOT create one, since
+                // two markets can never be merged", which shouted, and put the warning
+                // where somebody who had already clicked Create would find it.
+                body = "Two markets can never be merged, so if your friends already have"
+                        + " one, join theirs from the Network screen rather than starting"
+                        + " your own. Otherwise, create one here to begin an economy of"
+                        + " your own, or import a file somebody exported.";
                 break;
             case MS_FORKED:
                 heading = "You have diverged from this market";
+                // "the host will refuse it" read as a fault rather than a safeguard, so
+                // it says whose protection it is and why it exists.
                 body = MarketStateHolder.divergence().describe()
                         + ". Discarding and reconnecting is the way back, and it costs"
-                        + " only what you did after the split — everything before it is"
-                        + " in their copy too. Migrating is the wrong tool here and the"
-                        + " host will refuse it.";
+                        + " only what you did after the split. Everything before it is in"
+                        + " their copy too. Migrating is for moving to a different"
+                        + " market rather than rejoining this one, so a host declines it"
+                        + " on purpose, to keep both copies whole.";
                 break;
             case MS_BEHIND:
                 heading = "Your copy is behind";
@@ -2187,9 +2193,16 @@ public class MarketScreen extends Screen {
                 break;
             case MS_CONNECTED:
                 heading = "Connected to '" + (market == null ? "?" : market.marketName()) + "'";
-                body = "Everything is in order. You can export a copy of this market to"
-                        + " a file for someone who cannot be online at the same time as"
-                        + " anyone holding it.";
+                // This opened with "Everything is in order", which tells somebody nothing
+                // they could not see, and then spent the paragraph on exporting to a
+                // file. This is the one state a working market gets to explain itself in,
+                // so it says what is live and where to go next, and keeps export as the
+                // afterthought it is.
+                body = "Trading is live, and anything you buy or sell settles for"
+                        + " everybody at once. Your balance and your resting orders are"
+                        + " on the Trading tab. If somebody cannot be online while"
+                        + " anyone is hosting, you can export a copy of this market for"
+                        + " them from here.";
                 break;
             default:
                 heading = "You hold '" + (market == null ? "?" : market.marketName()) + "'";
@@ -2386,8 +2399,8 @@ public class MarketScreen extends Screen {
     private void onAddMarket() {
         showConfirm("Add another market to this world?",
                 "This world can hold several markets and use one at a time. The one you"
-                        + " are in now keeps everything — its history, balances and"
-                        + " orders — and you can switch back whenever you like. The new"
+                        + " are in now keeps everything it has: its history, balances and"
+                        + " orders. You can switch back whenever you like. The new"
                         + " one starts empty, so the next step is to create it, import"
                         + " one, or connect to somebody hosting.",
                 "Add", () -> {
