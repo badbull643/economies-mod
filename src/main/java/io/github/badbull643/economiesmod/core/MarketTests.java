@@ -4198,6 +4198,16 @@ public class MarketTests {
             check("a different MarketState shape invalidates the snapshot",
                     MarketSnapshot.loadIfValid(new EventLog(reshaped)) == null ? 1 : 0, 1);
 
+            // And is gone afterwards, rather than refused again on every load for the
+            // rest of that world's life. A market below minEvents never writes a
+            // replacement, so nothing else would ever remove it: one play session's log
+            // carried the same "being discarded" line five times in ten minutes, which is
+            // a message about something changing, printed when nothing had.
+            check("and the stale snapshot is removed, not refused forever",
+                    Files.exists(pathOfSnapshot(reshaped)) ? 1 : 0, 0);
+            check("the market still loads without it",
+                    EventApplier.load(new EventLog(reshaped)).headSeq, full.headSeq);
+
             // Garbage in the file must cost a slow load, never a crash.
             Path junk = scratch("test-snapshot-junk.jsonl");
             Files.deleteIfExists(junk);
@@ -4206,6 +4216,8 @@ public class MarketTests {
                     "{not json at all".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             check("an unreadable snapshot is refused rather than thrown",
                     MarketSnapshot.loadIfValid(new EventLog(junk)) == null ? 1 : 0, 1);
+            check("and it is removed too — this build will never parse it",
+                    Files.exists(pathOfSnapshot(junk)) ? 1 : 0, 0);
             check("and the market still loads",
                     EventApplier.load(new EventLog(junk)).headSeq, full.headSeq);
         }
