@@ -2270,7 +2270,12 @@ public class MarketScreen extends Screen {
     /** The same for a plain string. */
     private void guideLabel(MatrixStack m, String text, int x, int y, int colour) {
         if (y < panelTop() || y + 9 > panelBottom()) return;
-        label(m, text, x, y, colour);
+        // Trimmed to the same width the body beneath it wraps to. It clipped vertically
+        // and not horizontally, so a heading that grew — and these are chosen by
+        // situation, so they do grow — ran out through the side of the panel it is
+        // supposed to be inside. The lines under it were wrapped from the first day;
+        // only the heading was left measuring nothing.
+        label(m, trim(text, listW - 12), x, y, colour);
     }
 
     /**
