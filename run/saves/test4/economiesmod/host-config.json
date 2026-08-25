@@ -1,7 +1,7 @@
 {
   "maxConnections": 64,
   "outboundQueueDepth": 256,
-  "maxDepositUnitsPerWindow": 0,
+  "maxDepositUnitsPerWindow": 1,
   "depositWindowMinutes": 60,
   "requireAttestation": false,
   "refuseCreativeWorlds": false,
