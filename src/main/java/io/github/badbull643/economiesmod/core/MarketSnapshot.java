@@ -431,6 +431,37 @@ public final class MarketSnapshot {
      * caller replays from the beginning in all of them, which is the slow answer and
      * never the wrong one.
      */
+    /**
+     * Removes a snapshot that can never be valid again.
+     *
+     * Only for the two answers that cannot change by themselves: a file this build cannot
+     * parse, and one written against a different {@code MarketState} shape. Neither comes
+     * back — a shape is a property of the build, so short of downgrading the mod that file
+     * is dead weight the loader will keep reading and keep refusing.
+     *
+     * Not for the chain-hash cases below. "This log no longer has that chain" is a
+     * statement about the log, and a log can be restored from a backup or a slot copied
+     * back into place, so deleting there would throw away something that might yet be
+     * usable. The rule is: delete what this build can never use, keep what this *log* is
+     * currently not matching.
+     *
+     * The nuisance this fixes is small and the reason it is worth fixing is not. A market
+     * below {@code minEvents} never writes a replacement, so the stale file stays and the
+     * "being discarded" line prints on every single load, forever — a message that says
+     * something changed, printed when nothing has. Five in ten minutes in one play
+     * session's log. That is how a console line people should read becomes one they skim.
+     */
+    private static void discard(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (Exception e) {
+            // Never worth failing a load over. The snapshot is already not being used;
+            // the only cost of leaving it is the message printing again next time.
+            System.err.println("[economiesmod] could not remove the stale snapshot "
+                    + file.getFileName() + ": " + e.getMessage());
+        }
+    }
+
     public static Restored loadIfValid(EventLog log) {
         Path file = pathFor(log);
         try {
@@ -442,14 +473,19 @@ public final class MarketSnapshot {
             } catch (Exception unparseable) {
                 System.err.println("[economiesmod] snapshot unreadable, replaying in full: "
                         + unparseable.getMessage());
+                discard(file);
                 return null;
             }
-            if (b == null || b.chainHash == null || b.seq <= 0) return null;
+            if (b == null || b.chainHash == null || b.seq <= 0) {
+                discard(file);
+                return null;
+            }
 
             if (!shapeFingerprint().equals(b.shape)) {
                 System.out.println("[economiesmod] snapshot was written for a different"
                         + " MarketState and is being discarded — replaying in full."
                         + " This is what is supposed to happen when a field is added.");
+                discard(file);
                 return null;
             }
 

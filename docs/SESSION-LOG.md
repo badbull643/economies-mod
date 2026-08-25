@@ -31,7 +31,7 @@ behaviour are all still guesses — see §8.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `735 / 15 / 5 / 16 / 51 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
+Expect `746 / 15 / 5 / 16 / 51 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
 since 2026-08-23, so a failure here that passes there — or the reverse — is about the
 machine rather than the code, and is worth chasing as such.
 
@@ -131,10 +131,17 @@ new observation to argue from, but nothing forces it today.
 - **The first CI run has never executed anywhere.** If it goes red on `Assemble` rather
   than on the suites, that is the toolchain and not the code — the steps are split so the
   two can be told apart.
-- **Item 8 has never run in Minecraft.** `/trade hostrules publish`, then host the same
-  market from a second world and check the rules were taken up. Everything about it is
-  covered by `coreTests` L17/L18 and `admissionTest` A10, and none of that is a person
-  looking at the thing.
+- ~~**Item 8 has never run in Minecraft.**~~ **It has, and it worked** — the author ran it
+  some time before 2026-08-25 and said so when this line was quoted back at them for the
+  fourth time. It is confirmed again by `E26`'s run: rules published, adopted by a host,
+  and synced whole to a second player.
+
+  *Left struck through rather than deleted, because of how it lasted.* This entry was read
+  aloud from this file in four separate answers, each time as a live gap, by somebody who
+  had never asked whether it still was. A checklist that is only ever appended to becomes
+  a list of things that were true once — and the cost is not the wasted suggestion, it is
+  that a stale "never tested" is indistinguishable from a real one, so the real ones stop
+  being believed.
 - **Item 2's live half is done** — five sessions, and the last of them confirmed the Host
   button greyed on a slot holding a snapshot and no history, which is the check the whole
   of step 4 rests on.
