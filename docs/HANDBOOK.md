@@ -281,12 +281,36 @@ A standalone process that keeps the market up whether or not anybody is playing:
 Flags: `--config`, `--write-config` (write the effective settings and exit),
 `--creator-key`, `--port`, `--log`, `--name`, `--market`, `--bind`.
 
-**Bootstrapping is a one-shot decision.** The first start with no history creates the
-market and records who owns it forever. Without `--creator-key` that owner is *the
-server itself* — which has no screen, and so that market's rules can never be changed
-again. Passing `--creator-key` with a player's key file and `creatorUserId` in the config
-leaves the rules changeable from the Market screen afterwards. The key is needed for
-that one start only.
+**The first start with no history creates the market** and records who owns it forever.
+By default that owner is the server itself, and the operator sets the market's economics
+the same way they set everything else — in the config:
+
+```jsonc
+"policy": {
+  "taxBps": 100,          // 1% trading fee
+  "welcomeGrant": 500,
+  "listingFee": 2,
+  "listingFreeOrders": 0,
+  "stipendAmount": 20,
+  "stipendEveryFills": 50
+}
+```
+
+Edit, restart, done. A server that created its market publishes the change as a
+`MarketPolicy` event, exactly as a player would from the Market screen — it is the
+creator, after all. **Anything you leave out is left alone**, so a config that mentions
+only the tax will not touch the grant or the fee.
+
+Two things to know. A server that is *hosting* a market somebody else created has no
+authority over its policy and will say so rather than changing anything. And a policy the
+market would refuse — a stipend that outruns its own listing fees, a grant above the
+host's ceiling — is reported and skipped, with the market left on what it had.
+
+**`--creator-key` is the other way**, and it is now a preference rather than a trap: it
+names a *player* as creator, so the rules are changed from the Market screen in game
+instead of from the file. Worth it if a person should own the market and the box is just
+hardware. Otherwise the config is simpler, and the key is one more thing to keep
+somewhere.
 
 ### Who can join
 
