@@ -2096,6 +2096,30 @@ public class HostServer {
         cfg.dedicated = true;
 
         if (writeConfig) {
+            // The policy block is null-by-default, and null is how "leave the market
+            // alone" is expressed — but written out that way it is an empty object with
+            // no hint that six settings belong in it. So this one path fills it, from the
+            // market if there is one and from what a bootstrap would lay down if there is
+            // not. Either way the file then says what is in force, and a restart with it
+            // unedited changes nothing.
+            if (cfg.policy == null) cfg.policy = new ServerConfig.Policy();
+            try {
+                EventLog existing = new EventLog(Paths.get(cfg.logFile));
+                MarketState market = existing.lastSeq() == 0
+                        ? null : EventApplier.replay(existing);
+                if (market != null && market.marketId() != null) {
+                    cfg.policy.fillFrom(market);
+                } else {
+                    cfg.policy.fillFromBootstrapDefaults(cfg.welcomeGrant, cfg.listingFee,
+                            cfg.stipendAmount);
+                }
+            } catch (IOException unreadable) {
+                // Writing a config must not depend on a market being loadable. Falling
+                // back to the bootstrap figures is honest — that is what a start against
+                // an unusable log would end up creating anyway.
+                cfg.policy.fillFromBootstrapDefaults(cfg.welcomeGrant, cfg.listingFee,
+                        cfg.stipendAmount);
+            }
             cfg.save(configFile);
             System.out.println("[host] wrote " + configFile.toAbsolutePath());
             return;
