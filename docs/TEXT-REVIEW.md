@@ -35,23 +35,25 @@ market's facts and the slot switcher.
 
 > **This world has no market**
 >
-> Create one to start an economy of your own, or import a file someone exported. To join a
-> market your friends already use, go to Network and connect to whoever is hosting it — do
-> NOT create one, since two markets can never be merged.
+> Two markets can never be merged, so if your friends already have one, join theirs from
+> the Network screen rather than starting your own. Otherwise, create one here to begin an
+> economy of your own, or import a file somebody exported.
 
-*Noted while collecting these: the instruction arrives before its reason, and "do NOT" is
-the only shouting in the mod. "Two markets can never be merged, so join theirs rather than
-creating your own" says the same thing in the order somebody needs it.*
+*Rewritten 2026-08-25. It read "do NOT create one, since two markets can never be merged",
+which shouted, and put the warning where somebody who had already clicked Create would
+find it. The reason comes first now.*
 
 ### 1.3 Forked — `:2173`
 
 > **You have diverged from this market**
 >
 > *[where the split was]*. Discarding and reconnecting is the way back, and it costs only
-> what you did after the split — everything before it is in their copy too. Migrating is
-> the wrong tool here and the host will refuse it.
+> what you did after the split. Everything before it is in their copy too. Migrating is for
+> moving to a different market rather than rejoining this one, so a host declines it on
+> purpose, to keep both copies whole.
 
-*"the host will refuse it" reads as a fault when it is a safeguard.*
+*Rewritten 2026-08-25. "the host will refuse it" read as a fault rather than a safeguard,
+so it now says whose protection it is.*
 
 ### 1.4 Behind — `:2181`
 
@@ -64,12 +66,14 @@ creating your own" says the same thing in the order somebody needs it.*
 
 > **Connected to '*[market]*'**
 >
-> Everything is in order. You can export a copy of this market to a file for someone who
-> cannot be online at the same time as anyone holding it.
+> Trading is live, and anything you buy or sell settles for everybody at once. Your balance
+> and your resting orders are on the Trading tab. If somebody cannot be online while anyone
+> is hosting, you can export a copy of this market for them from here.
 
-*The first sentence says nothing, and the rest is about an edge case. This is what somebody
-sees when things are working, so it is the best chance to teach one useful thing — what
-they can do next, or where their balance is.*
+*Rewritten 2026-08-25. It opened with "Everything is in order", which tells somebody nothing
+they could not see, and spent the rest of the paragraph on export. This is the one state a
+working market gets to explain itself in, so it says what is live and where to go next, and
+export is the afterthought it always was.*
 
 ### 1.6 Holding, nobody serving — `:2194`
 
@@ -105,7 +109,7 @@ something that cannot be undone.
 
 > **Create '*[name]*'?**
 >
-> This starts a SEPARATE economy. Anyone who joins it will not see trades from any market
+> This starts a separate economy. Anyone who joins it will not see trades from any market
 > your friends already use, and the two can never be merged afterwards. To join an existing
 > one instead, use Connect.
 >
@@ -126,7 +130,7 @@ something that cannot be undone.
 > **Add another market to this world?**
 >
 > This world can hold several markets and use one at a time. The one you are in now keeps
-> everything — its history, balances and orders — and you can switch back whenever you
+> everything it has: its history, balances and orders. You can switch back whenever you
 > like. The new one starts empty, so the next step is to create it, import one, or connect
 > to somebody hosting.
 >
@@ -147,7 +151,7 @@ something that cannot be undone.
 >
 > *[host]* is a dedicated server serving this market right now (*[N]* events), and it does
 > not stop. Hosting it as well means two hosts sequencing one market, which splits it into
-> two histories that can never be merged — you would lose everything you traded on the
+> two histories that can never be merged. You would lose everything you traded on the
 > losing side. Connect to it from the Network tab instead.
 
 ### 2.6 Somebody else is hosting it — **DANGER** — `:918`
@@ -167,7 +171,7 @@ splitting the market.*
 
 > **Migrate to *[host]*:*[port]*?**
 >
-> Your position in '*[market]*' — *[what you hold]* — is verified by that host and credited
+> Your position in '*[market]*' (*[what you hold]*) is verified by that host and credited
 > to you there. This market is then discarded. Only use this for a market with no history
 > in common with theirs; if you have diverged from the same market, Reset is what you want
 > instead.
@@ -192,7 +196,7 @@ The longest, and the only one assembled from parts. After a fork it reads roughl
 >
 > You parted from the other copy after event *[N]*. The *[M]* events since are yours alone.
 >
-> Comes back when you reconnect: everything up to event *[N]* — your credits, holdings and
+> Comes back when you reconnect: everything up to event *[N]*: your credits, holdings and
 > trades are in their copy too.
 >
 > Handed to your inventory: *[items deposited since the split]*
