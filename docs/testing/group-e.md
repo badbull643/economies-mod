@@ -949,7 +949,41 @@ looking at the screen while it refused.
 
 ## E25. A withdrawal that could not be handed over
 
-**New, never run.** `InventoryBridge.give` used to return void and quietly do nothing when
+**RUN 2026-08-25, and it passed — including the failure case, which was forced rather
+than raced.** The deterministic four ran on `test4`: ordinary withdrawal, a refused
+deposit under `maxDepositUnitsPerWindow: 1` returning exactly once, and every journal in
+every slot left `[]`, which is the real pass condition — a failed hand-over now leaves an
+entry, so an empty journal after seven withdrawals means each was confirmed delivered
+before its record was cleared.
+
+The race was attempted on two worlds and never landed, which is the expected outcome: the
+window is one tick wide and only counts if the world finishes stopping inside it. **So it
+was held open instead.** One line in `InventoryBridge.serverPlayer` — `if (true) return
+null;` — makes every hand-over refuse, which is the same condition without the timing:
+
+```
+04:42:57  [host] seq 250 Withdraw
+04:42:57  could not hand over 1 minecraft:dirt for event 250 — the world was not there
+          to receive it. It is recorded as unsettled and will be reported at next start.
+04:43:15  withdrawal of 1 minecraft:dirt (event 250) may not have reached your inventory
+04:43:15  settled 1 interrupted inventory operation(s) from a previous session
+```
+
+and on screen, `1 withdrawal may not have reached you — see the log`. The ledger debited a
+dirt that never arrived, the record survived to say so, and the next load reported it. All
+four lines were silent before the fix.
+
+**The technique is the reusable part.** A condition that cannot be scheduled can usually be
+*held open* by the same one-line edit that would disable the fix — this project already
+trusts nothing until it has been seen to fail with its fix removed, and this is that move
+pointed at an input rather than at a guard. Cheaper than a race, and it either works or it
+does not. Revert it afterwards; it costs the market one item, which is real and is the
+point.
+
+*Below is the recipe as written before the run, kept because the deterministic four are
+worth repeating whenever this code is touched.*
+
+**Originally: new, never run.** `InventoryBridge.give` used to return void and quietly do nothing when
 the server was unreachable, and the withdraw path cleared its journal entry regardless — so
 the ledger recorded a withdrawal, the world contained nothing, and no record survived
 saying anything was owed. `give` returns a boolean now and the clear is gated on it.
