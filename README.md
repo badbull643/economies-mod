@@ -104,7 +104,7 @@ more than anything else; the mod logs what it did and why.
 
 | | |
 | --- | --- |
-| [`docs/HANDBOOK.md`](docs/HANDBOOK.md) | How to use it, and how it works. Start here |
+| [`docs/HANDBOOK.md`](docs/HANDBOOK.md) | How to use it and how it works, including playing with friends who are not on your network. Start here |
 | [`docs/design/`](docs/design) | Design notes for the harder decisions, measured rather than asserted |
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | What is deliberately not built, and what it costs to leave it |
 
