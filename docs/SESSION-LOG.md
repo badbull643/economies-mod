@@ -31,7 +31,7 @@ behaviour are all still guesses — see §8.
     depositCapTest attestationTest hostTrustTest splitPointTest
 ```
 
-Expect `735 / 15 / 5 / 16 / 51 / 6 / 12 / 16 / 27`. CI runs the same nine on every push
+Expect `746 / 15 / 5 / 16 / 51 / 6 / 12 / 26 / 27`. CI runs the same nine on every push
 since 2026-08-23, so a failure here that passes there — or the reverse — is about the
 machine rather than the code, and is worth chasing as such.
 
@@ -131,10 +131,17 @@ new observation to argue from, but nothing forces it today.
 - **The first CI run has never executed anywhere.** If it goes red on `Assemble` rather
   than on the suites, that is the toolchain and not the code — the steps are split so the
   two can be told apart.
-- **Item 8 has never run in Minecraft.** `/trade hostrules publish`, then host the same
-  market from a second world and check the rules were taken up. Everything about it is
-  covered by `coreTests` L17/L18 and `admissionTest` A10, and none of that is a person
-  looking at the thing.
+- ~~**Item 8 has never run in Minecraft.**~~ **It has, and it worked** — the author ran it
+  some time before 2026-08-25 and said so when this line was quoted back at them for the
+  fourth time. It is confirmed again by `E26`'s run: rules published, adopted by a host,
+  and synced whole to a second player.
+
+  *Left struck through rather than deleted, because of how it lasted.* This entry was read
+  aloud from this file in four separate answers, each time as a live gap, by somebody who
+  had never asked whether it still was. A checklist that is only ever appended to becomes
+  a list of things that were true once — and the cost is not the wasted suggestion, it is
+  that a stale "never tested" is indistinguishable from a real one, so the real ones stop
+  being believed.
 - **Item 2's live half is done** — five sessions, and the last of them confirmed the Host
   button greyed on a slot holding a snapshot and no history, which is the check the whole
   of step 4 rests on.
@@ -158,28 +165,31 @@ new observation to argue from, but nothing forces it today.
   look like genuine predecessors of this file; nobody has said whether they should be
   tracked.
 
-### Two decisions nobody has made
+### One decision nobody has made
 
-- **`--creator-key` on the next dedicated-server start.** Its market was deleted so the
-  config and the log would stop describing different economies, and the restart that
-  recreates it is the *only* moment this can be chosen. Without it the box is its own
-  creator and that market's policy is frozen for good. §9, and §7 for why.
+- ~~**`--creator-key` on the next dedicated-server start.** The restart that recreates
+  that market is the *only* moment this can be chosen, and without it the box is its own
+  creator and that market's policy is frozen for good.~~ **Closed 2026-08-25: the config
+  sets policy now, and the flag is a preference rather than a trap.**
 
-  **Three things established 2026-08-24, which make this less open than it reads.** The
-  config levers named in §7 are *bootstrap-only*: `cfg.welcomeGrant`, `cfg.listingFee` and
-  `cfg.stipendAmount` are read inside `bootstrap()` and nowhere else, so on an existing
-  market editing `server-config.json` changes nothing. Frozen means frozen. The creator
-  key must be a **fresh** one — Alice's and Bob's were published, and a market whose policy
-  is frozen *and* forgeable is worse than either. And `creatorUserId` is not in the config
-  yet; bootstrap refuses the flag without it.
+  A server that created its market publishes a `MarketPolicy` from its config's `policy`
+  block at startup — it is the creator, so this is that authority used through a file
+  instead of a screen. Edit, restart, done, like every other setting in that file.
+  `--creator-key` still exists and still names a player as creator, which is the better
+  answer when a person should own the market and the box is only hardware. It is no
+  longer the difference between a tunable market and a frozen one.
 
-  Worth doing first, since the choice is permanent: bootstrap into a scratch `--config`
-  and `--log`, join as that identity, watch the tax change from the Market screen, then
-  delete the pair and do it for real.
+  **The thing worth carrying is how long the wrong framing survived.** "Policy is frozen
+  for good" was true of the code and wrong about the cause: the authority was always the
+  operator's, and what was missing was a lever, not a right. It sat in this list as a
+  permanent one-shot decision — and was repeated as one, several times, in a single
+  session — until somebody asked why the tax could not simply go in the config file like
+  everything else. **A workaround described often enough starts reading as the design.**
 
-  **And move `logFile` before starting it.** It is `server-market.jsonl` in the repository
-  root, and it was tracked once — added in `b1f35e7`, removed in `0d4e11b`. Started as
-  configured, a live market commits every trade it settles to a public repository.
+  Still true and unrelated to any of that: **move `logFile` before starting a server.**
+  It is `server-market.jsonl` in the repository root and was tracked once — added in
+  `b1f35e7`, removed in `0d4e11b`. Started as configured, a live market commits every
+  trade it settles to a public repository.
 - ~~**`server-identity.key` is tracked, unencrypted.** If that repository is public, so is
   the key.~~ **It was public. Answered 2026-08-24** — and it was three keys, not one. See
   §12.
@@ -1096,10 +1106,16 @@ grant finally has a control — see §7.
   moment those fields were added. `submitPolicy` now builds from current state and hands
   it to the caller to mutate, so forgetting a field means it keeps its value. `U6` pins
   the behaviour.
-- **Only the creator can set policy, and the creator is fixed at genesis.** On a dedicated
-  server bootstrapped without `--creator-key` the creator is the box, which has no screen
-  — so that market's policy is frozen forever. `listingFee` and `stipendAmount` in
-  `ServerConfig` exist for exactly that case.
+- **Only the creator can set policy, and the creator is fixed at genesis.** ~~On a
+  dedicated server bootstrapped without `--creator-key` the creator is the box, which has
+  no screen — so that market's policy is frozen forever. `listingFee` and `stipendAmount`
+  in `ServerConfig` exist for exactly that case.~~ **Corrected 2026-08-25.** The first
+  sentence is still the rule. The rest was wrong about what followed from it: the box
+  being the creator means the *operator* holds that authority, and all that was missing
+  was a way to use it. `ServerConfig.policy` is that way — a block of six boxed fields,
+  published as a `MarketPolicy` at startup by a server that created the market, absent
+  meaning leave alone. `listingFee` and `stipendAmount` at the top level remain
+  bootstrap-only, and `welcomeGrant` is still the on/off for issuing grants at all.
 - **The welcome grant has a control now**, behind DANGER rather than a plain confirm.
   Rotating markets previously granted 1000 with nothing able to change it, against items
   trading for 1–2.
@@ -1188,12 +1204,13 @@ out to be is worth more than the fact that it is gone.*
   therefore invisible, which is §0.18's whole argument applied to the file it was written
   about.
 
-  **One thing to decide before starting it**, and it is the only moment the decision can
+  ~~**One thing to decide before starting it**, and it is the only moment the decision can
   be made: bootstrapping without `--creator-key` makes the box itself the creator, and a
-  market whose creator is a machine with no screen has its policy frozen for good. That is
-  recorded in §7 as a known trap, and this restart is the one chance to avoid it. Passing
-  `--creator-key` with a player's key, and that player's uuid in `creatorUserId`, leaves
-  the policy changeable from the Market screen afterwards.
+  market whose creator is a machine with no screen has its policy frozen for good.~~
+  **No longer true — see §7 and the header.** The operator sets that market's policy from
+  the config's `policy` block, so nothing about this start is one-shot except which
+  identity is recorded, and both identities can now set policy: the box through the file,
+  a player through the screen.
 
 - ~~**`server-identity.key` is tracked, unencrypted**, along with the rest of `run/`,
   because `.gitignore` was removed on purpose. Raised before and reaffirmed, so this is
@@ -1532,12 +1549,15 @@ All three are unencrypted PKCS#8 private keys, published since `b1f35e7` — a c
   what makes a published one worthless. A rewrite would break every clone and the branch
   relationship to buy nothing on top of that.
 
-**The part that would have cost something.** The next dedicated-server bootstrap is the
-one moment `--creator-key` can be chosen, and the creator is the only identity that can
-ever set a market's policy. Bootstrapping with one of these keys would have produced a
-market whose policy was **both frozen and forgeable** — anybody with a copy of a public
-repository could sign its rates. That is the version of this that had teeth, and it was
-two decisions away from happening by default.
+**The part that would have cost something.** The creator is the only identity that can
+ever set a market's policy, so bootstrapping with one of these keys would have produced a
+market whose rates **anybody with a copy of a public repository could sign**. That is the
+version of this that had teeth, and it was two decisions away from happening by default.
+
+*The "frozen and forgeable" phrasing this paragraph used has since lost half its force:
+policy is not frozen for a box-created market any more, because the operator sets it from
+the config. Forgeable was always the sharper half and is unchanged — do not bootstrap with
+a key that has been published.*
 
 **Still true and still tracked:** `known-keys.json` and the peer caches, which hold public
 keys and are meant to be readable. And `server-market.jsonl`, which does not exist now but

@@ -17,5 +17,6 @@
   "maxWelcomeGrant": 500,
   "welcomeGrant": 1000,
   "listingFee": 0,
-  "stipendAmount": 0
+  "stipendAmount": 0,
+  "policy": {}
 }

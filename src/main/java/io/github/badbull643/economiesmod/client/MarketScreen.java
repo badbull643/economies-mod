@@ -3074,7 +3074,15 @@ public class MarketScreen extends Screen {
         // clear this entry — settle it here rather than leaving a false refund waiting.
         if (journal != null && !s.pending && !s.accepted) {
             journal.clearDeposit(clientEventId);
-            InventoryBridge.give(mc.player, req.item, (int) req.qty);
+            if (!InventoryBridge.give(mc.player, req.item, (int) req.qty)) {
+                // Cleared, then not handed back. Put the record in again so the journal
+                // is what it claims to be — the note of something owed — rather than
+                // nothing at all. Give refuses before touching an inventory, so this
+                // cannot pay twice.
+                journal.recordDeposit(MinecraftIds.userIdOf(mc.player), clientEventId,
+                        req.itemId, req.qty);
+                status = "Could not hand those back yet — still recorded as owed";
+            }
         }
         report(s, "Listed " + req.qty + " at " + req.price + outlook,
                 "Sell sent" + outlook);

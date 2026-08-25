@@ -176,7 +176,9 @@ discovery list. When the box stops, both sources go false and Host un-greys. So 
 client replica is a disaster-recovery copy, and a hundred of them make a dedicated market
 effectively un-killable. This is real, deliberate, and the strongest argument for the
 local log — and a dedicated market with no surviving replica may not even be re-creatable
-with the same policy, because of the `--creator-key` trap in the session log's §7.
+with the same policy — its opening rates lived in one operator's config file, and
+nothing in the market says what they were. (The "--creator-key trap" this line used to
+cite is gone: a server sets its own market's policy from that config now.)
 
 **2. The host cannot fabricate a player's actions.** This comes from events being *signed
 by their author*, not from the client replaying anything, and it survives whatever the

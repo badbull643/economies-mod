@@ -86,8 +86,15 @@ public class EconomiesmodClient implements ClientModInitializer {
             if (mc.player != null) {
                 PendingOps.Op refund;
                 while ((refund = MarketStateHolder.nextRefundDue()) != null) {
-                    InventoryBridge.give(mc.player, MinecraftIds.idToItem(refund.itemId),
-                            (int) refund.quantity);
+                    if (!InventoryBridge.give(mc.player,
+                            MinecraftIds.idToItem(refund.itemId), (int) refund.quantity)) {
+                        // Nothing was handed over, so put it back and stop draining —
+                        // the next tick with a world to give into will settle it. Without
+                        // the break this would spin: the queue refills as fast as it
+                        // empties while whatever stopped the hand-over is still true.
+                        MarketStateHolder.returnRefundDue(refund);
+                        break;
+                    }
                     System.out.println("[economiesmod] returned " + refund.quantity + " "
                             + refund.itemId + " — the host refused that deposit");
                 }
@@ -98,8 +105,14 @@ public class EconomiesmodClient implements ClientModInitializer {
                 // belongs to it, and a reset is triggered from a button.
                 MarketStateHolder.Refund owed;
                 while ((owed = MarketStateHolder.nextResetRefund()) != null) {
-                    InventoryBridge.give(mc.player, MinecraftIds.idToItem(owed.itemId),
-                            (int) owed.quantity);
+                    if (!InventoryBridge.give(mc.player, MinecraftIds.idToItem(owed.itemId),
+                            (int) owed.quantity)) {
+                        // These exist only in memory — the branch that recorded them has
+                        // already been deleted — so dropping one here is the one loss in
+                        // this file that nothing could recover afterwards.
+                        MarketStateHolder.returnResetRefund(owed);
+                        break;
+                    }
                     System.out.println("[economiesmod] returned " + owed.quantity + " "
                             + owed.itemId + " — deposited after the split, and the reset"
                             + " discarded the only record of them");
@@ -174,7 +187,25 @@ public class EconomiesmodClient implements ClientModInitializer {
             // This may fire on the network reader thread — inventory work must be on
             // the game thread.
             mc.execute(() -> {
-                InventoryBridge.give(mc.player, item, (int) w.quantity);
+                // Both read again here rather than trusted from the check above: this
+                // runs a tick or more later, and what was true when the event arrived
+                // need not still be. The window is small and real — quitting to title
+                // while a withdraw is in flight stops the integrated server, and the
+                // hand-over then has nowhere to go.
+                if (mc.player == null) return;
+                if (!InventoryBridge.give(mc.player, item, (int) w.quantity)) {
+                    // The journal entry stays, and that is the whole point of it. The
+                    // debit is already in the log — durable, signed, replicated — so
+                    // without this the ledger says the withdrawal happened, the world
+                    // holds nothing, and nothing anywhere records that anything is owed.
+                    // A surviving entry costs a message at next start; an entry cleared
+                    // after a failed hand-over costs the items, permanently.
+                    System.err.println("[economiesmod] could not hand over "
+                            + w.quantity + " " + w.itemId + " for event " + se.seq
+                            + " — the world was not there to receive it. It is recorded"
+                            + " as unsettled and will be reported at next start.");
+                    return;
+                }
                 if (journal != null) journal.clearWithdraw(se.seq);
             });
         });
@@ -196,7 +227,18 @@ public class EconomiesmodClient implements ClientModInitializer {
                         + " — unknown item");
                 continue;
             }
-            InventoryBridge.give(mc.player, item, (int) op.quantity);
+            if (!InventoryBridge.give(mc.player, item, (int) op.quantity)) {
+                // resolvePendingOps cleared the journal entry before handing back, which
+                // is deliberate: an entry surviving a completed refund pays it twice at
+                // the next start. That reasoning holds while every attempt is a delivery.
+                // This is the case where it was not one, so the record goes back in and
+                // the next start tries again — and the line below, which used to be
+                // printed either way, is not printed for something that did not happen.
+                MarketStateHolder.returnRefundDue(op);
+                System.err.println("[economiesmod] could not return " + op.describe()
+                        + " — nowhere to put it yet; it is still recorded as owed");
+                continue;
+            }
             System.out.println("[economiesmod] returned " + op.describe()
                     + " from a deposit that never completed");
         }
