@@ -272,50 +272,129 @@ behind it. If it refuses on click it will say why.
 
 ### The dedicated server
 
-A standalone process that keeps the market up whether or not anybody is playing:
+A standalone process — no Minecraft, no world — that keeps a market up whether or not
+anybody is playing. Hosting rotates for a friend group; a server is for a group that would
+rather one machine always be there.
+
+#### Setting one up
+
+**1. Pick a folder that is not the repository.** Everything the server creates lands
+beside its log file, and one of those things is a private key. Committing a market's
+history to source control by accident is easy and permanent.
 
 ```
-./gradlew hostServer --args="--config server-config.json"
+mkdir ~/economies-server
 ```
 
-Flags: `--config`, `--write-config` (write the effective settings and exit),
-`--creator-key`, `--port`, `--log`, `--name`, `--market`, `--bind`.
+**2. Write a config.** Nothing exists yet, so this creates one with every setting in it:
 
-**The first start with no history creates the market** and records who owns it forever.
-By default that owner is the server itself, and the operator sets the market's economics
-the same way they set everything else — in the config:
+```
+./gradlew hostServer --args="--config ~/economies-server/server.json --write-config"
+```
+
+**3. Edit it.** The three that matter before a first start:
 
 ```jsonc
-"policy": {
-  "taxBps": 100,          // 1% trading fee
-  "welcomeGrant": 500,
-  "listingFee": 2,
-  "listingFreeOrders": 0,
-  "stipendAmount": 20,
+"logFile": "/home/you/economies-server/market.jsonl",   // NOT inside the repository
+"port": 25555,
+"hostName": "our server",                               // what players see in the list
+
+"policy": {                    // the market's own economics — see below
+  "taxBps": 100,               // 1% trading fee, taken from the seller and destroyed
+  "welcomeGrant": 500,         // what a newcomer starts with
+  "listingFee": 2,             // charged to place an order, never refunded
+  "listingFreeOrders": 0,      // orders held open before the fee escalates; 0 = never
+  "stipendAmount": 0,          // 0 = no stipend
   "stipendEveryFills": 50
 }
 ```
 
-Edit, restart, done. A server that created its market publishes the change as a
-`MarketPolicy` event, exactly as a player would from the Market screen — it is the
-creator, after all. **Anything you leave out is left alone**, so a config that mentions
-only the tax will not touch the grant or the fee.
+**4. Start it.**
 
-Two things to know. A server that is *hosting* a market somebody else created has no
-authority over its policy and will say so rather than changing anything. And a policy the
-market would refuse — a stipend that outruns its own listing fees, a grant above the
-host's ceiling — is reported and skipped, with the market left on what it had.
+```
+./gradlew hostServer --args="--config ~/economies-server/server.json"
+```
 
-**`--creator-key` is the other way**, and it is now a preference rather than a trap: it
-names a *player* as creator, so the rules are changed from the Market screen in game
-instead of from the file. Worth it if a person should own the market and the box is just
-hardware. Otherwise the config is simpler, and the key is one more thing to keep
-somewhere.
+The first start with an empty log creates the market. Expect roughly:
+
+```
+[host] created 'our server's market' owned by this server
+[host] policy updated from this config at event 3 — tax 0 → 100, listing fee 0 → 2
+[host] listening on port 25555
+```
+
+**5. Join it.** In game: **Network tab → address → Connect**, using `host:25555`. On the
+same machine `localhost:25555` works.
+
+#### What it creates, all beside the log
+
+| File | What it is |
+| --- | --- |
+| `market.jsonl` | The market. This is the only irreplaceable file — **back it up** |
+| `server-identity.key` | The server's private key. Never share it, never commit it |
+| `server-peers.json` | Who has connected, from where. The operator's own note |
+| `known-keys.json` | Identities seen before, for recognising them again |
+
+#### Changing things afterwards
+
+**Host rules** — admission, deposit caps, world checks, migration limits, the welcome-grant
+ceiling, port, name. Edit the config, restart. They belong to whoever is hosting and take
+effect immediately.
+
+**The market's economics** — the `policy` block. Edit, restart, and a server that created
+its market publishes the change as a `MarketPolicy` event, exactly as a player would from
+the Market screen. It is the creator, after all.
+
+Two things worth knowing:
+
+- **Anything left out is left alone.** A block that mentions only the tax will not touch
+  the grant or the fee. That is why the fields are absent rather than zero when unset.
+- **A policy the market would refuse is reported and skipped** — a stipend that outruns
+  its own listing fees, a grant above the host's ceiling — and the market keeps running on
+  what it had.
+
+Running `--write-config` again rewrites the file with the numbers actually in force, which
+is the quickest way to see what a market ended up with.
+
+#### Who owns the market
+
+By default the server does, and the operator changes policy through the config as above.
+
+**`--creator-key` names a player as creator instead**, so the rules are changed from the
+Market screen in game. Worth it when a person should own the market and the box is only
+hardware; otherwise the config is simpler and the key is one more thing to keep somewhere.
+It is used on the first start only, needs `creatorUserId` in the config, and cannot be
+changed afterwards — the creator is recorded at genesis and there is no event that moves
+it.
+
+#### If something looks wrong
+
+| It says | It means |
+| --- | --- |
+| `the policy block in this config is not being applied` | This server is hosting a market it did not create. Only the creator sets policy; these settings reach a market this server creates itself |
+| `the policy block in this config was refused: …` | The numbers break a market rule — usually the stipend interlock. The market is fine and unchanged |
+| `this market grants N, and welcomeGrant is set to M` | The grant amount is the market's, fixed when it was created. The config setting only chooses whether this server issues grants at all |
+| `port already in use` | Something else has 25555, or a previous run has not exited |
+
+#### Two differences from a friend hosting
+
+A dedicated server **does not hand out its peer list** — `server-peers.json` stays the
+operator's note rather than something clients learn from. And **clients keep only a
+snapshot** of a dedicated market rather than the whole history, since the box is always
+there; `/trade archive on` opts back in for anybody who wants a full copy.
 
 ### Who can join
 
-The host decides, through `host-config.json` (see [§9](#9-host-rules)). By default,
-anybody.
+The host decides, and **which file it reads depends on which kind of host it is** — one
+of the easier things to get wrong when moving between the two:
+
+| Hosting from | Reads |
+| --- | --- |
+| Your game | `host-config.json`, beside that world's market. `/trade hostconfig write` creates it |
+| A dedicated server | Its own `--config` file — the one `--write-config` produced |
+
+Both hold the same host rules and mean the same things; see [§9](#9-host-rules). By
+default, anybody may join either.
 
 ---
 
@@ -409,12 +488,17 @@ replica applies them identically, and only the **creator** can change them.
 ### Host rules — in a file, belonging to whoever is hosting
 
 Admission, deposit caps, world checks, migration limits, the welcome-grant ceiling. They
-live in `host-config.json` beside the market, and they **change when hosting rotates**,
-because they are that host's defence against its clients rather than the market's
-defence against its host.
+**change when hosting rotates**, because they are that host's defence against its clients
+rather than the market's defence against its host.
 
-`/trade hostconfig` prints them. `/trade hostconfig write` creates the file with every
-setting in it, ready to edit.
+Where they live depends on who is hosting: `host-config.json` beside that world's market
+when somebody hosts from their game, or the dedicated server's own `--config` file. Same
+settings, same meanings, two files — because they belong to the host and not to the
+market.
+
+`/trade hostconfig` prints the ones in force for a world. `/trade hostconfig write`
+creates the file with every setting in it, ready to edit. For a server it is
+`--write-config`.
 
 | Setting | What it does |
 | --- | --- |
