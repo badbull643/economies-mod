@@ -746,10 +746,9 @@ public class MarketScreen extends Screen {
         final UUID me = MinecraftIds.userIdOf(mc.player);
 
         showConfirm("Create '" + name + "'?",
-                "This starts a separate economy. Anyone who joins it will not see trades"
-                        + " from any market your friends already use, and the two can"
-                        + " never be merged afterwards. To join an existing one instead,"
-                        + " use Connect.",
+                "This starts a separate economy. Anyone who joins will not see trades"
+                        + " from a market your friends already use, and the two can never"
+                        + " be merged. To join an existing one, use Connect.",
                 "Create", () -> {
                     Settings s = settings();
                     if (s != null) s.setLastMarketName(name);
@@ -837,7 +836,7 @@ public class MarketScreen extends Screen {
     private void onImport() {
         showConfirm("Import a market from file?",
                 "This world will adopt the market in your economiesmod-imports folder"
-                        + " as its own. Every event in it is verified before anything is"
+                        + " as its own. Every event is verified before anything is"
                         + " written, so a tampered file is refused rather than trusted.",
                 "Import", this::startImport);
     }
@@ -905,11 +904,11 @@ public class MarketScreen extends Screen {
                     showDanger("You cannot host this market",
                             h.reply.hostName + " is a dedicated server serving this"
                                     + " market right now (" + h.reply.lastSeq + " events),"
-                                    + " and it does not stop. Hosting it as well means two"
-                                    + " hosts sequencing one market, which splits it into"
-                                    + " two histories that can never be merged. You would"
-                                    + " lose everything you traded on the losing side."
-                                    + " Connect to it from the Network tab instead.",
+                                    + " and it does not stop. Two hosts on one market split"
+                                    + " it into two histories that can never be merged,"
+                                    + " and you would lose everything you traded on the"
+                                    + " losing side. Connect to it from the Network tab"
+                                    + " instead.",
                             null, null);
                     return;
                 }
@@ -1745,7 +1744,7 @@ public class MarketScreen extends Screen {
                     + floor + " credits";
             if (typical > 0) {
                 body += typical < floor
-                        ? " — and sales here have been worth about " + typical
+                        ? ". Sales here have been worth about " + typical
                                 + ", so at this rate most would be untaxed."
                         : ", which recent sales here clear comfortably.";
             } else {
@@ -2159,9 +2158,9 @@ public class MarketScreen extends Screen {
                 heading = "This world's market log is unreadable";
                 body = (MarketStateHolder.damageReason() == null
                         ? "The file is damaged." : MarketStateHolder.damageReason())
-                        + " Nothing can be done with it until it is discarded. If"
-                        + " someone else still has this market, you get everything back"
-                        + " when you reconnect to them.";
+                        + " Nothing can be done until it is discarded. If somebody else"
+                        + " still has this market, you get it all back when you"
+                        + " reconnect.";
                 break;
             case MS_NO_MARKET:
                 heading = "This world has no market";
@@ -2169,27 +2168,25 @@ public class MarketScreen extends Screen {
                 // two markets can never be merged", which shouted, and put the warning
                 // where somebody who had already clicked Create would find it.
                 body = "Two markets can never be merged, so if your friends already have"
-                        + " one, join theirs from the Network screen rather than starting"
-                        + " your own. Otherwise, create one here to begin an economy of"
-                        + " your own, or import a file somebody exported.";
+                        + " one, join theirs from the Network screen. Otherwise create"
+                        + " one here, or import a file somebody exported.";
                 break;
             case MS_FORKED:
                 heading = "You have diverged from this market";
                 // "the host will refuse it" read as a fault rather than a safeguard, so
                 // it says whose protection it is and why it exists.
                 body = MarketStateHolder.divergence().describe()
-                        + ". Discarding and reconnecting is the way back, and it costs"
-                        + " only what you did after the split. Everything before it is in"
-                        + " their copy too. Migrating is for moving to a different"
-                        + " market rather than rejoining this one, so a host declines it"
-                        + " on purpose, to keep both copies whole.";
+                        + ". Discard and reconnect to rejoin them. Only what you did"
+                        + " after the split is lost, since everything before it is in"
+                        + " their copy. Migrating is for joining a different market, and"
+                        + " a host declines it here on purpose.";
                 break;
             case MS_BEHIND:
                 heading = "Your copy is behind";
                 body = MarketStateHolder.eventsBehind() + " events have happened that you"
-                        + " do not have. Connect to someone serving this market from the"
-                        + " Network screen and you will catch up automatically. Do not"
-                        + " host until you have.";
+                        + " do not have. Connect to whoever is serving it from the"
+                        + " Network screen and you catch up automatically. Do not host"
+                        + " until you have.";
                 break;
             case MS_CONNECTED:
                 heading = "Connected to '" + (market == null ? "?" : market.marketName()) + "'";
@@ -2199,10 +2196,9 @@ public class MarketScreen extends Screen {
                 // so it says what is live and where to go next, and keeps export as the
                 // afterthought it is.
                 body = "Trading is live, and anything you buy or sell settles for"
-                        + " everybody at once. Your balance and your resting orders are"
-                        + " on the Trading tab. If somebody cannot be online while"
-                        + " anyone is hosting, you can export a copy of this market for"
-                        + " them from here.";
+                        + " everybody at once. Your balance and resting orders are on the"
+                        + " Trading tab. You can also export a copy here, for somebody"
+                        + " who cannot be online while anyone is hosting.";
                 break;
             default:
                 heading = "You hold '" + (market == null ? "?" : market.marketName()) + "'";
@@ -2240,14 +2236,14 @@ public class MarketScreen extends Screen {
             // leaves the market they already have exactly where it is.
             String advice = foreignIsDedicated()
                     ? foreign.reply.hostName + " is a dedicated server running a separate"
-                            + " market ('" + foreign.reply.marketName + "'). It does not"
-                            + " take migrations. To join it, use Add another market and"
-                            + " connect from that one — this market stays as it is, and"
+                            + " market ('" + foreign.reply.marketName + "'), and it does"
+                            + " not take migrations. Use Add another market and connect"
+                            + " from that one. This market stays exactly as it is, and"
                             + " you arrive there on their welcome grant like anyone else."
                     : foreign.reply.hostName + " is running a separate market ('"
                             + foreign.reply.marketName + "'). Migrating carries your"
                             + " whole position there and abandons this one. Add another"
-                            + " market instead to join without giving this one up.";
+                            + " market to join without giving this one up.";
             for (OrderedText line : this.textRenderer.wrapLines(
                     new LiteralText(advice), listW)) {
                 guideLine(m, line, x, y, 0x88CCFF);
@@ -2370,7 +2366,7 @@ public class MarketScreen extends Screen {
                 if (market.isRegistered(me)) {
                     long owedIn = market.stipendEveryFills()
                             - (market.fillsEver() - market.stipendedAtFill(me));
-                    when = owedIn <= 0 ? " — yours is waiting"
+                    when = owedIn <= 0 ? ", and yours is waiting"
                             : ", yours in " + owedIn + " more";
                 }
             }
@@ -2399,10 +2395,9 @@ public class MarketScreen extends Screen {
     private void onAddMarket() {
         showConfirm("Add another market to this world?",
                 "This world can hold several markets and use one at a time. The one you"
-                        + " are in now keeps everything it has: its history, balances and"
-                        + " orders. You can switch back whenever you like. The new"
-                        + " one starts empty, so the next step is to create it, import"
-                        + " one, or connect to somebody hosting.",
+                        + " are in keeps its history, balances and orders, and you can"
+                        + " switch back whenever you like. The new one starts empty:"
+                        + " create it, import one, or connect to somebody hosting.",
                 "Add", () -> {
                     if (MarketStateHolder.addMarketSlot()) {
                         status = "Now using '" + MarketStateHolder.activeSlot()
@@ -3209,7 +3204,7 @@ public class MarketScreen extends Screen {
         } else if (s.accepted) {
             status = s.result.fills.isEmpty()
                     ? successMsg
-                    : "Traded — " + s.result.fills.size() + " fill(s)";
+                    : "Traded: " + s.result.fills.size() + " fill(s)";
         } else {
             status = "Rejected: " + s.reason;
         }
@@ -3234,23 +3229,23 @@ public class MarketScreen extends Screen {
         if (market == null) return "";
 
         OrderBook book = market.peekBook(itemId);
-        if (book == null) return " — nothing on the other side yet, so it will wait";
+        if (book == null) return ". Nothing on the other side yet, so it waits";
 
         List<Order> other = isBid ? book.restingAsks() : book.restingBids();
         if (other.isEmpty()) {
             return isBid
-                    ? " — nobody is selling yet, so it will wait for one"
-                    : " — nobody is buying yet, so it will wait for one";
+                    ? ". Nobody is selling yet, so it waits"
+                    : ". Nobody is buying yet, so it waits";
         }
 
         long best = other.get(0).value();
         boolean crosses = isBid ? best <= price : best >= price;
-        if (crosses) return " — should trade now";
+        if (crosses) return ". Should trade now";
 
         return isBid
-                ? " — best ask is " + best + ", so it waits until someone sells at "
+                ? ". Best ask is " + best + ", so it waits until somebody sells at "
                         + price + " or less"
-                : " — best bid is " + best + ", so it waits until someone buys at "
+                : ". Best bid is " + best + ", so it waits until somebody buys at "
                         + price + " or more";
     }
 
@@ -3538,7 +3533,7 @@ public class MarketScreen extends Screen {
 
         if (MarketStateHolder.chainBrokenAt() != -1) {
             String why = MarketStateHolder.damageReason();
-            out.add(new Alert("LOG UNUSABLE — " + (why == null ? "damaged" : why),
+            out.add(new Alert("LOG UNUSABLE: " + (why == null ? "damaged" : why),
                     0xFF6666, SCREEN_MARKET));
             // A log that can't be read makes every other reading of it meaningless.
             return out;
@@ -3555,7 +3550,7 @@ public class MarketScreen extends Screen {
         // can be showing before anyone has tried to connect.
         MarketStateHolder.Divergence split = MarketStateHolder.divergence();
         if (split != null) {
-            out.add(new Alert("FORKED — " + split.describe(), 0xFF8844, SCREEN_MARKET));
+            out.add(new Alert("FORKED: " + split.describe(), 0xFF8844, SCREEN_MARKET));
         }
 
         return out;

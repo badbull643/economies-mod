@@ -4,9 +4,13 @@
 column on the Market tab, and the confirmation dialogs. Written out in full so the wording
 can be judged as writing rather than read one line at a time out of a source file.*
 
-**How to use this.** Mark anything you want changed — a note, a rewrite, a "cut this" —
-and the edits go back into `MarketScreen.java`. Line numbers are given so a change can be
-found; they move, the text does not.
+**How to use this.** Mark anything you want changed and the edits go back into
+`MarketScreen.java`. Line numbers are given so a change can be found; they move, the text
+does not.
+
+*Updated 2026-08-25 after a pass that shortened most of these and took the em-dashes out of
+everything a player reads. Dashes survive in code comments, where nobody is being asked to
+take an action from them.*
 
 Two things to keep in mind while reading:
 
@@ -27,17 +31,16 @@ market's facts and the slot switcher.
 
 > **This world's market log is unreadable**
 >
-> *[the damage reason, or "The file is damaged."]* Nothing can be done with it until it is
-> discarded. If someone else still has this market, you get everything back when you
-> reconnect to them.
+> *[the damage reason, or "The file is damaged."]* Nothing can be done until it is
+> discarded. If somebody else still has this market, you get it all back when you
+> reconnect.
 
 ### 1.2 No market here — `:2166`
 
 > **This world has no market**
 >
 > Two markets can never be merged, so if your friends already have one, join theirs from
-> the Network screen rather than starting your own. Otherwise, create one here to begin an
-> economy of your own, or import a file somebody exported.
+> the Network screen. Otherwise create one here, or import a file somebody exported.
 
 *Rewritten 2026-08-25. It read "do NOT create one, since two markets can never be merged",
 which shouted, and put the warning where somebody who had already clicked Create would
@@ -47,10 +50,9 @@ find it. The reason comes first now.*
 
 > **You have diverged from this market**
 >
-> *[where the split was]*. Discarding and reconnecting is the way back, and it costs only
-> what you did after the split. Everything before it is in their copy too. Migrating is for
-> moving to a different market rather than rejoining this one, so a host declines it on
-> purpose, to keep both copies whole.
+> *[where the split was]*. Discard and reconnect to rejoin them. Only what you did after
+> the split is lost, since everything before it is in their copy. Migrating is for joining
+> a different market, and a host declines it here on purpose.
 
 *Rewritten 2026-08-25. "the host will refuse it" read as a fault rather than a safeguard,
 so it now says whose protection it is.*
@@ -59,16 +61,16 @@ so it now says whose protection it is.*
 
 > **Your copy is behind**
 >
-> *[N]* events have happened that you do not have. Connect to someone serving this market
-> from the Network screen and you will catch up automatically. Do not host until you have.
+> *[N]* events have happened that you do not have. Connect to whoever is serving it from
+> the Network screen and you catch up automatically. Do not host until you have.
 
 ### 1.5 Connected — `:2188`
 
 > **Connected to '*[market]*'**
 >
 > Trading is live, and anything you buy or sell settles for everybody at once. Your balance
-> and your resting orders are on the Trading tab. If somebody cannot be online while anyone
-> is hosting, you can export a copy of this market for them from here.
+> and resting orders are on the Trading tab. You can also export a copy here, for somebody
+> who cannot be online while anyone is hosting.
 
 *Rewritten 2026-08-25. It opened with "Everything is in order", which tells somebody nothing
 they could not see, and spent the rest of the paragraph on export. This is the one state a
@@ -88,15 +90,14 @@ Two variants, appended below the paragraph above.
 
 **A dedicated server, running a different market:**
 
-> *[host]* is a dedicated server running a separate market ('*[name]*'). It does not take
-> migrations. To join it, use Add another market and connect from that one — this market
-> stays as it is, and you arrive there on their welcome grant like anyone else.
+> *[host]* is a dedicated server running a separate market ('*[name]*'), and it does not
+> take migrations. Use Add another market and connect from that one. This market stays
+> exactly as it is, and you arrive there on their welcome grant like anyone else.
 
 **Somebody's game, running a different market:**
 
 > *[host]* is running a separate market ('*[name]*'). Migrating carries your whole position
-> there and abandons this one. Add another market instead to join without giving this one
-> up.
+> there and abandons this one. Add another market to join without giving this one up.
 
 ---
 
@@ -109,9 +110,9 @@ something that cannot be undone.
 
 > **Create '*[name]*'?**
 >
-> This starts a separate economy. Anyone who joins it will not see trades from any market
-> your friends already use, and the two can never be merged afterwards. To join an existing
-> one instead, use Connect.
+> This starts a separate economy. Anyone who joins will not see trades from a market your
+> friends already use, and the two can never be merged. To join an existing one, use
+> Connect.
 >
 > `[Create]`
 
@@ -120,8 +121,8 @@ something that cannot be undone.
 > **Import a market from file?**
 >
 > This world will adopt the market in your economiesmod-imports folder as its own. Every
-> event in it is verified before anything is written, so a tampered file is refused rather
-> than trusted.
+> event is verified before anything is written, so a tampered file is refused rather than
+> trusted.
 >
 > `[Import]`
 
@@ -129,10 +130,9 @@ something that cannot be undone.
 
 > **Add another market to this world?**
 >
-> This world can hold several markets and use one at a time. The one you are in now keeps
-> everything it has: its history, balances and orders. You can switch back whenever you
-> like. The new one starts empty, so the next step is to create it, import one, or connect
-> to somebody hosting.
+> This world can hold several markets and use one at a time. The one you are in keeps its
+> history, balances and orders, and you can switch back whenever you like. The new one
+> starts empty: create it, import one, or connect to somebody hosting.
 >
 > `[Add]`
 
@@ -150,9 +150,9 @@ something that cannot be undone.
 > **You cannot host this market**
 >
 > *[host]* is a dedicated server serving this market right now (*[N]* events), and it does
-> not stop. Hosting it as well means two hosts sequencing one market, which splits it into
-> two histories that can never be merged. You would lose everything you traded on the
-> losing side. Connect to it from the Network tab instead.
+> not stop. Two hosts on one market split it into two histories that can never be merged,
+> and you would lose everything you traded on the losing side. Connect to it from the
+> Network tab instead.
 
 ### 2.6 Somebody else is hosting it — **DANGER** — `:918`
 
