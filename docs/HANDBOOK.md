@@ -347,10 +347,23 @@ whatever it says afterward should be correct.
 By default the server does, and the operator changes policy through the config.
 
 **`--creator-key` names a player as creator instead**, so the rules get changed from the
-Market screen in game. could be worth it when a person should own the market and the box is only
-hardware. Otherwise the config is simpler and the key is one more thing to keep somewhere.
-It's used on the first start only, needs `creatorUserId` in the config, and can't be changed
-afterwards, since the creator is recorded at genesis and nothing moves it (wouldnt).
+Market screen in game. Could be worth it when a person should own the market and the box is
+only hardware. Otherwise the config is simpler and the key is one more thing to keep somewhere.
+
+**Exactly when to use it:** on the server's very first start, the one that creates the market
+— step 4 above, before there's a `market.jsonl` with anything in it. Two things have to be
+true of that one run:
+
+1. `creatorUserId` is already set in the config to that player's identity (their UUID).
+2. The start command carries the flag, pointing at that player's own key file:
+   ```
+   java -jar economies-server.jar --config server.json --creator-key alice.key
+   ```
+
+Every start after that is the ordinary command with no flag — `--creator-key` is ignored (and
+says so) once a market already exists, because the creator was only ever needed to sign
+genesis, and genesis has already happened. The key file doesn't need to live on this machine
+again afterward.
 
 #### If something looks wrong
 
