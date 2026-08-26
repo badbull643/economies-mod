@@ -249,7 +249,7 @@ would rather one machine was always there.
 
 #### What the operator needs
 
-**One jar and a Java 8 runtime.** `economies-server.jar` is the jar you need
+**One jar and a Java 8 runtime.** `economies-server.jar` is the jar you need 
 
 Keeping one running, updating it and what to back up are in
 [§12](#12-running-a-server).
@@ -350,6 +350,8 @@ By default the server does, and the operator changes policy through the config.
 Market screen in game. Could be worth it when a person should own the market and the box is
 only hardware. Otherwise the config is simpler and the key is one more thing to keep somewhere.
 
+## Optional
+
 **Exactly when to use it:** on the server's very first start, the one that creates the market
 — step 4 above, before there's a `market.jsonl` with anything in it. Two things have to be
 true of that one run:
@@ -374,17 +376,18 @@ again afterward.
 | `this market grants N, and welcomeGrant is set to M` | The amount is the market's, fixed when it was created. The config setting only chooses whether this server issues grants at all |
 | `port already in use` | Something else has 25555, or a previous run hasn't exited |
 
+## Extra Notes
+
 #### Two differences from a friend hosting
 
 A dedicated server **doesn't hand out its peer list**. `server-peers.json` stays the
 operator's note rather than something clients learn from. And **clients keep only a
 snapshot** of a dedicated market rather than the whole history, since the box is always
-there. `/trade archive on` opts back in for anybody who wants a full copy.
+there. `/trade archive on` opts back in for anybody who wants a full copy of the market.
 
 ### Who can join
 
-The host decides, and which file it reads depends on which kind of host it is. This is one
-of the easier things to get wrong when moving between the two.
+The host decides, and which file it reads depends on which kind of host it is.
 
 | Hosting from | Reads |
 | --- | --- |
@@ -398,47 +401,22 @@ default anybody may join either.
 
 ## 7. Playing with friends who aren't on your network
 
-**Open to LAN only reaches your own network.** If your friends are elsewhere, something has
-to make their machine able to reach yours, and there are two connections that need it, which
-is the bit people miss.
 
-| Connection | What it is |
-| --- | --- |
-| Minecraft | Open to LAN, on whatever port Minecraft picks |
-| The market | This mod's own socket, on the port in the Host field, 25555 by default |
-
-They're separate. Forwarding one and not the other gets you a world you can join with a
-market you can't, or the reverse.
+| Connection | What it is | You need it for |
+| --- | --- | --- |
+| The market | This mod's own socket, on the port in the Host field, 25555 by default | Trading. Always. |
 
 ### The easy way: a virtual LAN
 
-**ZeroTier**, **Radmin VPN** or **Hamachi** put everybody on one virtual network, and both
-connections then work exactly as they do at home. No router settings, no public IP, and
-nothing to undo afterwards.
+**ZeroTier**, **Radmin VPN** or **Hamachi** put everybody on one virtual network, and the
+market connection should work.
 
 With ZeroTier: everyone installs it, one person creates a network and shares its ID, everyone
 joins that ID, and the creator authorises them in the ZeroTier panel. Each machine then has a
 second address, usually starting `10.` or `172.`, and that's the address to type into
-**Connect**, and the one to give people for Open to LAN.
+**Connect**.
 
-This is how the mod's own two-machine testing was done, and it's what to reach for first.
-
-### The other way: port forwarding
-
-If you'd rather not install anything, forward **both** ports on the host's router:
-
-- the market port, 25555 by default
-- the port Minecraft prints when you click Open to LAN, which changes every time unless you
-  set it
-
-Then friends connect to your public IP. It works, but it exposes both ports to the internet,
-and Minecraft's LAN port moving each session makes it tedious.
-
-### The third way: a dedicated server
-
-If the box already has a public address, none of this applies. Run
-[the dedicated server](#the-dedicated-server) on it and everyone connects to `address:25555`.
-Only the market needs to reach it, since nobody is joining a Minecraft world on that machine.
+Alternatively use a dedicated server too sidestep all of this.
 
 ### If it won't connect
 
@@ -452,20 +430,13 @@ Only the market needs to reach it, since nobody is joining a Minecraft world on 
 
 ---
 
-## 8. More than one market
+## 8. More than one market (May remove this feature)
 
 A world can hold several markets with one of them **active**. Market tab → **Add another
 market** makes a new slot, and the switcher moves between them.
 
 Why switch rather than belong to both at once? Currency doesn't move between markets and an
-inventory can't be spent twice, so being in two at once is sound in principle. The problem is
-that every figure in the mod would have to fan out across markets: your position, the fork
-checks, migration, notifications, the whole screen. Switching costs almost nothing and covers
-what people actually wanted, which is a friend group some evenings and a bigger server
-otherwise.
-
-It also takes the one-way-door feeling out of leaving a market, since you can join another
-without destroying the first.
+inventory can't be spent twice.
 
 ### Archiving
 
@@ -473,10 +444,10 @@ Connect to a **dedicated server** and your game keeps only a summary of where th
 to, not every event behind it. That history lives on the server, and there's no reason for a
 hundred players to each keep a copy.
 
-If you want the full thing, either to host it yourself or just to have it, `/trade archive
-on` and reconnect once. `/trade archive` says which you've got.
+If you want the full thing, either to host it yourself or enable the command `/trade archive
+on` in minecraft chat and reconnect once. `/trade archive` says which you've got.
 
-A rotating host is unaffected, because there, keeping the history is how hosting rotates.
+A rotating host is unaffected.
 
 ---
 
@@ -492,7 +463,7 @@ online, so it can still warn you a week later when discovery finds nothing at al
 ### "Your history diverged"
 
 Two copies were both traded on while they were apart, so there are now two versions of the
-past. This is the one genuinely bad state and it can't be merged: the two chains disagree
+past. This is the one genuinely bad state and it can't be merged unfortunately: the two chains disagree
 about what happened, and so does every balance after the split.
 
 What the mod does about it:
@@ -530,8 +501,6 @@ arrive.
 
 ## 10. Host rules
 
-Two kinds of rule, and mixing them up causes most of the surprises.
-
 ### Market rules: in the history, the same for everybody
 
 Welcome grant, trading fee, listing fee, stipend. They're recorded as events, every copy
@@ -539,13 +508,10 @@ applies them identically, and only the **creator** can change them.
 
 ### Host rules: in a file, belonging to whoever is hosting
 
-Admission, deposit caps, world checks, migration limits, the welcome-grant ceiling. They
-**change when hosting rotates**, because they're that host's defence against its clients
-rather than the market's defence against its host.
+Admission, deposit caps, world checks, migration limits, the welcome grant ceiling.
 
 Where they live depends on who's hosting: `host-config.json` beside that world's market when
-somebody hosts from their game, or the dedicated server's own `--config` file. Same settings,
-same meanings, two files, because they belong to the host rather than to the market.
+somebody hosts from their game, or the dedicated server's own `--config` file.
 
 `/trade hostconfig` prints the ones in force for a world, and `/trade hostconfig write`
 creates the file with every setting in it. For a server, `--write-config`.
@@ -565,16 +531,14 @@ creates the file with every setting in it. For a server, `--write-config`.
 **What the world checks are worth.** Everything a client says about its own world is a claim
 rather than evidence. A modified client says whatever it likes, and signing it would only
 prove who said it. They're worth having for the casual case, somebody who turned on cheats
-once and thought nothing of it, and for making two claims contradict each other. They aren't
-security.
+once and thought nothing of it, and for making two claims contradict each other. they aren't 
+guaranteed to work.
 
 ### Rotating host defaults
 
 Hosting from your game (Network tab → Host) uses the settings below until you write your own
 `host-config.json` with `/trade hostconfig write`. Two of them resolve differently on a
-dedicated server, marked below, because the two deployments are different in kind: a friend's
-game is a group that already trusts each other, a dedicated server is more often facing a
-stranger.
+dedicated server, marked below.
 
 | Setting | Rotating default | Dedicated default | What it means |
 | --- | --- | --- | --- |
@@ -593,14 +557,11 @@ stranger.
 **Why `refuseCreativeWorlds` and `refuseCheatWorlds` default on, unlike `requireAttestation`.**
 The two world checks only ever act on a client that describes its own world, and a real client
 always does, unconditionally, on every connect. So somebody in creative mode, or with commands
-on, is turned away by default, on the reasoning that an honest mistake ("I forgot I'd left
-cheats on") is the likelier case in a friend group, and it costs them nothing but turning
-cheats off and reconnecting. `requireAttestation` is a different kind of setting: it refuses
+on, is turned away by default, `requireAttestation` is a different kind of setting: it refuses
 anyone who says *nothing at all* about their world, which includes an older build that has
-never heard of attestation. That's a much bigger decision than the other two, so it's left for
-you to make rather than made for you.
+never heard of attestation.
 
-**What `banOnWorldChange` actually does.** It only matters once someone is already connected
+** (Important Setting would recommend turning on) What `banOnWorldChange` actually does.** It only matters once someone is already connected
 and playing normally, having passed the checks above honestly. If they then switch creative
 mode or cheats on mid-session, the market disconnects them either way. Without this setting,
 that's the whole of it: they're free to reconnect once they've turned it back off. With it on,
@@ -608,8 +569,7 @@ the disconnection becomes permanent: their identity is written into this host's 
 they can't reconnect at all until you edit the file to take them back off it. It's off by
 default because the evidence for it is a self-report: it only ever catches someone who told
 the truth about changing their own world, and does nothing to a modified client that simply
-stops telling the truth. Switching it on is choosing a hard line the moment a friend's honesty
-catches them out, over disconnecting them and leaving the door open.
+stops telling the truth. 
 
 ### Rules a group can agree once
 
@@ -642,10 +602,55 @@ server you're on.
 | `/trade panel on` / `off` | Show or hide it |
 | `/trade panel rows <1-15>` | How many listings it shows |
 
-**Trading deliberately isn't here.** Buying, selling and cancelling stay on the screen, and
-resetting or migrating stay behind its confirmations. The rule the codebase applies: a
-command may write when getting it wrong can't cost anybody their items, their credits, or
-their market.
+**Trading commands may be added at some point
+
+---
+
+## 12. Running a server
+
+### Keeping one up
+
+`java -jar economies-server.jar --config server.json` is a foreground process: closing the
+terminal it's running in kills it. For anything meant to stay up, that terminal has to survive
+you logging off , `screen` or `tmux` if you're comfortable with either, a proper service
+manager (`systemd` on Linux, NSSM or Task Scheduler on Windows) if you also want it to restart
+itself after a crash. Redirect its output to a file too: the console messages it prints
+("[host] created…", "[host] listening on…", every refusal) are the only record of what it's
+done unless you keep them.
+
+There's nothing to shut down carefully. Stopping the process, however you do it, is safe —
+every event is written, flushed and closed to disk the moment it's appended, never held open
+across two of them, so there's no mid-write state to worry about interrupting.
+
+### Updating
+
+Stop the server, replace `economies-server.jar` with the new one, start it again. Nothing
+else needs touching: the log, the config, the keys and the peer list all live in separate
+files beside the jar, untouched by swapping it out.
+
+**Don't use an older version once you've updated** A newer build can write event types an
+older one hasnt heard of. Downgrade the jar after that and the older build stops partway
+through the log with "contains an event this version can't read" so not corrupted, just
+unreadable to that particular build. Keep the old jar until you're sure about the new
+one, rather than needing it back afterward.
+
+### Backups
+
+**`market.jsonl` is the one that matters.** It's the entire market so if you lose it and there's
+nothing to restore from, short of a client somewhere holding the full history via `/trade
+archive on`. Back it up on whatever schedule losing that much would actually cost you.
+
+**`server-identity.key` is worth keeping too, for a quieter reason.** An identity's key can
+never be replaced once it's registered — there's no event for re-keying one. Losing this file
+doesn't just mean generating a new one at the next start; it means this server can no longer
+sign anything as the identity already recorded in the market, which in practice means it can
+no longer issue welcome grants under its own name. The market itself is unharmed — this one
+host just loses a capability it can't get back.
+
+**`market.jsonl.snapshot.json` needs none of this.** It's an optimisation the server writes
+for itself once a market has run long enough, and it's rebuilt automatically the moment it
+stops matching the log. Restoring an old `market.jsonl` without its snapshot is completely
+normal and nthe next start just replays from the beginning once, and writes a fresh one.
 
 ---
 
