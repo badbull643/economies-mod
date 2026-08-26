@@ -213,7 +213,7 @@ the market settles*, 50 by default (can be changed). Click **Claim stipend** on 
 
 **It counts fills, not time or events.**. A fill needs two orders to cross, and every order costs a listing fee (if the host has set a listing fee).
 
-**How much you get is up to your market's creator check the Market tab, or `/trade hostconfig`, for the
+How much you get is up to your market's creator check the Market tab, or `/trade hostconfig`, for the
 current amount. What it can be set to is tied to the **listing fee**, the market only
 allows a stipend that the fees collected over one interval can actually cover, so a low listing
 fee (or none at all) means a small stipend, or none.
@@ -249,15 +249,7 @@ would rather one machine was always there.
 
 #### What the operator needs
 
-**One jar and a Java 8 runtime.** No Minecraft, no Gradle, no copy of this repository —
-`economies-server.jar` is the one file you need, and everything below assumes that's all you
-have. Put it somewhere, open a terminal in that folder, and skip to **Setting one up** below.
-
-*Building it yourself instead?* From a checkout of this repository, `./gradlew serverJar`
-produces the jar at `build/libs/economies-server.jar` (about 600 KB) — or skip the jar
-entirely and run `./gradlew hostServer --args="<flags>"` straight from the repository. Every
-command below works either way: swap `java -jar economies-server.jar <flags>` for
-`./gradlew hostServer --args="<flags>"`.
+**One jar and a Java 8 runtime.** `economies-server.jar` is the jar you need
 
 Keeping one running, updating it and what to back up are in
 [§12](#12-running-a-server).
@@ -265,11 +257,9 @@ Keeping one running, updating it and what to back up are in
 #### Setting one up
 
 **1. Give the jar its own folder.** The server writes several files beside wherever it runs
-from (see the table below), including a private key, so it shouldn't just sit loose in
-Downloads — or, if you built it yourself, inside this repository.
+from (see the table below), including a private key.
 
-Run this from wherever `economies-server.jar` currently is (most people: wherever they saved
-what was sent to them). It makes a new folder and copies the jar in:
+Run this from wherever `economies-server.jar` currently is. It makes a new folder and copies the jar in:
 
 ```
 mkdir ~/economies-server && cp economies-server.jar ~/economies-server/ && cd ~/economies-server
@@ -284,7 +274,7 @@ java -jar economies-server.jar --config server.json --write-config
 **3. Edit it.** Three settings matter before the first start.
 
 ```jsonc
-"logFile": "market.jsonl",             // beside the jar, anywhere but the repository
+"logFile": "market.jsonl",             // beside the jar, 
 "port": 25555,
 "hostName": "our server",              // what players see in the host list
 
@@ -332,7 +322,7 @@ hosting and take effect immediately.
 
 **The market's economics** are the `policy` block. Edit, restart, and a server that created
 its market publishes the change as a `MarketPolicy` event, exactly as a player would from
-the Market screen. It's the creator, after all.
+the Market screen. 
 
 Two things worth knowing:
 
@@ -342,18 +332,25 @@ Two things worth knowing:
   its listing fees or a grant above the host's ceiling. The market keeps running on what it
   had.
 
-Running `--write-config` again rewrites the file with the numbers actually in force, which
-is the quickest way to see where a market ended up.
+**The file can end up lying about what's really happening**, an edit can be refused (the two
+cases just above), or you might be hosting a market you didn't create, where the whole
+`policy` block is ignored. Either way the file still shows whatever you last typed, not what
+the market actually has.
+
+**Running `--write-config` again fixes that.** it asks the
+live market what its policy actually is right now and overwrites the file with that. So if
+you're ever unsure whether an edit took effect, run `--write-config` again and read the file:
+whatever it says afterward should be correct.
 
 #### Who owns the market
 
 By default the server does, and the operator changes policy through the config.
 
 **`--creator-key` names a player as creator instead**, so the rules get changed from the
-Market screen in game. Worth it when a person should own the market and the box is only
+Market screen in game. could be worth it when a person should own the market and the box is only
 hardware. Otherwise the config is simpler and the key is one more thing to keep somewhere.
 It's used on the first start only, needs `creatorUserId` in the config, and can't be changed
-afterwards, since the creator is recorded at genesis and nothing moves it.
+afterwards, since the creator is recorded at genesis and nothing moves it (wouldnt).
 
 #### If something looks wrong
 
