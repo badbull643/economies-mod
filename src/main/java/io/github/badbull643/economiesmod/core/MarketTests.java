@@ -3532,9 +3532,14 @@ public class MarketTests {
             check("and has no cheats by any route",
                     plain.cheatsAvailable() ? 1 : 0, 0);
 
-            // A host that has not asked for any of this must not start refusing people.
+            // A host that has deliberately switched these off must not start refusing
+            // people. friendGroup() no longer represents "asked for nothing" here —
+            // refuseCreativeWorlds and refuseCheatWorlds default on since 2026-08-26 —
+            // so "did not ask" now has to be spelled out rather than assumed.
             ServerConfig lax = ServerConfig.friendGroup(25555);
-            check("and neither is refused by a host that did not ask",
+            lax.refuseCreativeWorlds = false;
+            lax.refuseCheatWorlds = false;
+            check("and neither is refused by a host that switched these off",
                     creative.objections(lax, 0).isEmpty() ? 1 : 0, 1);
         }
 
