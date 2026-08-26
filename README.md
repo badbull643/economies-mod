@@ -41,7 +41,7 @@ would still recommend disabling the Mod to be sure.
 
 Other people elsewhere can still play: a virtual LAN like ZeroTier or Radmin works, and so does
 port forwarding (wouldn't recommend the port forwarding just use the virtual LAN since its 
-much simpler too setup). The handbook has
+much simpler too setup and safer). The handbook has
 [a section on it](docs/HANDBOOK.md#7-playing-with-friends-who-arent-on-your-network).
 
 There's also a **standalone dedicated server**, for a group that
