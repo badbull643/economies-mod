@@ -29,7 +29,6 @@ import java.util.Deque;
 import java.util.List;
 import java.util.UUID;
 
-//idea was too make the whole control panel weve built be a craftable block instead so this whole marketscreen is teid too a block
 //this needs a massive refactor horrible class
 public class MarketScreen extends Screen {
 
@@ -1428,10 +1427,8 @@ public class MarketScreen extends Screen {
     private void renderSettingsPlaceholder(MatrixStack m) {
         label(m, "Notifications", listX + 4, panelTop(), 0xFFAA00);
 
-        String body = "Told when one of your resting orders fills, so you can set an"
-                + " order, log off, and find out later that it happened. The limit"
-                + " batches them once they come faster than that — on a busy market"
-                + " you lose the detail, never the news.";
+        String body = "get a notification when one of your resting orders fills."
+                + "The limit batches them once they come faster than the the limit on a busy market";
 
         int y = panelTop() + 14;
         for (OrderedText line : this.textRenderer.wrapLines(new LiteralText(body), listW - 12)) {

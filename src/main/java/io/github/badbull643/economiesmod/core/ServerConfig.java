@@ -91,23 +91,35 @@ public class ServerConfig {
     // Everything below acts on what a client says about its own world, which it can
     // lie about freely. See WorldAttestation: the value is in catching the casual case
     // and in making two claims contradict each other, never in believing either one.
-    // All off by default, because a policy this soft should be a deliberate choice.
+    //
+    // requireAttestation stays off by default, deliberately, and is not like the two
+    // below it: it refuses anyone who describes nothing, not anyone who describes
+    // something bad, and every test client in this codebase connects without ever
+    // attaching one — switching it on by default would refuse them all, and would
+    // refuse a real client too old to attest, not just a dishonest one.
+    //
+    // refuseCreativeWorlds and refuseCheatWorlds are different: WorldAttestation.
+    // objections only consults them when hello.attestation is not null, so a client
+    // that describes nothing is untouched by either — they only ever bite a client
+    // that describes a world and describes a bad one. Safe to default on for that
+    // reason, and on by default since a real client always attaches an honest one
+    // (MarketStateHolder.setAttestation, unconditional on every connect).
 
     /** Turn away clients that decline to describe their world, or are too old to. */
     public boolean requireAttestation = false;
 
     /** Turn away worlds reporting creative mode. */
-    public boolean refuseCreativeWorlds = false;
+    public boolean refuseCreativeWorlds = true;
 
     /**
      * Turn away worlds reporting commands enabled.
      *
      * Blunter than it looks: plenty of honest players enable cheats to set the time or
      * fix a mistake, so this refuses a large number of people who have not fabricated
-     * anything. Off by default for that reason, and worth pairing with a message the
-     * operator can explain.
+     * anything. On by default even so — see the block comment above this section —
+     * and worth pairing with a message the operator can explain.
      */
-    public boolean refuseCheatWorlds = false;
+    public boolean refuseCheatWorlds = true;
 
     /**
      * Items per claimed hour of play that this server finds plausible. Zero disables.
