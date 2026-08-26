@@ -1,4 +1,4 @@
-# Economies Mod
+# Economies Mod (still experimental so things may fail)
 
 A player run market for Minecraft, with a real order book.
 
