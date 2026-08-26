@@ -25,6 +25,7 @@ decided and points at the argument instead of repeating it.
 9. [When something looks wrong](#9-when-something-looks-wrong)
 10. [Host rules](#10-host-rules)
 11. [Command reference](#11-command-reference)
+12. [Running a server](#12-running-a-server)
 
 ---
 ---
@@ -40,7 +41,7 @@ A market can be run two ways either use a dedicated server as the central
 authority on the market and connect too that server every time or use the host option in game, 
 where every person has a personal copy of the market information and the person hosting can change 
 
-##Notes on the changing hosts setup 
+## Notes on the changing hosts setup 
 
 **Nobody is in charge of the numbers.** Every player's game keeps its own copy of
 everything that ever happened in the market and works out the balances itself. Whoever is
@@ -111,11 +112,11 @@ theirs instead.
 verifies every signature in it, and rebuilds the market from scratch. That's why the first
 join takes a moment.
 
-If they're on the same machine or the same network, **Refresh hosts** finds them without
-typing anything.
+If they're on the same machine or the same network or using something like Zerotier, **Refresh hosts** finds them without
+typing anything (you must have joined each other once prior for this too work).
 
 You can't join while holding a market of your own in that world. They're separate economies
-and the mod will say so. Use a second [slot](#8-more-than-one-market) for theirs.
+and the mod will give a warning. Use a second [slot](#8-more-than-one-market) for theirs.
 
 ### Getting the history when nobody's online
 
@@ -130,7 +131,7 @@ every rule re-applied before a single credit of it is believed.
 
 The first time you appear in a market, the host gives you a **welcome grant**. It happens
 once per person per market, it's recorded in the history like everything else, and the
-creator sets the amount.
+creator sets the amount (this welcome grant feature may be subject to change).
 
 ---
 
@@ -163,8 +164,8 @@ Turning up late doesn't cost you anything.
 were placed.
 
 **One order can fill many.** A sell of 10 into ten resting bids of 1 is ten trades at once,
-and the book empties in a single frame. The mod tells you afterwards: *"Sold 9 of 10 Dirt
-across 9 orders, +18, 1 still resting"*.
+and the book empties. The mod tells you afterwards: *"Sold 9 of 10 Dirt
+across 9 orders, +18, 1 still resting" (the notification doesn't currently show will be fixed soon)*.
 
 Anything that doesn't fill immediately **rests** until it does. A partly filled order leaves
 the remainder on the book.
@@ -174,17 +175,17 @@ the remainder on the book.
 Chat tells you when one of your resting orders fills, which is the one you weren't watching
 for. The action bar can do the same, more briefly. Both are settings.
 
-Filling somebody else's order is reported too, in grey, since that's feedback for something
-you just did rather than news.
+Filling somebody else's order is reported too.
 
 ---
 
 ## 5. What it costs to trade
 
-Four numbers, all set by the creator, all visible on the Market tab.
+these numbers are adjustable via the market creator in-game for the rotating mode and adjustable 
+via the server config for the dedicated server.
 
-**Welcome grant.** What a new arrival starts with. Capped at 10,000 when somebody hosts from
-their game. A dedicated server may go higher.
+**Welcome grant.** What a new arrival starts with. Capped at 300 (may change this too be much lower 
+too kill variance in welcome grants) when somebody hosts from their game. A dedicated server may go higher.
 
 **Trading fee.** A percentage of each trade, taken from the seller's proceeds and destroyed
 rather than paid to anyone. It drains the money supply instead of being income for a host.
@@ -197,22 +198,25 @@ The listing fee can also **escalate**: a market can give everyone a few free ord
 charge more the more you hold open at once. Set to zero, nothing escalates and every listing
 costs the same.
 
-**Stipend.** See below.
+**Stipend.** See [below](#the-stipend).
 
-### The stipend, and why it exists
+### The stipend
+
+Optional, and can be disabled by the market creator.
 
 The welcome grant used to be the only way credits ever entered a market. That means the money
 supply grows when *people* arrive and never again, while goods keep piling in. Prices sink
 until everything costs 1 and price stops meaning anything.
 
-The stipend fixes that. Any registered player can **claim** a fixed amount once per *N fills
-the market settles*, 50 by default. Click **Claim stipend** on the Market tab.
+The stipend attempts too fix that so any registered player can **claim** a fixed amount once per *N fills
+the market settles*, 50 by default (can be changed). Click **Claim stipend** on the Market tab.
 
-Two details that look arbitrary and aren't.
+**It counts fills, not time or events.**. A fill needs two orders to cross, and every order costs a listing fee (if the host has set a listing fee).
 
-**It counts fills, not time or events.** Deposits, withdrawals and cancellations are free
-actions, so a stipend paid per event could be farmed by one person alone in an empty market.
-A fill needs two orders to cross, and every order costs a listing fee.
+**How much you get is up to your market's creator check the Market tab, or `/trade hostconfig`, for the
+current amount. What it can be set to is tied to the **listing fee**, the market only
+allows a stipend that the fees collected over one interval can actually cover, so a low listing
+fee (or none at all) means a small stipend, or none.
 
 **A market refuses a stipend that outruns its own fees.** If the payout across every
 registered player is more than the listing fees collect over the same interval, the market is
@@ -239,35 +243,33 @@ behind it. If it refuses when you click, it says why.
 
 ### The dedicated server
 
-A standalone process with no Minecraft and no world, keeping a market up whether or not
-anybody is playing. Hosting from your game suits a friend group. A server suits a group that
+A standalone process, keeping a market up whether or not
+anybody is playing. Hosting from your game suits a smaller group. A server suits a group that
 would rather one machine was always there.
 
 #### What the operator needs
 
-**One jar and a Java 8 runtime.** No Minecraft, no Gradle, no copy of this repository.
+**One jar and a Java 8 runtime.** No Minecraft, no Gradle, no copy of this repository —
+`economies-server.jar` is the one file you need, and everything below assumes that's all you
+have. Put it somewhere, open a terminal in that folder, and skip to **Setting one up** below.
 
-```
-./gradlew serverJar          # build/libs/economies-server.jar, about 600 KB
-```
-
-Hand that file to whoever is running the server. It's self-contained: `core` imports no
-Minecraft, and gson is packed in beside it.
-
-*The mod jar won't do.* Minecraft supplies gson at runtime, so a standalone JVM loading the
-mod jar dies on `NoClassDefFoundError` before it prints anything.
-
-From the repository you can run `./gradlew hostServer --args="…"` instead. Every command
-below works either way: swap `./gradlew hostServer --args="<flags>"` for `java -jar
-economies-server.jar <flags>`.
+*Building it yourself instead?* From a checkout of this repository, `./gradlew serverJar`
+produces the jar at `build/libs/economies-server.jar` (about 600 KB) — or skip the jar
+entirely and run `./gradlew hostServer --args="<flags>"` straight from the repository. Every
+command below works either way: swap `java -jar economies-server.jar <flags>` for
+`./gradlew hostServer --args="<flags>"`.
 
 Keeping one running, updating it and what to back up are in
-[§28](#28-running-a-server-and-how-the-jar-is-put-together), along with what's inside the jar.
+[§12](#12-running-a-server).
 
 #### Setting one up
 
-**1. Put the jar somewhere that isn't the repository.** Everything the server creates lands
-beside its log file, and one of those things is a private key.
+**1. Give the jar its own folder.** The server writes several files beside wherever it runs
+from (see the table below), including a private key, so it shouldn't just sit loose in
+Downloads — or, if you built it yourself, inside this repository.
+
+Run this from wherever `economies-server.jar` currently is (most people: wherever they saved
+what was sent to them). It makes a new folder and copies the jar in:
 
 ```
 mkdir ~/economies-server && cp economies-server.jar ~/economies-server/ && cd ~/economies-server
@@ -575,7 +577,7 @@ stranger.
 | `maxDepositMultipleOfHandled` | `0` (off) | `0` (off) | No statistics-based deposit weighting |
 | `maxMigratedCredits` | `0` (unlimited) | `0` (unlimited) | Any migrated balance is accepted |
 | `acceptsMigration` | **true** | **false** | Whether an incoming migration is accepted at all |
-| `maxWelcomeGrant` | **10,000** | **1,000,000** | The most a policy change may grant a newcomer |
+| `maxWelcomeGrant` | **300** | **1,000,000** | The most a policy change may grant a newcomer |
 | `banOnWorldChange` | `false` | `false` | See below |
 
 **Why `refuseCreativeWorlds` and `refuseCheatWorlds` default on, unlike `requireAttestation`.**

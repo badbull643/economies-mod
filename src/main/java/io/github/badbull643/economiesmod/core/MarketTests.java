@@ -1202,7 +1202,8 @@ public class MarketTests {
             check("creator not yet granted", live.hasBeenGranted(ALICE) ? 1 : 0, 0);
 
             Event.WelcomeGrant wg = new Event.WelcomeGrant();
-            wg.userId = ALICE; wg.targetUserId = ALICE; wg.amount = 1000;
+            wg.userId = ALICE; wg.targetUserId = ALICE;
+            wg.amount = ServerConfig.DEFAULT_WELCOME_GRANT;
             wg.marketId = live.marketId();
             SequencedEvent se = new SequencedEvent();
             se.seq = log.lastSeq() + 1;
@@ -3663,7 +3664,9 @@ public class MarketTests {
             // Both numbers, because "your grant is wrong" without them sends an
             // operator back to the file to work out which way round it is.
             check("and names the market's figure and the server's",
-                    warning != null && warning.contains("1000") && warning.contains("50")
+                    warning != null
+                            && warning.contains(String.valueOf(ServerConfig.DEFAULT_WELCOME_GRANT))
+                            && warning.contains("50")
                             ? 1 : 0, 1);
         }
 
