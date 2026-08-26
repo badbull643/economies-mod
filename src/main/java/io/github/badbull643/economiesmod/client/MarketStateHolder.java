@@ -6,6 +6,7 @@ import io.github.badbull643.economiesmod.core.net.MarketClient;
 import io.github.badbull643.economiesmod.core.net.Message;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.util.WorldSavePath;
 import net.minecraft.server.MinecraftServer;
 
 import java.io.IOException;
@@ -2186,6 +2187,40 @@ public class MarketStateHolder {
 
     public static PeerCache peers() {
         return peerCache;
+    }
+
+    /**
+     * This world's save directory, or null when there is no world of ours to save into.
+     *
+     * <h2>The one question that decides whether this mod can do anything at all</h2>
+     *
+     * Every market lives beside a world on this machine, and the only worlds on this
+     * machine are the ones the integrated server runs — singleplayer, and Open to LAN,
+     * which is singleplayer with the door open. Joined a server somebody else runs and
+     * there is no save path here to put a market beside, so there is no market, and
+     * nothing that needs one can work.
+     *
+     * That is a scope, not a bug: the ledger reaches real inventories through the
+     * server-side player object, which only exists for a world this process is running.
+     * Real multiplayer would need client-to-server packets and a mod on the server, which
+     * is a different piece of software. See InventoryBridge.
+     *
+     * <h2>Why it is a method rather than three calls to getServer()</h2>
+     *
+     * Because it was three calls, and two of them did not check. Pressing Create or Host
+     * while connected to somebody's server threw a NullPointerException out of a button
+     * handler, which in Minecraft means a crash report — the worst possible way to learn
+     * that a mod is singleplayer-only, and the first thing a stranger would have done
+     * with it. Asked in one place, it is one answer, and the screen can say it in words.
+     */
+    public static Path worldDirOrNull() {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        return mc.getServer() == null ? null : mc.getServer().getSavePath(WorldSavePath.ROOT);
+    }
+
+    /** Whether this session has a world of its own — see {@link #worldDirOrNull()}. */
+    public static boolean hasOwnWorld() {
+        return worldDirOrNull() != null;
     }
 
     // ─────────── migration ───────────
