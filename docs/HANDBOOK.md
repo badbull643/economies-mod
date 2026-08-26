@@ -2,12 +2,6 @@
 
 *What the mod does, how to use it*
 
-Two readers, one file. Part 1 is for somebody who just installed it and wants to trade with
-three friends. Part 2 is for somebody about to change the code. Neither needs the other.
-
-Where a design note or the session log argues something at length, this file says what was
-decided and points at the argument instead of repeating it.
-
 ---
 
 ## Contents
