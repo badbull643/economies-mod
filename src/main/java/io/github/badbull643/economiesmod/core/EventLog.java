@@ -27,6 +27,18 @@ import java.nio.file.Files;
  * Each entry carries the hash of the previous entry, so any tampering or fork
  * is detectable by walking the chain.
  */
+
+/*
+*
+* so covered where the event class now onto the event log class,
+*
+*
+*
+*
+*
+* */
+
+
 public class EventLog {
 
     /** The prevHash of the first entry, and the hash of the empty prefix at seq 0. */
@@ -46,7 +58,7 @@ public class EventLog {
         if (!Files.exists(file)) {
             Files.createFile(file);
         }
-        // Where the log ends is worked out on demand rather than here — see ensureHead.
+        // Where the log ends is worked out on demand rather than here check ensureHead.
         this.knownSize = Files.size(file);
     }
 
@@ -326,7 +338,7 @@ public class EventLog {
      * parses. Set when a log contains an event type this version doesn't know —
      * typically a log written by an older or newer build.
      */
-    // Volatile: assigned lazily inside readFrom, which runs on the sequencer thread and
+    // Volatile assigned lazily inside readFrom, which runs on the sequencer thread and
     // on per-connection handshake threads, but is read by the game thread when the UI
     // asks whether the log is usable.
     private volatile long unreadableAt = -1;
@@ -374,6 +386,9 @@ public class EventLog {
      * and took the whole world down at startup, which left no way to reach the Reset
      * button that would have fixed it.
      */
+
+
+    //so a single line is loaded into memeory at a time bascially
     public void forEach(long fromSeq, Visitor visitor) throws IOException {
         if (!Files.exists(file)) return;
 
@@ -389,8 +404,8 @@ public class EventLog {
                 try {
                     se = parseLine(line);
                 } catch (Exception e) {
-                    // Everything past an unreadable line is unusable too — the chain can't
-                    // be carried across a gap — so stop rather than skip.
+                    // Everything past an unreadable line is unusable too the chain can't
+                    // be carried across a gap so stop rather than skip.
                     if (unreadableAt == -1) {
                         unreadableAt = position;
                         System.err.println("[economiesmod] cannot read event " + position
@@ -705,6 +720,8 @@ public class EventLog {
      * Appends a line received from a host verbatim. The host already assigned the
      * sequence number and computed the hash — recomputing would risk divergence.
      */
+
+
     public synchronized void appendRaw(String line) throws IOException {
         ensureHeadChecked();
         SequencedEvent se = parseLine(line);
