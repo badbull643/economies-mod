@@ -1,8 +1,8 @@
-# Economies Mod (still experimental so things may fail)
+# Economies Mod (still experimental, so things may fail)
 
-A player run market for Minecraft, with a real order book.
+A player-run market for Minecraft, with a real order book.
 
-able to place Buy and Sell orders for items at a price. Orders sit until they fill.
+Able to place Buy and Sell orders for items at a price. Orders sit until they fill.
 
 **Minecraft 1.16.5 · Fabric**
 
@@ -13,18 +13,18 @@ able to place Buy and Sell orders for items at a price. Orders sit until they fi
 
 ## How it works
 
-**It's a real order book.** List 20 iron at 5 credits, somebody bids 6, and the trade
+**It's a real order book.** List 20 iron at 5 credits; somebody bids 6, and the trade
 happens at 5 with the difference going to them. Partly filled orders leave the rest resting.
 
-There are two ways too get a market working either use a dedicated server as the central 
-authority on the market and connect too that server every time or use the host option in game, 
+There are two ways to get a market working: either use a dedicated server as the central 
+authority on the market and connect to that server every time or use the host option in-game, 
 where every person has a personal copy of the market information and the person hosting can change 
 
 ## Notes on the changing hosts setup
 
 **Nobody is in charge of the numbers.** Every event is signed by whoever made it and chained
 to the one before. Whoever is hosting decides what order events happen in and nothing else.
-They can't give themselves credits or delete a trade, because everyone else would compute a
+They can't give themselves credit or delete a trade, because everyone else would compute a
 different answer and spot it straight away.
 
 **It survives the host logging off.** The history is a file. Anyone who has it can host next
@@ -36,16 +36,16 @@ and the market carries on.
 
 **Singleplayer and Open to LAN.** A market lives beside a world on your own machine, so
 there's no market when you join a server somebody else runs. The mod gives a warning for this, 
-and the Mods inert there, so as far as its been tested should be safe too keep installed however
+and the Mods inert there, so as far as it's been tested should be safe to keep installed; however,
 would still recommend disabling the Mod to be sure.
 
 Other people elsewhere can still play: a virtual LAN like ZeroTier or Radmin works, and so does
-port forwarding (wouldn't recommend the port forwarding just use the virtual LAN since its 
-much simpler too setup and safer). The handbook has
+port forwarding (wouldn't recommend port forwarding; just use the virtual LAN since it's 
+much simpler to set up and safer). The handbook has
 [a section on it](docs/HANDBOOK.md#7-playing-with-friends-who-arent-on-your-network).
 
-There's also a **standalone dedicated server**, for a group that
-would rather one machine stayed up. See
+There's also a **standalone dedicated server** for a group that
+would rather one machine stay up. See
 [the handbook](docs/HANDBOOK.md#the-dedicated-server).
 
 ---
@@ -66,13 +66,13 @@ would rather one machine stayed up. See
    rules.
 3. **Trading tab → Sell.** Pick an item, a quantity and a price. The items leave your
    inventory and rest on the book.
-4. **Network tab → Host**. Other people use **Connect** with your address or alternatively if 
-   a dedicated server is used enter the dedicated server address and press connect.
+4. **Network tab → Host**. Other people use **Connect** with your address or if 
+   a dedicated server is used, enter the dedicated server address and press connect.
 5. They buy, you get credits, and everybody's copy agrees because everybody replayed the
    same events.
 
 `/trade balance`, `/trade orders` and `/trade price <item>` read the market from chat
-without opening anything, enter /trade too get the full list of commands.
+without opening anything; enter /trade to get the full list of commands.
 
 
 ## Current limitations
@@ -81,7 +81,7 @@ without opening anything, enter /trade too get the full list of commands.
 - **Minecraft 1.16.5 and Fabric.** No other versions or loaders yet.
 - **A forked market can be recovered from but never merged.** If two copies of one market are
   both traded on while apart, the mod finds where they parted, hands back the items you
-  deposited since, and lists the orders you'd need to re place. One branch still has to be
+  deposited since, and lists the orders you'd need to re-place. One branch still has to be
   discarded.
 - **Items with NBT are skipped.** An enchanted pickaxe isn't interchangeable with a plain one,
   so the market has no way to price it.
