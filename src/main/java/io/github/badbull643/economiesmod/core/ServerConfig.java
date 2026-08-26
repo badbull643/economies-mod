@@ -415,12 +415,12 @@ public class ServerConfig {
     /**
      * The largest welcome grant somebody hosting in their game will sequence.
      *
-     * Ten thousand against items that trade for one or two. The compiled ceiling is a
-     * hundred times that, which is four orders of magnitude above anything a real market
-     * uses — and the grant is the largest single lever on what credits are worth, so a
-     * fat finger there does more damage than every other setting combined.
+     * Three hundred against items that trade for one or two. The compiled ceiling is
+     * over three thousand times that, which is far above anything a real market uses —
+     * and the grant is the largest single lever on what credits are worth, so a fat
+     * finger there does more damage than every other setting combined.
      */
-    public static final long ROTATING_MAX_WELCOME_GRANT = 10_000L;
+    public static final long ROTATING_MAX_WELCOME_GRANT = 300L;
 
     /**
      * The most this host will let a market grant a newcomer. Unset follows the kind of
@@ -517,8 +517,16 @@ public class ServerConfig {
     public long stipendAmount = 0;
 
 
-    /** Lives here rather than on HostServer: it is policy, and this is where policy is. */
-    public static final long DEFAULT_WELCOME_GRANT = 1000L;
+    /**
+     * Lives here rather than on HostServer: it is policy, and this is where policy is.
+     *
+     * Kept under {@link #ROTATING_MAX_WELCOME_GRANT}, and that has to hold: MarketPolicy
+     * is the whole policy, not a patch, so the Market screen resubmits the grant already
+     * in force with every edit — a default above the rotating ceiling would let a fresh
+     * host bootstrap a market and then refuse its own creator's first policy change,
+     * over a field they never touched.
+     */
+    public static final long DEFAULT_WELCOME_GRANT = 250L;
 
     /**
      * The market's own economics, for a server that created the market it serves.
