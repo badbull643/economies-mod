@@ -4,7 +4,7 @@ A player run market for Minecraft, with a real order book.
 
 able to place Buy and Sell orders for items at a price. Orders sit until they fill.
 
-**Minecraft 1.16.5 · Fabric · client side · singleplayer and Open to LAN**
+**Minecraft 1.16.5 · Fabric**
 
 **[Download the latest release](https://github.com/badbull643/economies-mod/releases/latest)**
 — the mod jar for Minecraft, and a standalone server jar if you want a dedicated market.
