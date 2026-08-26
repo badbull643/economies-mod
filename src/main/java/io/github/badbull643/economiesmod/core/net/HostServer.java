@@ -698,6 +698,8 @@ public class HostServer {
         }
     }
 
+    //print da stack trace for the tests
+
     private void handleClient(Socket socket) {
         MessageChannel channel = null;
         // Only set once this connection becomes a live client. Probes and pre-handshake
@@ -787,6 +789,9 @@ public class HostServer {
             // Synced clients may sit idle indefinitely.
             socket.setSoTimeout(0);
 
+
+
+            //
             link = new ClientLink(channel, config.outboundQueueDepth, hello.displayName);
             clients.add(link);
             System.out.println("[host] " + channel.remoteAddress() + " synced and live ("
@@ -863,6 +868,7 @@ public class HostServer {
         } catch (Exception e) {
             if (running && !(e instanceof SocketException)) {
                 System.out.println("[host] client error: " + e);
+                //remove this at somepoint since redundant not yet though
                 e.printStackTrace();
             }
         } finally {
