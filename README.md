@@ -6,6 +6,9 @@ able to place Buy and Sell orders for items at a price. Orders sit until they fi
 
 **Minecraft 1.16.5 · Fabric · client side · singleplayer and Open to LAN**
 
+**[Download the latest release](https://github.com/badbull643/economies-mod/releases/latest)**
+— the mod jar for Minecraft, and a standalone server jar if you want a dedicated market.
+
 ---
 
 ## How it works
