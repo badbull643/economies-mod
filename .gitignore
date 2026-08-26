@@ -22,3 +22,14 @@
 build/
 run/
 .gradle/
+
+# Dev-only notes: backlog, session logs, design notes, testing fixtures. Kept on disk for
+# reference but not part of the public repo — HANDBOOK.md is the only doc that ships.
+docs/BACKLOG.md
+docs/SESSION-LOG.md
+docs/TEXT-REVIEW.md
+docs/testing-checklist.md
+docs/EconomiesMod-PROJECT-LOG.md
+docs/EconomiesMod-SESSION-LOG-2026-08-16b.md
+docs/design/
+docs/testing/
