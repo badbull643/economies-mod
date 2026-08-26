@@ -1,20 +1,18 @@
-# EconomiesMod — the handbook
+# EconomiesMod handbook
 
-*What this mod does, how to use it, and how it works underneath.*
+*What the mod does, how to use it, and how it works underneath.*
 
-Written for two readers at once: somebody who has just installed it and wants to trade
-with three friends, and somebody about to change the code. Part 1 is the first reader,
-part 2 is the second, and neither needs the other to make sense.
+Two readers, one file. Part 1 is for somebody who just installed it and wants to trade with
+three friends. Part 2 is for somebody about to change the code. Neither needs the other.
 
-Everything here describes the mod as it stands. Where a design note or the session log
-argues a decision at length, this file says what the decision *was* and points at the
-argument rather than repeating it.
+Where a design note or the session log argues something at length, this file says what was
+decided and points at the argument instead of repeating it.
 
 ---
 
 ## Contents
 
-**Part 1 — Using it**
+**Part 1: using it**
 
 1. [What this actually is](#1-what-this-actually-is)
 2. [Getting in](#2-getting-in)
@@ -22,105 +20,101 @@ argument rather than repeating it.
 4. [Money, items, and orders](#4-money-items-and-orders)
 5. [What it costs to trade](#5-what-it-costs-to-trade)
 6. [Playing together](#6-playing-together)
-7. [More than one market](#7-more-than-one-market)
-8. [When something looks wrong](#8-when-something-looks-wrong)
-9. [Host rules](#9-host-rules)
-10. [Command reference](#10-command-reference)
+7. [Playing with friends who aren't on your network](#7-playing-with-friends-who-arent-on-your-network)
+8. [More than one market](#8-more-than-one-market)
+9. [When something looks wrong](#9-when-something-looks-wrong)
+10. [Host rules](#10-host-rules)
+11. [Command reference](#11-command-reference)
 
-**Part 2 — How it works**
+**Part 2: how it works**
 
-11. [The shape of the thing](#11-the-shape-of-the-thing)
-12. [The event log](#12-the-event-log)
-13. [Events, and what each one means](#13-events-and-what-each-one-means)
-14. [validate and apply](#14-validate-and-apply)
-15. [The order book](#15-the-order-book)
-16. [The money rules](#16-the-money-rules)
-17. [The network](#17-the-network)
-18. [Divergence: noticing and locating a fork](#18-divergence-noticing-and-locating-a-fork)
-19. [Loading a market quickly](#19-loading-a-market-quickly)
-20. [The client](#20-the-client)
-21. [Items and the inventory](#21-items-and-the-inventory)
-22. [Migration, archives and slots](#22-migration-archives-and-slots)
-23. [The trust model](#23-the-trust-model)
-24. [Rules this codebase keeps rediscovering](#24-rules-this-codebase-keeps-rediscovering)
-25. [Tests](#25-tests)
-26. [Where to read more](#26-where-to-read-more)
-27. [Running a server, and how the jar is put together](#27-running-a-server-and-how-the-jar-is-put-together)
+12. [The shape of the thing](#12-the-shape-of-the-thing)
+13. [The event log](#13-the-event-log)
+14. [Events, and what each one means](#14-events-and-what-each-one-means)
+15. [validate and apply](#15-validate-and-apply)
+16. [The order book](#16-the-order-book)
+17. [The money rules](#17-the-money-rules)
+18. [The network](#18-the-network)
+19. [Divergence: noticing and locating a fork](#19-divergence-noticing-and-locating-a-fork)
+20. [Loading a market quickly](#20-loading-a-market-quickly)
+21. [The client](#21-the-client)
+22. [Items and the inventory](#22-items-and-the-inventory)
+23. [Migration, archives and slots](#23-migration-archives-and-slots)
+24. [The trust model](#24-the-trust-model)
+25. [Rules this codebase keeps rediscovering](#25-rules-this-codebase-keeps-rediscovering)
+26. [Tests](#26-tests)
+27. [Where to read more](#27-where-to-read-more)
+28. [Running a server, and how the jar is put together](#28-running-a-server-and-how-the-jar-is-put-together)
 
 ---
 ---
 
-# Part 1 — Using it
+# Part 1: using it
 
 ## 1. What this actually is
 
-A market you and your friends run yourselves, inside Minecraft. You put items in, list
-them at a price, and somebody else buys them with credits. No shops, no villagers, no
-admin handing out money.
+A market you and your friends run yourselves, inside Minecraft. You put items in, list them
+at a price, and somebody else buys them with credits. No shops, no villagers, no admin
+handing out money.
 
-Three things make it different from a chest with a sign on it:
+Three things make it different from a chest with a sign on it.
 
-**It is a real order book.** You list 20 iron at 5 credits; somebody bids 6; the trade
-happens at 5 and the difference is theirs. Orders rest until they fill or you cancel
-them.
+**It's a real order book.** You list 20 iron at 5 credits. Somebody bids 6. The trade
+happens at 5 and the difference is theirs. Orders sit on the book until they fill or you
+cancel them.
 
-**Nobody is in charge of the numbers.** Every player's game keeps its own complete copy
-of everything that ever happened in the market, and works out the balances itself. The
-person hosting decides *what order* events happen in and nothing else — they cannot
-give themselves credits, edit a balance, or delete a trade, because everybody else would
-recompute a different answer and notice immediately.
+**Nobody is in charge of the numbers.** Every player's game keeps its own copy of
+everything that ever happened in the market and works out the balances itself. Whoever is
+hosting decides what order things happen in, and that's all they decide. They can't give
+themselves credits or delete a trade, because everyone else would compute a different
+answer and spot it immediately.
 
-**It survives the host logging off.** The history is a file. Whoever holds it can host
-next, and the market continues. There is also a dedicated-server mode for a box that
-stays up.
+**It survives the host logging off.** The history is a file. Anyone who has it can host
+next, and the market carries on. There's also a dedicated server for a group that would
+rather one machine stayed up.
 
-The costs of that design, stated plainly: everyone needs a copy of the history, trading
-only happens while somebody is hosting and at least one other person is connected, and
-two copies that both get written to while apart will *fork* — see
-[§8](#8-when-something-looks-wrong), which is mostly about that.
+What that costs you, plainly: everyone needs a copy of the history, trading only happens
+while somebody is hosting and at least one other person is connected, and two copies that
+both get traded on while apart will *fork*. [§9](#9-when-something-looks-wrong) is mostly
+about that last one.
 
 ---
 
 ## 2. Getting in
 
-There are three ways to open the market, and you never need more than one.
+Three ways in. You only need one.
 
-**The inventory button.** Open your inventory. Next to the recipe-book button is an
-emerald. That is the market.
+**The inventory button.** Open your inventory. There's an emerald next to the recipe book
+button. That's the market.
 
-**A key.** The mod ships with **no key bound** — deliberately, so a fresh install does
-not silently claim `M` from another mod. Bind it in **Options → Controls →
-EconomiesMod**.
+**A key.** Nothing is bound by default, so the mod doesn't quietly take a key another mod
+wanted. Bind one in **Options → Controls → EconomiesMod**.
 
-> *Known wart: `/trade` prints "Trading itself is on the market screen (M)", which names
-> a key you may not have bound. The button and the command both work regardless.*
-
-**Chat commands.** `/trade balance`, `/trade orders`, `/trade price <item>` and friends
-read the market without leaving what you are doing. Full list in
-[§10](#10-command-reference).
+**Chat commands.** `/trade balance`, `/trade orders` and `/trade price <item>` read the
+market without opening anything. Full list in [§11](#11-command-reference).
 
 ### The screen
 
-Five tabs across the top:
+Five tabs across the top.
 
-| Tab | What lives there |
+| Tab | What's there |
 | --- | --- |
-| **Home** | A dashboard: your balance, recent activity, a price chart, and any warnings |
-| **Trading** | Buy, sell, cancel, withdraw — the things you do most |
-| **Network** | Connect to somebody, host, see who is around, migrate |
-| **Market** | The market itself: create, import, export, and (if you made it) its rules |
+| **Home** | Your balance, recent activity, a price chart, and any warnings |
+| **Trading** | Buy, sell, cancel, withdraw. The things you do most |
+| **Network** | Connect to somebody, host, see who's around, migrate |
+| **Market** | The market itself: create, import, export, and its rules if you made it |
 | **Settings** | Placeholder for now |
 
 ### The inventory panel
 
-Beside your inventory, a small panel lists the most recent things **other people** have
-listed — item, quantity, price — under the market's name. Click its header to swap
-between `Sell orders` (what is for sale) and `Buy orders` (what people want).
+Next to your inventory is a small panel listing the most recent things **other people**
+have put up for sale, under the market's name. Click the header to swap between `Sell
+orders` and `Buy orders`.
 
-Your own orders are never in it; you know what you listed. If it says *"only your 4
-orders"*, that is the panel working — the book holds nothing but yours.
+Your own orders are never in it, since you already know what you listed. If it says *"only
+your 4 orders"*, the panel is working and the book just has nothing but yours in it.
 
-Turn it off, or change how many rows it shows, with `/trade panel`.
+`/trade panel` turns it off or changes how many rows it shows.
 
 ---
 
@@ -128,208 +122,200 @@ Turn it off, or change how many rows it shows, with `/trade panel`.
 
 ### Making one
 
-**Market tab → Create a new market.** Give it a name. That writes the first line of the
-history and makes you its **creator**, which matters later: the creator is the only
-person who can ever change the market's rules.
+**Market tab → Create a new market.** Give it a name. You're now its creator, which matters
+later: only the creator can change the market's rules.
 
-You will be asked to confirm, because a market you create shares no history with a
-market your friends are already using, and **two markets can never be merged**. If
-somebody already has one, join theirs instead.
+You'll be asked to confirm, because a market you create shares no history with one your
+friends already use, and two markets can never be merged. If somebody already has one, join
+theirs instead.
 
 ### Joining somebody else's
 
-**Network tab → type their address → Connect.** Your game downloads the entire history,
-verifies every signature in it, and rebuilds the market from scratch. That is why a
-first join takes a moment.
+**Network tab, type their address, Connect.** Your game downloads the whole history,
+verifies every signature in it, and rebuilds the market from scratch. That's why the first
+join takes a moment.
 
-If they are on the same machine or LAN, **Refresh hosts** finds them without typing an
-address.
+If they're on the same machine or the same network, **Refresh hosts** finds them without
+typing anything.
 
-You cannot join with a market of your own already in this world — they are separate
-economies and the mod will say so. Use a second [slot](#7-more-than-one-market) for
-theirs.
+You can't join while holding a market of your own in that world. They're separate economies
+and the mod will say so. Use a second [slot](#8-more-than-one-market) for theirs.
 
-### Getting the history without anybody being online
+### Getting the history when nobody's online
 
-**Market tab → Export to a file** hands you the whole market as a file. Somebody else
-uses **Import one from a file** and has the market, with no host running and nobody
-online at the same time.
+**Market tab → Export to a file** hands you the whole market as a file. Somebody else uses
+**Import one from a file** and has it, with no host running and nobody online at the same
+time.
 
-An imported file is treated as *a file from a stranger*: every signature in it is
-verified, and every rule is re-checked, before a single credit of it is believed.
+An imported file is treated as a file from a stranger. Every signature in it is checked and
+every rule re-applied before a single credit of it is believed.
 
 ### Your starting money
 
-The first time your identity appears in a market, the host issues you a **welcome
-grant** — the market's opening balance for a new arrival. It happens once per person per
-market, it is recorded in the history like everything else, and the creator sets the
-amount.
+The first time you appear in a market, the host gives you a **welcome grant**. It happens
+once per person per market, it's recorded in the history like everything else, and the
+creator sets the amount.
 
 ---
 
 ## 4. Money, items, and orders
 
-### Credits and items live *inside* the market
+### Credits and items live inside the market
 
-Depositing an item takes it out of your Minecraft inventory and credits it to you in the
-market's ledger. Withdrawing does the reverse. Between those two moments the item exists
-only as a number — that is what lets it be traded without either of you being online at
-the same time.
+Depositing takes an item out of your Minecraft inventory and credits it to you in the
+market's ledger. Withdrawing does the reverse. In between, the item is just a number, and
+that's what lets it be traded while you're both offline.
 
 ### The four things you can do
 
 | Action | What happens |
 | --- | --- |
 | **Sell** | Takes items from your inventory and lists them at your price |
-| **Buy** | Places a bid; matches against anything already at or below your price |
-| **Cancel** | Takes an order off the book; whatever it was holding comes back |
+| **Buy** | Places a bid, matching anything already at or below your price |
+| **Cancel** | Takes an order off the book. Whatever it was holding comes back |
 | **Withdraw** | Turns credited items back into real ones in your inventory |
 
 ### How a trade happens
 
-Orders rest on a **book**, one per item, sorted by price. A buy and a sell cross when the
-buyer will pay at least what the seller asks.
+Orders sit on a **book**, one per item, sorted by price. A buy and a sell cross when the
+buyer will pay at least what the seller is asking.
 
-- **The resting order sets the price.** If you bid 6 for something resting at 5, you pay
-  5. Coming to the book late does not cost you.
-- **Ties go to whoever was there first.** Two sells at the same price fill in the order
-  they were placed.
-- **One order can fill many.** A sell of 10 into ten resting bids of 1 is ten trades in
-  one action — the book empties in a single frame. The mod tells you afterwards:
-  *"Sold 9 of 10 Dirt across 9 orders · +18 · 1 still resting"*.
+**The resting order sets the price.** Bid 6 for something resting at 5 and you pay 5.
+Turning up late doesn't cost you anything.
 
-Anything not filled immediately **rests** until it is. A partly-filled order leaves the
-remainder on the book.
+**Ties go to whoever got there first.** Two sells at the same price fill in the order they
+were placed.
+
+**One order can fill many.** A sell of 10 into ten resting bids of 1 is ten trades at once,
+and the book empties in a single frame. The mod tells you afterwards: *"Sold 9 of 10 Dirt
+across 9 orders, +18, 1 still resting"*.
+
+Anything that doesn't fill immediately **rests** until it does. A partly filled order leaves
+the remainder on the book.
 
 ### Knowing when something traded
 
-- **Chat** tells you when one of your resting orders fills — the thing you were not
-  watching for.
-- **The action bar** can do the same, more briefly. Both are settings.
-- Filling somebody else's order is reported too, in grey: feedback for something you just
-  did, rather than news.
+Chat tells you when one of your resting orders fills, which is the one you weren't watching
+for. The action bar can do the same, more briefly. Both are settings.
+
+Filling somebody else's order is reported too, in grey, since that's feedback for something
+you just did rather than news.
 
 ---
 
 ## 5. What it costs to trade
 
-Four numbers, all set by the market's creator, all visible on the Market tab.
+Four numbers, all set by the creator, all visible on the Market tab.
 
-**Welcome grant** — what a new arrival starts with. Capped at 10,000 when somebody is
-hosting from their game; a dedicated server may go higher.
+**Welcome grant.** What a new arrival starts with. Capped at 10,000 when somebody hosts from
+their game. A dedicated server may go higher.
 
-**Trading fee (tax)** — a percentage of each trade, taken from the seller's proceeds and
-**destroyed**, not paid to anyone. It is a drain on the money supply rather than income
-for a host.
+**Trading fee.** A percentage of each trade, taken from the seller's proceeds and destroyed
+rather than paid to anyone. It drains the money supply instead of being income for a host.
 
-**Listing fee** — charged when you place an order, never refunded, including if you
-cancel. It exists so that placing orders is not free: without it, a market can be spun
-in circles for profit.
+**Listing fee.** Charged when you place an order and never refunded, including if you cancel.
+It's there so placing orders isn't free, because a market where it is free can be spun in
+circles for profit.
 
-The listing fee can also **escalate**: a market may give everyone a few free orders and
-charge more the more you hold open at once. Set to zero, nothing escalates and every
-listing costs the same.
+The listing fee can also **escalate**: a market can give everyone a few free orders and
+charge more the more you hold open at once. Set to zero, nothing escalates and every listing
+costs the same.
 
-**Stipend** — see below.
+**Stipend.** See below.
 
 ### The stipend, and why it exists
 
-The welcome grant used to be the only way credits ever entered a market. That means the
-money supply grows when *people* arrive and never again, while goods keep piling in — so
-prices sink until everything costs 1 and price stops meaning anything.
+The welcome grant used to be the only way credits ever entered a market. That means the money
+supply grows when *people* arrive and never again, while goods keep piling in. Prices sink
+until everything costs 1 and price stops meaning anything.
 
-The stipend fixes that: any registered player can **claim** a fixed amount once per *N
-fills the market settles* — 50 by default. Click **Claim stipend** on the Market tab.
+The stipend fixes that. Any registered player can **claim** a fixed amount once per *N fills
+the market settles*, 50 by default. Click **Claim stipend** on the Market tab.
 
-Two details that look arbitrary and are not:
+Two details that look arbitrary and aren't.
 
-**It is counted in fills, not in time or in events.** Deposits, withdrawals and
-cancellations are free actions, so a stipend paid per event could be farmed by one person
-alone in an empty market. A fill needs two orders to cross, and every order costs a
-listing fee.
+**It counts fills, not time or events.** Deposits, withdrawals and cancellations are free
+actions, so a stipend paid per event could be farmed by one person alone in an empty market.
+A fill needs two orders to cross, and every order costs a listing fee.
 
-**A market will refuse a stipend that outruns its own fees.** If the payout across every
-registered player exceeds what the listing fees collect over the same interval, the
-market is printing money and the rule refuses it — when it is set, and again at every
-claim, because a market can outgrow a stipend that was affordable when it was chosen.
+**A market refuses a stipend that outruns its own fees.** If the payout across every
+registered player is more than the listing fees collect over the same interval, the market is
+printing money and the rule turns it down. It's checked when the stipend is set and again at
+every claim, since a market can outgrow one that was affordable when it was chosen.
 
 ---
 
 ## 6. Playing together
 
-Somebody has to be **hosting** for trades to happen. There are two ways.
+Somebody has to be **hosting** for trades to happen. Two ways to do it.
 
 ### Hosting from your game
 
-**Network tab → Host.** Your game starts listening on a port; your friends connect to
-it. You keep playing, and the market runs inside your session.
+**Network tab → Host.** Your game starts listening on a port and your friends connect to it.
+You carry on playing, and the market runs inside your session.
 
-Hosting rotates freely: stop hosting, and anybody else holding the full history can host
-instead. That is why the history matters more than any particular machine.
+Hosting moves around freely. Stop hosting and anybody else holding the full history can host
+instead, which is why the history matters more than any particular machine does.
 
-The Host button greys itself when it should not be pressed — while a dedicated server is
-already serving that market, or when this copy holds only a summary and not the history
-behind it. If it refuses on click it will say why.
+The Host button greys itself when it shouldn't be pressed: while a dedicated server is
+already serving that market, or when your copy holds only a summary rather than the history
+behind it. If it refuses when you click, it says why.
 
 ### The dedicated server
 
-A standalone process — no Minecraft, no world — that keeps a market up whether or not
-anybody is playing. Hosting rotates for a friend group; a server is for a group that would
-rather one machine always be there.
+A standalone process with no Minecraft and no world, keeping a market up whether or not
+anybody is playing. Hosting from your game suits a friend group. A server suits a group that
+would rather one machine was always there.
 
 #### What the operator needs
 
-**One jar and a Java 8 runtime. Nothing else** — no Minecraft, no Gradle, no copy of this
-repository.
+**One jar and a Java 8 runtime.** No Minecraft, no Gradle, no copy of this repository.
 
 ```
-./gradlew serverJar          # produces build/libs/economies-server.jar, about 600 KB
+./gradlew serverJar          # build/libs/economies-server.jar, about 600 KB
 ```
 
-Hand that file to whoever is running the server. It is self-contained: `core` imports no
+Hand that file to whoever is running the server. It's self-contained: `core` imports no
 Minecraft, and gson is packed in beside it.
 
-*The mod jar is not the same thing and will not work.* Minecraft supplies gson at runtime,
-so a standalone JVM loading the mod jar dies on `NoClassDefFoundError` before it prints
-anything.
+*The mod jar won't do.* Minecraft supplies gson at runtime, so a standalone JVM loading the
+mod jar dies on `NoClassDefFoundError` before it prints anything.
 
-From the repository you can equally run `./gradlew hostServer --args="…"`. Every command
-below works either way — substitute `./gradlew hostServer --args="<flags>"` for
-`java -jar economies-server.jar <flags>`.
+From the repository you can run `./gradlew hostServer --args="…"` instead. Every command
+below works either way: swap `./gradlew hostServer --args="<flags>"` for `java -jar
+economies-server.jar <flags>`.
 
-Keeping one running, updating it, and what to back up are in
-[§27](#27-running-a-server-and-how-the-jar-is-put-together), along with what is inside
-that jar and why.
+Keeping one running, updating it and what to back up are in
+[§28](#28-running-a-server-and-how-the-jar-is-put-together), along with what's inside the jar.
 
 #### Setting one up
 
-**1. Put the jar in a folder that is not the repository.** Everything the server creates
-lands beside its log file, and one of those things is a private key. Committing a market's
-history to source control by accident is easy and permanent.
+**1. Put the jar somewhere that isn't the repository.** Everything the server creates lands
+beside its log file, and one of those things is a private key.
 
 ```
 mkdir ~/economies-server && cp economies-server.jar ~/economies-server/ && cd ~/economies-server
 ```
 
-**2. Write a config.** Nothing exists yet, so this creates one with every setting in it:
+**2. Write a config.** Nothing exists yet, so this creates one with every setting in it.
 
 ```
 java -jar economies-server.jar --config server.json --write-config
 ```
 
-**3. Edit it.** The three that matter before a first start:
+**3. Edit it.** Three settings matter before the first start.
 
 ```jsonc
-"logFile": "market.jsonl",              // beside the jar; anywhere but the repository
+"logFile": "market.jsonl",             // beside the jar, anywhere but the repository
 "port": 25555,
 "hostName": "our server",              // what players see in the host list
 
-"policy": {                    // the market's own economics — see below
+"policy": {                    // the market's own economics, see below
   "taxBps": 100,               // 1% trading fee, taken from the seller and destroyed
   "welcomeGrant": 500,         // what a newcomer starts with
   "listingFee": 2,             // charged to place an order, never refunded
-  "listingFreeOrders": 0,      // orders held open before the fee escalates; 0 = never
-  "stipendAmount": 0,          // 0 = no stipend
+  "listingFreeOrders": 0,      // orders held open before the fee climbs, 0 for never
+  "stipendAmount": 0,          // 0 for no stipend
   "stipendEveryFills": 50
 }
 ```
@@ -340,225 +326,275 @@ java -jar economies-server.jar --config server.json --write-config
 java -jar economies-server.jar --config server.json
 ```
 
-The first start with an empty log creates the market. Expect roughly:
+The first start with an empty log creates the market. You should see roughly:
 
 ```
 [host] created 'our server's market' owned by this server
-[host] policy updated from this config at event 3 — tax 0 → 100, listing fee 0 → 2
+[host] policy updated from this config at event 3: tax 0 to 100, listing fee 0 to 2
 [host] listening on port 25555
 ```
 
-**5. Join it.** In game: **Network tab → address → Connect**, using `host:25555`. On the
-same machine `localhost:25555` works.
+**5. Join it.** In game, **Network tab → address → Connect**, using `host:25555`. On the same
+machine, `localhost:25555`.
 
 #### What it creates, all beside the log
 
 | File | What it is |
 | --- | --- |
-| `market.jsonl` | The market. This is the only irreplaceable file — **back it up** |
-| `server-identity.key` | The server's private key. Never share it, never commit it |
-| `server-peers.json` | Who has connected, from where. The operator's own note |
-| `known-keys.json` | Identities seen before, for recognising them again |
+| `market.jsonl` | The market. The only irreplaceable file, so **back it up** |
+| `server-identity.key` | The server's private key. Don't share it, don't commit it |
+| `server-peers.json` | Who connected and from where. The operator's own note |
+| `known-keys.json` | Identities seen before, so they're recognised again |
 
 #### Changing things afterwards
 
-**Host rules** — admission, deposit caps, world checks, migration limits, the welcome-grant
-ceiling, port, name. Edit the config, restart. They belong to whoever is hosting and take
-effect immediately.
+**Host rules** are admission, deposit caps, world checks, migration limits, the
+welcome-grant ceiling, port and name. Edit the config, restart. They belong to whoever is
+hosting and take effect immediately.
 
-**The market's economics** — the `policy` block. Edit, restart, and a server that created
+**The market's economics** are the `policy` block. Edit, restart, and a server that created
 its market publishes the change as a `MarketPolicy` event, exactly as a player would from
-the Market screen. It is the creator, after all.
+the Market screen. It's the creator, after all.
 
 Two things worth knowing:
 
-- **Anything left out is left alone.** A block that mentions only the tax will not touch
-  the grant or the fee. That is why the fields are absent rather than zero when unset.
-- **A policy the market would refuse is reported and skipped** — a stipend that outruns
-  its own listing fees, a grant above the host's ceiling — and the market keeps running on
-  what it had.
+- **Anything you leave out is left alone.** A block mentioning only the tax won't touch the
+  grant or the fee, which is why the fields are absent rather than zero when unset.
+- **A policy the market would refuse is reported and skipped**, like a stipend that outruns
+  its listing fees or a grant above the host's ceiling. The market keeps running on what it
+  had.
 
 Running `--write-config` again rewrites the file with the numbers actually in force, which
-is the quickest way to see what a market ended up with.
+is the quickest way to see where a market ended up.
 
 #### Who owns the market
 
-By default the server does, and the operator changes policy through the config as above.
+By default the server does, and the operator changes policy through the config.
 
-**`--creator-key` names a player as creator instead**, so the rules are changed from the
+**`--creator-key` names a player as creator instead**, so the rules get changed from the
 Market screen in game. Worth it when a person should own the market and the box is only
-hardware; otherwise the config is simpler and the key is one more thing to keep somewhere.
-It is used on the first start only, needs `creatorUserId` in the config, and cannot be
-changed afterwards — the creator is recorded at genesis and there is no event that moves
-it.
+hardware. Otherwise the config is simpler and the key is one more thing to keep somewhere.
+It's used on the first start only, needs `creatorUserId` in the config, and can't be changed
+afterwards, since the creator is recorded at genesis and nothing moves it.
 
 #### If something looks wrong
 
 | It says | It means |
 | --- | --- |
-| `the policy block in this config is not being applied` | This server is hosting a market it did not create. Only the creator sets policy; these settings reach a market this server creates itself |
-| `the policy block in this config was refused: …` | The numbers break a market rule — usually the stipend interlock. The market is fine and unchanged |
-| `this market grants N, and welcomeGrant is set to M` | The grant amount is the market's, fixed when it was created. The config setting only chooses whether this server issues grants at all |
-| `port already in use` | Something else has 25555, or a previous run has not exited |
+| `the policy block in this config is not being applied` | This server is hosting a market it didn't create. Only the creator sets policy |
+| `the policy block in this config was refused: …` | The numbers break a market rule, usually the stipend interlock. The market is fine and unchanged |
+| `this market grants N, and welcomeGrant is set to M` | The amount is the market's, fixed when it was created. The config setting only chooses whether this server issues grants at all |
+| `port already in use` | Something else has 25555, or a previous run hasn't exited |
 
 #### Two differences from a friend hosting
 
-A dedicated server **does not hand out its peer list** — `server-peers.json` stays the
+A dedicated server **doesn't hand out its peer list**. `server-peers.json` stays the
 operator's note rather than something clients learn from. And **clients keep only a
 snapshot** of a dedicated market rather than the whole history, since the box is always
-there; `/trade archive on` opts back in for anybody who wants a full copy.
+there. `/trade archive on` opts back in for anybody who wants a full copy.
 
 ### Who can join
 
-The host decides, and **which file it reads depends on which kind of host it is** — one
-of the easier things to get wrong when moving between the two:
+The host decides, and which file it reads depends on which kind of host it is. This is one
+of the easier things to get wrong when moving between the two.
 
 | Hosting from | Reads |
 | --- | --- |
 | Your game | `host-config.json`, beside that world's market. `/trade hostconfig write` creates it |
-| A dedicated server | Its own `--config` file — the one `--write-config` produced |
+| A dedicated server | Its own `--config` file, the one `--write-config` produced |
 
-Both hold the same host rules and mean the same things; see [§9](#9-host-rules). By
-default, anybody may join either.
+Both hold the same host rules and mean the same things. See [§10](#10-host-rules). By
+default anybody may join either.
 
 ---
 
-## 7. More than one market
+## 7. Playing with friends who aren't on your network
 
-A world can hold several markets, one of them **active**. Market tab → **Add another
-market** makes a new slot; the switcher moves between them.
+**Open to LAN only reaches your own network.** If your friends are elsewhere, something has
+to make their machine able to reach yours, and there are two connections that need it, which
+is the bit people miss.
 
-Why switch rather than belong to both at once: currency does not move between markets and
-an inventory cannot be spent twice, so simultaneous membership is *sound* — but every
-figure in the mod (your position, the fork checks, migration, notifications) would have
-to fan out across markets. Switching costs almost nothing and covers what people actually
-wanted: a friend group some evenings, a bigger server otherwise.
+| Connection | What it is |
+| --- | --- |
+| Minecraft | Open to LAN, on whatever port Minecraft picks |
+| The market | This mod's own socket, on the port in the Host field, 25555 by default |
 
-It also takes the one-way-door feeling out of leaving a market: you can join another
+They're separate. Forwarding one and not the other gets you a world you can join with a
+market you can't, or the reverse.
+
+### The easy way: a virtual LAN
+
+**ZeroTier**, **Radmin VPN** or **Hamachi** put everybody on one virtual network, and both
+connections then work exactly as they do at home. No router settings, no public IP, and
+nothing to undo afterwards.
+
+With ZeroTier: everyone installs it, one person creates a network and shares its ID, everyone
+joins that ID, and the creator authorises them in the ZeroTier panel. Each machine then has a
+second address, usually starting `10.` or `172.`, and that's the address to type into
+**Connect**, and the one to give people for Open to LAN.
+
+This is how the mod's own two-machine testing was done, and it's what to reach for first.
+
+### The other way: port forwarding
+
+If you'd rather not install anything, forward **both** ports on the host's router:
+
+- the market port, 25555 by default
+- the port Minecraft prints when you click Open to LAN, which changes every time unless you
+  set it
+
+Then friends connect to your public IP. It works, but it exposes both ports to the internet,
+and Minecraft's LAN port moving each session makes it tedious.
+
+### The third way: a dedicated server
+
+If the box already has a public address, none of this applies. Run
+[the dedicated server](#the-dedicated-server) on it and everyone connects to `address:25555`.
+Only the market needs to reach it, since nobody is joining a Minecraft world on that machine.
+
+### If it won't connect
+
+- **Check the market port, not Minecraft's.** They're different numbers and the mod's is the
+  one in the Host field.
+- **The host has to be hosting.** Network tab, Host, and it should say it's listening.
+- **On a virtual LAN, use the virtual address.** Your normal `192.168.…` address is not
+  reachable from another network even when ZeroTier is running.
+- **Firewalls block the market port too.** Windows asks about Minecraft the first time and
+  says nothing about this mod's socket, which is a separate rule.
+
+---
+
+## 8. More than one market
+
+A world can hold several markets with one of them **active**. Market tab → **Add another
+market** makes a new slot, and the switcher moves between them.
+
+Why switch rather than belong to both at once? Currency doesn't move between markets and an
+inventory can't be spent twice, so being in two at once is sound in principle. The problem is
+that every figure in the mod would have to fan out across markets: your position, the fork
+checks, migration, notifications, the whole screen. Switching costs almost nothing and covers
+what people actually wanted, which is a friend group some evenings and a bigger server
+otherwise.
+
+It also takes the one-way-door feeling out of leaving a market, since you can join another
 without destroying the first.
 
 ### Archiving
 
-When you connect to a **dedicated server**, your game keeps only a summary of where the
-market got to, not every event behind it — that history lives on the server and there is
-no reason for a hundred players to keep a hundred copies of it.
+Connect to a **dedicated server** and your game keeps only a summary of where the market got
+to, not every event behind it. That history lives on the server, and there's no reason for a
+hundred players to each keep a copy.
 
-If you want the full history — to be able to host it yourself, or simply to have it —
-`/trade archive on`, then reconnect once. `/trade archive` says which you have.
+If you want the full thing, either to host it yourself or just to have it, `/trade archive
+on` and reconnect once. `/trade archive` says which you've got.
 
-A rotating host is unaffected: there, keeping the history *is* how hosting rotates.
+A rotating host is unaffected, because there, keeping the history is how hosting rotates.
 
 ---
 
-## 8. When something looks wrong
+## 9. When something looks wrong
 
 ### "You are behind"
 
 Somebody else's copy has more events than yours. Connect to them and catch up.
 
-The mod remembers the furthest the market has ever been seen to reach, even if nobody is
-online now, so it can still warn you a week later when discovery finds nothing.
+The mod remembers the furthest the market has ever been seen to reach, even when nobody is
+online, so it can still warn you a week later when discovery finds nothing at all.
 
 ### "Your history diverged"
 
-Two copies were written to while they were apart, so there are now two versions of the
-past. This is the one genuinely bad state, and it cannot be merged — the two chains
-disagree about what happened, and every balance downstream of the split disagrees with
-them.
+Two copies were both traded on while they were apart, so there are now two versions of the
+past. This is the one genuinely bad state and it can't be merged: the two chains disagree
+about what happened, and so does every balance after the split.
 
 What the mod does about it:
 
-- **It finds where you parted**, and says so: *"you parted from the other copy after
-  event 42."*
-- **Everything before the split is safe.** It is in their copy too, and comes back when
-  you rejoin.
-- **Reset** discards your branch and rejoins theirs. Before it does, it works out what
-  that costs you and gives back what it can:
-  - **Items you deposited after the split** are physically returned to your inventory.
-    Nothing else records them, so this is the one loss a reset would otherwise cause
-    outside the ledger.
-  - **Orders you placed after the split** come back as a checklist so you can re-place
-    them by hand.
-- What cannot come back: credits you earned after the split, and trades made against a
-  book that no longer exists. Those are ledger entries with no existence outside the
-  branch being discarded.
+- **It finds where you parted** and says so: *"you parted from the other copy after event
+  42."*
+- **Everything before the split is safe.** It's in their copy too and comes back when you
+  rejoin.
+- **Reset** discards your branch and rejoins theirs. Before it does, it works out what that
+  costs and hands back what it can:
+  - **Items you deposited after the split** go back into your inventory. Nothing else
+    records them, so that's the one loss a reset would otherwise cause outside the ledger.
+  - **Orders you placed after the split** come back as a checklist so you can re-place them.
+- What can't come back: credits you earned after the split, and trades made against a book
+  that no longer exists. Those are ledger entries with no existence outside the branch being
+  discarded.
 
 ### "Log unusable"
 
-The file has a line the mod cannot read, or the chain does not add up. The market is
-still shown, with a banner and a Reset button — because emptying somebody's market on the
-screen where they go to fix it is the wrong response to a bad line.
+The file has a line the mod can't read, or the chain doesn't add up. The market is still
+shown, with a banner and a Reset button, because emptying somebody's market on the screen
+they came to fix it from is the wrong answer to a bad line.
 
-A damaged history cannot be hosted: serving it would hand a joiner a chain that breaks
-partway. The Host button says so, and points at Reset.
+A damaged history can't be hosted, since serving it would hand a joiner a chain that breaks
+partway. The Host button says so and points at Reset.
 
-### Migration — leaving with what you hold
+### Migration, or leaving with what you hold
 
-If you want to *move* to another market rather than rejoin your own, **Migrate my
-position** carries your credits and items across, if the destination accepts migration.
-The market you are leaving is abandoned rather than merged, and the destination host may
-cap how much can arrive.
+If you want to *move* to another market rather than rejoin your own, **Migrate my position**
+carries your credits and items across, provided the destination accepts migration. The market
+you're leaving is abandoned rather than merged, and the destination host may cap how much can
+arrive.
 
 ---
 
-## 9. Host rules
+## 10. Host rules
 
-Two different kinds of rule, and confusing them is the source of most surprises.
+Two kinds of rule, and mixing them up causes most of the surprises.
 
-### Market rules — in the history, the same for everybody
+### Market rules: in the history, the same for everybody
 
-Welcome grant, trading fee, listing fee, stipend. They are recorded as events, every
-replica applies them identically, and only the **creator** can change them.
+Welcome grant, trading fee, listing fee, stipend. They're recorded as events, every copy
+applies them identically, and only the **creator** can change them.
 
-### Host rules — in a file, belonging to whoever is hosting
+### Host rules: in a file, belonging to whoever is hosting
 
 Admission, deposit caps, world checks, migration limits, the welcome-grant ceiling. They
-**change when hosting rotates**, because they are that host's defence against its clients
+**change when hosting rotates**, because they're that host's defence against its clients
 rather than the market's defence against its host.
 
-Where they live depends on who is hosting: `host-config.json` beside that world's market
-when somebody hosts from their game, or the dedicated server's own `--config` file. Same
-settings, same meanings, two files — because they belong to the host and not to the
-market.
+Where they live depends on who's hosting: `host-config.json` beside that world's market when
+somebody hosts from their game, or the dedicated server's own `--config` file. Same settings,
+same meanings, two files, because they belong to the host rather than to the market.
 
-`/trade hostconfig` prints the ones in force for a world. `/trade hostconfig write`
-creates the file with every setting in it, ready to edit. For a server it is
-`--write-config`.
+`/trade hostconfig` prints the ones in force for a world, and `/trade hostconfig write`
+creates the file with every setting in it. For a server, `--write-config`.
 
 | Setting | What it does |
 | --- | --- |
-| `admission` | `open`, or an allowlist; plus a deny list |
+| `admission` | `open`, or an allowlist, plus a deny list |
 | `maxDepositUnitsPerWindow` + `depositWindowMinutes` | Rate-limit how much anyone can deposit |
-| `requireAttestation` | Turn away clients that will not describe their world |
-| `refuseCreativeWorlds`, `refuseCheatWorlds` | Turn away worlds that report creative mode or cheats |
+| `requireAttestation` | Turn away clients that won't describe their world |
+| `refuseCreativeWorlds`, `refuseCheatWorlds` | Turn away worlds reporting creative mode or cheats |
 | `maxDepositUnitsPerPlayHour` | Weigh deposits against claimed playtime |
-| `maxDepositMultipleOfHandled` | Weigh deposits against what Minecraft says they have ever handled |
+| `maxDepositMultipleOfHandled` | Weigh deposits against what Minecraft says they've handled |
 | `maxMigratedCredits`, `acceptsMigration` | Limit or refuse incoming migrations |
 | `maxWelcomeGrant` | The ceiling this host will issue |
 | `banOnWorldChange` | Ban an identity that changes world mid-session |
 
-**What the world checks are worth.** Everything a client says about its own world is a
-*claim*, not evidence — a modified client says whatever it likes, and signing it would
-only prove who said it. They are worth having for the casual case (somebody who enabled
-cheats once and thought nothing of it) and for making two claims contradict each other.
-They are not security.
+**What the world checks are worth.** Everything a client says about its own world is a claim
+rather than evidence. A modified client says whatever it likes, and signing it would only
+prove who said it. They're worth having for the casual case, somebody who turned on cheats
+once and thought nothing of it, and for making two claims contradict each other. They aren't
+security.
 
 ### Rules a group can agree once
 
-Because host rules travel with the host, a market is only as protected as its most
-permissive member. The creator can **publish** a set of defaults into the history —
-`/trade hostrules publish` — and any host adopts them for anything it has not set for
-itself.
+Because host rules travel with the host, a market is only as protected as its most permissive
+member. The creator can **publish** a set of defaults into the history with `/trade hostrules
+publish`, and any host adopts them for anything it hasn't set itself.
 
-Published rules are **advisory**: recorded, read by hosts, enforced by nothing. `/trade
+Published rules are advisory: recorded, read by hosts, enforced by nothing. `/trade
 hostrules` shows what was agreed and what this host does with it.
 
 ---
 
-## 10. Command reference
+## 11. Command reference
 
-Every command is client-side and reads your own replica; none of them talk to the
-Minecraft server you are on.
+Every command is client-side and reads your own copy. None of them talk to the Minecraft
+server you're on.
 
 | Command | What it does |
 | --- | --- |
@@ -568,30 +604,29 @@ Minecraft server you are on.
 | `/trade hostconfig` | The rules this world hosts under |
 | `/trade hostconfig write` | Create `host-config.json` with every setting in it |
 | `/trade hostrules` | The rules this market's group agreed once |
-| `/trade hostrules publish` | Publish them (creator only) |
+| `/trade hostrules publish` | Publish them, creator only |
 | `/trade archive` | Whether this copy keeps the whole history |
 | `/trade archive on` / `off` | Change that |
 | `/trade panel` | The inventory listings panel |
 | `/trade panel on` / `off` | Show or hide it |
 | `/trade panel rows <1-15>` | How many listings it shows |
 
-**Trading is deliberately not here.** Buying, selling and cancelling stay on the screen,
-and resetting or migrating stay behind its confirmations. The rule the codebase applies:
-*a command may write when getting it wrong cannot cost anybody their items, their
-credits, or their market.*
+**Trading deliberately isn't here.** Buying, selling and cancelling stay on the screen, and
+resetting or migrating stay behind its confirmations. The rule the codebase applies: a
+command may write when getting it wrong can't cost anybody their items, their credits, or
+their market.
 
 ---
----
 
-# Part 2 — How it works
+# Part 2: how it works
 
-## 11. The shape of the thing
+## 12. The shape of the thing
 
 Three ideas, and everything else follows from them.
 
 **1. The market is a list of events, not a database of balances.** Nothing anywhere
-stores "Alice has 400 credits". What exists is an append-only log — *Alice was granted
-1000*, *Alice listed 20 iron at 5*, *Bob's bid crossed it* — and every replica walks that
+stores "Alice has 400 credits". What exists is an append-only log. *Alice was granted
+1000*, *Alice listed 20 iron at 5*, *Bob's bid crossed it*, and every replica walks that
 list and works the balance out. Two replicas holding the same list always agree, because
 they ran the same arithmetic over the same input.
 
@@ -603,7 +638,7 @@ somebody else without their key.
 **3. A host orders events, and does nothing else.** When you place an order, your client
 *proposes* it; the host assigns it the next sequence number, appends it, and broadcasts
 it to everyone. That is the whole of the host's power. It cannot invent a balance because
-balances are never sent — every client computes its own from the same events.
+balances are never sent, and every client computes its own from the same events.
 
 ```
         propose                      append + broadcast
@@ -624,11 +659,11 @@ client ────────────► host ─────────�
 | `mixin` | One accessor, to read where vanilla drew its inventory panel. |
 
 `core` importing no Minecraft is why the whole engine can be tested on a bare JVM in
-milliseconds — the suites in section 25 never launch the game.
+milliseconds, and the suites in section 26 never launch the game.
 
 ---
 
-## 12. The event log
+## 13. The event log
 
 One JSON object per line, appended, never rewritten. `EventLog` owns the file.
 
@@ -659,7 +694,7 @@ is what lets a log be handed to somebody who was never present and still be chec
 ### Three fields that carry more weight than they look
 
 **`marketId` on every event.** Without it, a signed event lifted out of one market's log
-verifies perfectly in another — replaying somebody's real deposits into a different market
+verifies perfectly in another, and replaying somebody's real deposits into a different market
 would be indistinguishable from them making those deposits there. Every event names the
 market it was authored for, and applying it anywhere else is refused.
 
@@ -667,7 +702,7 @@ market it was authored for, and applying it anywhere else is refused.
 so "a different market" stops being indistinguishable from "a diverged history".
 
 **`clientEventId`.** A client-chosen id on the events that move real items, so a proposal
-that was sent twice — or sent, then recovered after a crash — can be recognised rather
+that was sent twice, or sent and then recovered after a crash, can be recognised rather
 than applied twice.
 
 ### Reading it
@@ -678,26 +713,26 @@ Three ways, and choosing wrong is a performance bug that only shows up on big ma
 | --- | --- | --- |
 | `forEach(from, visitor)` | One entry in memory at a time; stops early if the visitor says so | Almost always |
 | `forEachAfter(seq, visitor)` | Skips earlier lines **without parsing them** | Continuing from a snapshot |
-| `readFrom(seq)` | Materialises the whole log into a list — about a kilobyte per event | Only when you genuinely need every event at once |
+| `readFrom(seq)` | Materialises the whole log into a list, about a kilobyte per event | Only when you genuinely need every event at once |
 
 A 100,000-event market is roughly 57 MB on disk and around 100 MB as a list, so
 `readFrom` on a long log was a several-hundred-megabyte allocation inside a Minecraft
 client. Most of the compaction work was replacing those calls.
 
 `forEach` **stops at the first line it cannot parse** rather than throwing, because a log
-from another version is a damaged log and not a crash — throwing took the whole world down
+from another version is a damaged log and not a crash. Throwing took the whole world down
 at startup, which left no way to reach the Reset button that would have fixed it.
 
 ---
 
-## 13. Events, and what each one means
+## 14. Events, and what each one means
 
 Twelve kinds. Everything the market can do is one of these.
 
 | Event | Who authors it | What it does |
 | --- | --- | --- |
 | `MarketCreated` | The creator | Genesis. Names the market, registers the creator's key. Legal only at seq 1. |
-| `KeyRegistered` | The player | Binds a userId to a public key, signed by that key — self-certifying. |
+| `KeyRegistered` | The player | Binds a userId to a public key, signed by that key, so it is self-certifying. |
 | `WelcomeGrant` | The host | Opening balance, once per identity per market. |
 | `MarketPolicy` | The creator only | Tax, grant, listing fee, free allowance, stipend. |
 | `Stipend` | Any registered player | Claims the periodic payout. |
@@ -714,7 +749,7 @@ Two are worth dwelling on.
 **`MarketPolicy` is the whole policy, not a patch.** Anything it does not restate is set
 to zero. This nearly wiped a welcome grant once and did silently wipe a stipend the moment
 those fields were added, so the submit path now builds a policy from current state and
-hands it to the caller to modify — forgetting a field keeps its value instead of clearing
+hands it to the caller to modify, so forgetting a field keeps its value instead of clearing
 it.
 
 **`DepositAndList` exists because two events could half-happen.** Depositing and then
@@ -722,7 +757,7 @@ listing is two proposals, and the second can be refused after the first has land
 
 ---
 
-## 14. validate and apply
+## 15. validate and apply
 
 **The single most important rule in the codebase.** `EventApplier` is the only way
 `MarketState` is ever mutated, and it has two entry points:
@@ -741,7 +776,7 @@ knowing the host already asked.
 
 Three real defects came from forgetting this, which is why it is stated so loudly:
 
-- **A history import called `apply` without `validate`** — on the one path documented as
+- **A history import called `apply` without `validate`**, on the one path documented as
   treating a log as a file from a stranger. A hand-built log could carry a welcome grant
   for any sum, repeated as often as you like. Measured before the fix: a replayed balance
   of 3,000,999,997 against a published grant of 10.
@@ -756,9 +791,9 @@ If you add a rule, it goes in `validate`. If you write a test for a rule, it ask
 
 ---
 
-## 15. The order book
+## 16. The order book
 
-One `OrderBook` per item. Two `TreeMap`s keyed by price — one for asks, one for bids —
+One `OrderBook` per item. Two `TreeMap`s keyed by price, one for asks and one for bids,
 each price mapping to a queue of the orders at it. Price-time priority falls straight out
 of that shape: the best ask is the map's **first** entry and the best bid is its **last**,
 and within a price level the oldest order is the head of the queue.
@@ -788,12 +823,12 @@ from a single event. That matters beyond arithmetic: fills are what the stipend 
 counts, and it is why nine rows can leave the screen in one frame.
 
 Every public method is synchronized on the book, because the sequencer or network thread
-matches into it while the render thread walks it to draw — and building a list from a live
+matches into it while the render thread walks it to draw, and building a list from a live
 deque mid-cross is a `ConcurrentModificationException`.
 
 ---
 
-## 16. The money rules
+## 17. The money rules
 
 All in `validate`, all in `MarketState`, all integer arithmetic. **No floats anywhere near
 a price**: Java without `strictfp` is not reproducible across platforms, and two replicas
@@ -804,7 +839,7 @@ that disagree in the last bit have forked.
 | | |
 | --- | --- |
 | **In** | Welcome grants; stipend claims; migrations from another market |
-| **Out** | The trading fee, which is *burned* — taken from the seller's proceeds and destroyed |
+| **Out** | The trading fee, which is *burned*: taken from the seller's proceeds and destroyed |
 | **Neither** | A trade itself. Credits move sideways between two players. |
 
 ### The ceilings
@@ -827,7 +862,7 @@ integer for every replica to reach the same balance.
 ```
 stipendOutpacesItsFees(amount, everyFills, listingFee, claimants):
     if amount <= 0:      no stipend, nothing to check
-    if listingFee <= 0:  refuse — fills would cost nothing to produce
+    if listingFee <= 0:  refuse, since fills would cost nothing to produce
     collected = listingFee × everyFills          # what the market takes in per interval
     paid      = amount × max(1, claimants)       # what it pays out per interval
     refuse if paid >= collected
@@ -836,7 +871,7 @@ stipendOutpacesItsFees(amount, everyFills, listingFee, claimants):
 It was wrong twice before it was right, and both mistakes are instructive:
 
 - **A fill was costed at two listing fees.** One order sweeping a stacked book produces a
-  fill per resting order it consumes — twenty fills for twenty-one fees. The floor is one
+  fill per resting order it consumes, so twenty fills for twenty-one fees. The floor is one
   fee per fill.
 - **It counted one claimant.** Every registered identity claims per interval, so the
   payout multiplies by the head count while the fees do not.
@@ -846,7 +881,7 @@ claim, and by the screen that offers the control.
 
 ---
 
-## 17. The network
+## 18. The network
 
 Newline-delimited JSON over a plain socket. `MessageChannel` frames it; `Message` holds the
 shapes.
@@ -884,7 +919,7 @@ that is not admitted, a world the host declines.
 
 **Chunking exists because a fresh joiner pulls the entire market**, which outgrows a single
 frame long before anything else does. Only the first chunk carries the host identity and
-peer list; the rest are log lines. Both ends stream — the host sends without building the
+peer list, and the rest are log lines. Both ends stream: the host sends without building the
 whole history in memory, and the client applies frame by frame rather than gathering it
 first.
 
@@ -909,11 +944,11 @@ there is no path by which two events get the same number.
 
 Broadcasts can be missed. A client applying an `Accepted` checks the sequence number it
 expected against the one it received, and on a mismatch asks for what it missed rather than
-applying an event on top of a hole — the state would be silently wrong from then on.
+applying an event on top of a hole, since the state would be silently wrong from then on.
 
 ---
 
-## 18. Divergence: noticing and locating a fork
+## 19. Divergence: noticing and locating a fork
 
 A fork is two copies of one market that were both written to while apart. The chain hashes
 make it *detectable*; the work is in noticing early and saying something useful.
@@ -925,8 +960,8 @@ holds at that sequence number. The same means you are simply behind; different m
 have forked.
 
 **On a poll.** Discovery asks peers what they are hosting and how far along. A peer *ahead*
-of us cannot be compared by height alone — being at 300 says nothing about whether it is
-our 300 — so the poll asks `HashQuery` for their hash **at our head**. Matching means they
+of us cannot be compared by height alone, since being at 300 says nothing about whether it
+is our 300. So the poll asks `HashQuery` for their hash **at our head**. Matching means they
 extend us and the height is real; not matching means a fork, and their height is not ours
 to record.
 
@@ -934,7 +969,7 @@ to record.
 
 ### Locating where you parted
 
-Not a binary search — a **bracketed multi-probe search**, because a round trip costs far
+Not a binary search but a **bracketed multi-probe search**, because a round trip costs far
 more than a hash comparison and one message can carry many sequence numbers.
 
 ```
@@ -948,7 +983,7 @@ splitPoint():
         probes = up to 24 seqs spread through (agreed, upper], always including upper
         send ONE HashQuery carrying all of them
 
-        never probe above the host's own head again — beyond it there is
+        never probe above the host's own head again, since beyond it there is
         nothing to disagree with, only nothing at all
 
         for each answer:
@@ -967,7 +1002,7 @@ disagreement is at the top and a single probe settles it.
 
 Two details worth copying if you write anything similar: it **never probes above the host's
 head**, since "nothing there" is not disagreement; and when it runs out of rounds it returns
-`agreed` — a point actually checked and matched — as a floor rather than reporting failure.
+`agreed`, a point actually checked and matched, as a floor rather than reporting failure.
 Erring early is the safe direction: it under-reports what the fork cost, and under-reporting
 cannot hand back an order somebody else still holds.
 
@@ -988,13 +1023,13 @@ their earlier one, in either direction.
 
 ---
 
-## 19. Loading a market quickly
+## 20. Loading a market quickly
 
 Opening a world means turning the log into state. On a long market that was the slowest
 thing the mod did, and the fix is worth reading as a method rather than as a result.
 
 **It was measured before it was designed.** A 100,000-event load parsed the file **four
-times** — the `EventLog` constructor finding its last entry, `verifyChain`, `damageReason`
+times**: the `EventLog` constructor finding its last entry, `verifyChain`, `damageReason`
 verifying again, and the replay. The profile: 45% hex formatting, 44% repeated parsing, and
 **1% rebuilding the state**, which is the only part a snapshot removes.
 
@@ -1015,7 +1050,7 @@ it was taken at. A load restores it and replays only what came after.
 load(log):
     snap = the snapshot beside the log, if it still describes this log
     if none:  verify and replay the whole file in one pass
-    else:     restore state, then forEachAfter(snap.seq) — earlier lines are
+    else:     restore state, then forEachAfter(snap.seq), and earlier lines are
               stepped over as bytes, never parsed
     tell the log where it ends (the walk just found out)
     write a new snapshot if the log has run far enough past the last one
@@ -1025,26 +1060,26 @@ load(log):
 number and is used only if the log still carries that hash there. Rewrite history and
 re-chain it: every hash from the edit onward changes, the snapshot is discarded, the log is
 replayed in full. Edit one entry *without* re-chaining: the hash at our sequence number is
-unchanged, so the snapshot is used — and that is the right answer, because the state in it
+unchanged, so the snapshot is used, and that is the right answer, because the state in it
 was computed before the edit, from the log as it was when it verified. The tampered entry
 is never read.
 
-**The shape fingerprint.** `MarketState` gains fields — thirteen on one day, twenty-one a
-week later — and a serialiser that was complete last month quietly stops being complete. So
+**The shape fingerprint.** `MarketState` gains fields, thirteen on one day and twenty-one a
+week later, and a serialiser that was complete last month quietly stops being complete. So
 the snapshot records a fingerprint reflected over `MarketState`'s declared fields, and one
 written against a different shape is discarded unread. Add a field, and every existing
 snapshot becomes a slow load, which is the failure everybody can afford.
 
 **Snapshot-only replicas.** A client of a dedicated server keeps the snapshot and no log.
-That is legitimate — the history is on the server — but it means "I have state" and "I have
+That is legitimate, since the history is on the server, but it means "I have state" and "I have
 the history behind it" are different questions. `logCoversHead` answers the second, and is
 false only for that case. It is what stops a replica with no history offering to host one.
 
 ---
 
-## 20. The client
+## 21. The client
 
-### MarketStateHolder — one market, three modes
+### MarketStateHolder: one market, three modes
 
 Everything Minecraft-side goes through it. It owns the active market for the current world
 and is in exactly one of:
@@ -1056,7 +1091,7 @@ and is in exactly one of:
 | `HOSTING` | A `HostServer` is running in this process |
 
 **State changes arrive through one path in every mode.** Local replay, a synced history and
-a live broadcast all funnel through the same applied hook — because the moment `LOCAL` and
+a live broadcast all funnel through the same applied hook, because the moment `LOCAL` and
 `CONNECTED` have separate paths they drift, and a drift between them is a fork with extra
 steps.
 
@@ -1065,7 +1100,7 @@ as everybody else rather than a privileged one.
 
 ### The screen
 
-`MarketScreen` is one 4,700-line class and the file most defects have lived in — five in a
+`MarketScreen` is one 4,700-line class and the file most defects have lived in: five in a
 single review, three the session before. Splitting it is the open piece of work, and the
 rule for whoever does it is **split by component, never by layer**: separating render from
 hit-test is how you get a control that is invisible and still clickable, which has already
@@ -1076,7 +1111,7 @@ Two things to know before changing it:
 - **`requireConnected()` is where trading is gated**, on every action, and it tests the live
   socket rather than the mode. There is no guard inside `submit()`.
 - **Long refusal messages get trimmed.** The footer draws one line at roughly 50–70
-  characters, and a longer message loses its second half — which is usually the part that
+  characters, and a longer message loses its second half, which is usually the part that
   says what to do. Short line on screen, detail to the console.
 
 ### The inventory panel
@@ -1085,50 +1120,50 @@ Reads the **book**, not the activity feed. The feed is the last 64 events of any
 filtered view of it can be empty while the market is busy, and can show an order cancelled
 an hour ago. The book is what is for sale now.
 
-Reading the book also answers "which events make a listing" for free — `PlaceOrder` and
-`DepositAndList` both put an order there — and gives "most recent" for nothing, since an
+Reading the book also answers "which events make a listing" for free, since `PlaceOrder`
+and `DepositAndList` both put an order there, and it gives "most recent" for nothing, as an
 order's id **is** the sequence number of the event that created it.
 
 ---
 
-## 21. Items and the inventory
+## 22. Items and the inventory
 
 The ledger and a Minecraft inventory are two systems, and nothing spans both
 transactionally. Every deposit and withdraw therefore has a window where one has happened
-and the other has not — and a crash inside it is invisible afterwards. The items are simply
+and the other has not, and a crash inside it is invisible afterwards. The items are simply
 gone, or simply never arrived, with nothing anywhere recording that anything was owed.
 
 `PendingOps` is that record: written before the risky half, cleared after it. Anything still
 there at startup is a window somebody fell into, and the two directions recover
 differently:
 
-**Deposit** — items leave the inventory first, then the event is proposed. The log settles
+**Deposit.** Items leave the inventory first, then the event is proposed. The log settles
 it exactly: if an event with this `clientEventId` is in there, the deposit landed and the
 ledger already holds the value; if it is not, it never will, and the items are safely
 returned.
 
-**Withdraw** — the event is applied first, then the items are handed over. Nothing records
+**Withdraw.** The event is applied first, then the items are handed over. Nothing records
 whether the hand-over completed, so these are **deliberately not re-given**. Doing it again
 would mint items whenever the interruption landed after the give rather than before it. The
 player is told instead.
 
-That asymmetry — settle what can be settled, refuse to guess at what cannot — is the whole
+That asymmetry, settling what can be settled and refusing to guess at what cannot, is the whole
 design.
 
 ---
 
-## 22. Migration, archives and slots
+## 23. Migration, archives and slots
 
 **Migration** moves what you hold from one market to another. The destination host issues a
 `MigrateBalance` crediting your position there, and the market you left is abandoned rather
 than merged. It is capped by the receiving host (`maxMigratedCredits`), can be refused
 outright (`acceptsMigration`), and is weighed against the same deposit rules as anything
-else — a migration that skipped them was a real hole, since every deposit rule hung off a
+else. A migration that skipped them was a real hole, since every deposit rule hung off a
 path a migration never took.
 
 **Archives** move a *history* rather than a position: export the log to a file, import it
 elsewhere. It solves bootstrapping, because otherwise joining an existing market requires
-somebody who holds it to be online at the same moment as you — and a group that fails to
+somebody who holds it to be online at the same moment as you, and a group that fails to
 arrange that will, with nobody making a mistake, start a second market that can never be
 merged with the first.
 
@@ -1143,14 +1178,14 @@ it, so nothing existing had to move.
 
 ---
 
-## 23. The trust model
+## 24. The trust model
 
 **What a host can do:** decide the order of events, refuse to sequence one, refuse a
 connection, and stop.
 
 **What a host cannot do:** change anybody's balance, author an event as somebody else, alter
-or delete history, or hand out a state anybody believes. Balances are never transmitted —
-only events — and every replica computes its own.
+or delete history, or hand out a state anybody believes. Balances are never transmitted,
+only events, and every replica computes its own.
 
 **What a client cannot do:** author events as somebody else, replay old events (the sequence
 and the chain both refuse), lift an event from another market (`marketId` is signed), or
@@ -1165,12 +1200,12 @@ exceed the money rules, which are checked before anything is appended.
 - **A host that stops.** Availability is not a property this design provides. Whoever holds
   the history can host next, and that is the answer.
 - **A fork, once both sides have written.** It can be detected, located, and reset away
-  from. It cannot be merged, and three schemes for merging it were considered and refused —
+  from. It cannot be merged, and three schemes for merging it were considered and refused.
   see the design notes.
 
 ---
 
-## 24. Rules this codebase keeps rediscovering
+## 25. Rules this codebase keeps rediscovering
 
 Read these before changing something load-bearing. Each was paid for.
 
@@ -1181,7 +1216,7 @@ to one place and have both callers ask.
 
 **Before changing an invariant, grep every reader of it.** One session changed "the log is
 the complete record of this replica" and then went looking for problems in the *new* code.
-Eleven defects followed, every one of them in an old reader of the old assumption —
+Eleven defects followed, every one of them in an old reader of the old assumption,
 including a gate that answered "yes" to the single case it existed to refuse.
 
 **A guard that makes failure safe also makes it silent.** And its mirror: a mechanism
@@ -1196,16 +1231,16 @@ own label and passed.
 
 **Measure before designing.** The compaction plan was written against an unmeasured cost
 model and changed substantially once profiled: the thing it was written to fix turned out
-to be 1% of the cost. And numbers rot — a headline measurement in the design notes was wrong
+to be 1% of the cost. And numbers rot: a headline measurement in the design notes was wrong
 by 4× four days after it was taken, because a later change added a full pass over the file
 that nobody re-measured.
 
 **A note asking somebody to remember is not a mechanism.** `EventCanonical` opens with
-*"if you add a field to an event type, add it here too — anything omitted is unsigned and
+*"if you add a field to an event type, add it here too, since anything omitted is unsigned and
 therefore tamperable in transit."* Correct, prominent, and insufficient: a whole event
 type was added and never appeared in the file, so its eight fields travelled unsigned. The
 warning was right about the failure and could not prevent it. It is backed by two
-mechanisms now — the chain throws on a type it does not know, and a reflection check walks
+mechanisms now. The chain throws on a type it does not know, and a reflection check walks
 every declared field of every event subclass and fails if changing one does not change the
 signed payload.
 
@@ -1213,7 +1248,7 @@ signed payload.
 
 ---
 
-## 25. Tests
+## 26. Tests
 
 Nine suites, no Minecraft, run in seconds:
 
@@ -1237,21 +1272,21 @@ Nine suites, no Minecraft, run in seconds:
 CI runs all nine on every push.
 
 **What no test does:** launch Minecraft, or measure speed. Every screen defect in this
-project's history was found by a person looking at a screen — four geometry bugs in one
+project's history was found by a person looking at a screen: four geometry bugs in one
 review, and eleven defects across five play sessions that seven hundred automated checks did
 not see. The live checklist is `docs/testing/group-e.md`, and it is not optional.
 
 ---
 
-## 26. Where to read more
+## 27. Where to read more
 
 | File | What is in it |
 | --- | --- |
 | `docs/design/log-compaction.md` | Loading and snapshots, measured; the options that were refused |
 | `docs/design/fork-rebase.md` | Why a forked branch is not rebased, and what a reset gives back instead |
 | `docs/BACKLOG.md` | Everything deliberately not built, in the order worth doing, with what it costs to keep not doing it |
-| `docs/SESSION-LOG.md` | The current state of the project, and the defects behind most of the rules in section 24 |
-| `docs/testing/group-e.md` | The live checklist — the only thing standing between a green CI tick and a claim that this works |
+| `docs/SESSION-LOG.md` | The current state of the project, and the defects behind most of the rules in section 25 |
+| `docs/testing/group-e.md` | The live checklist, the only thing standing between a green CI tick and a claim that this works |
 
 The javadoc in `core` is not decoration. Most classes there open with why they exist and
 what was tried first; `MarketSnapshot`, `WorldAttestation`, `PendingOps`, `MarketSlots` and
@@ -1259,7 +1294,7 @@ what was tried first; `MarketSnapshot`, `WorldAttestation`, `PendingOps`, `Marke
 
 ---
 
-## 27. Running a server, and how the jar is put together
+## 28. Running a server, and how the jar is put together
 
 [§6](#6-playing-together) is the walkthrough. This is what is underneath it, for whoever
 has to keep one alive or change how it ships.
@@ -1267,7 +1302,7 @@ has to keep one alive or change how it ships.
 ### Why a separate jar exists at all
 
 The mod jar cannot run a server. Minecraft supplies gson at runtime, so a bare JVM loading
-it dies on `NoClassDefFoundError: com/google/gson/JsonElement` before printing a line —
+it dies on `NoClassDefFoundError: com/google/gson/JsonElement` before printing a line,
 and the failure names a missing class rather than a missing dependency, which tells an
 operator nothing.
 
@@ -1282,8 +1317,8 @@ manifest { attributes 'Main-Class': '…core.net.HostServer' }
 
 Three decisions in nine lines:
 
-**Only `core`.** That package imports no Minecraft — the same property that lets the test
-suites run on a bare JVM in milliseconds — so it needs nothing else to run. `client` and
+**Only `core`.** That package imports no Minecraft, the same property that lets the test
+suites run on a bare JVM in milliseconds, so it needs nothing else to run. `client` and
 `mixin` would drag the game in behind them, and there is nothing in either that a server
 uses.
 
@@ -1297,7 +1332,7 @@ The result is about 600 KB, and roughly half of it is gson.
 
 ### What a server does not know
 
-Nothing in that jar understands Minecraft. Item ids are opaque strings — `minecraft:iron_ingot`
+Nothing in that jar understands Minecraft. Item ids are opaque strings. `minecraft:iron_ingot`
 is matched, counted and priced without the server having any idea what an iron ingot is,
 and a modded item id works exactly as well. That is why the ledger can be an engine on its
 own, and it is worth remembering before writing anything server-side that wants to reason
@@ -1312,7 +1347,7 @@ fresh on every start.
 Two version cautions, both of which fail loudly rather than quietly:
 
 - **A snapshot written by a different build is discarded**, because `MarketState`'s shape
-  fingerprint changed. The console says so and the market replays in full — one slow start,
+  fingerprint changed. The console says so and the market replays in full: one slow start,
   then it is gone.
 - **An event type an older build does not know stops it reading the log at that line.** A
   server downgraded past a feature that has already been used will report a damaged log
@@ -1320,27 +1355,27 @@ Two version cautions, both of which fail loudly rather than quietly:
 
 ### Keeping it up
 
-It runs in the foreground and logs to stdout, so it wants whatever the host uses for that
-— `systemd`, `screen`, `nohup`. There is **no shutdown hook**: the process is meant to be
+It runs in the foreground and logs to stdout, so it wants whatever the host uses for that:
+`systemd`, `screen`, `nohup`. There is **no shutdown hook**: the process is meant to be
 stoppable at any moment, and it is safe to stop at any moment, because durability comes
 from how each event is written rather than from a clean exit.
 
 Every append opens the file, writes one line, and closes it. There is no in-memory buffer
-holding events that a stop could lose — an event that has been acknowledged to a client is
+holding events that a stop could lose. An event that has been acknowledged to a client is
 already on disk.
 
 ### Backups
 
-`market.jsonl` is the only irreplaceable file. `server-identity.key` is worth keeping —
-losing it means the server becomes a new identity, and if it created the market it also
-loses the ability to change that market's policy — but it can be regenerated if you accept
+`market.jsonl` is the only irreplaceable file. `server-identity.key` is worth keeping too.
+Losing it means the server becomes a new identity, and if it created the market it also
+loses the ability to change that market's policy. It can be regenerated if you accept
 that. `server-peers.json` and `known-keys.json` rebuild themselves.
 
 The log is append-only, so copying it from a running server is safe in the way that
 matters: the copy is a prefix of the real thing. The worst case is a torn final line, and
-a torn line is refused rather than half-applied — you lose the last event, never the
+a torn line is refused rather than half-applied, so you lose the last event and never the
 integrity of the ones before it.
 
 **What no backup gives you:** a market restored from an old copy is *behind*, and if
 anybody kept playing on the live one, restoring it forks the market. The high-water mark
-exists to notice exactly that, but it can only warn — see [§18](#18-divergence-noticing-and-locating-a-fork).
+exists to notice exactly that, but it can only warn. See [§19](#19-divergence-noticing-and-locating-a-fork).
