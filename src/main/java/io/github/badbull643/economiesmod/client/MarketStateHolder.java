@@ -1595,8 +1595,8 @@ public class MarketStateHolder {
                 // with the value it currently resolves to.
                 System.out.println("[economiesmod] no " + file
                         + " — hosting with friend-group settings: open admission,"
-                        + " no deposit caps, no world checks, migrations accepted,"
-                        + " welcome grants capped at "
+                        + " no deposit caps, refusing creative and cheat-enabled worlds,"
+                        + " migrations accepted, welcome grants capped at "
                         + ServerConfig.ROTATING_MAX_WELCOME_GRANT);
                 System.out.println("[economiesmod] to change any of that, run"
                         + " /trade hostconfig write in game — it creates that file with"
