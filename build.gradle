@@ -103,6 +103,10 @@ tasks.register('serverJar', Jar) {
     exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'module-info.class'
 
     from("LICENSE.txt")
+    // Gson is bundled above (unpacked into this jar), so its own license travels with
+    // it too — Apache 2.0 §4 requires that of anyone redistributing it, and the gson
+    // jar itself carries no license file to fall back on.
+    from("licenses/gson-LICENSE.txt")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
