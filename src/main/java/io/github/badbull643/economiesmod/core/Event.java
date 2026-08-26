@@ -4,6 +4,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+
+/*
+* this write up is more so for my understanding so ,
+*
+*
+*
+*
+* */
+
 public abstract class Event {
     public UUID userId;
     public String clientEventId;
@@ -51,6 +60,8 @@ public abstract class Event {
      * market. Replaces ad-hoc credit injection: it is logged, replayable, visible to
      * everyone, and can only happen once per user per market.
      */
+
+    //the welcome grant
     public static class WelcomeGrant extends Event {
         public UUID targetUserId;
         public long amount;
@@ -129,6 +140,8 @@ public abstract class Event {
         public long stipendAmount;
 
         /** Fills between claims. Ignored when stipendAmount is zero. */
+
+        //comment here was confusing essentially every N (where N = stipendeverFIll) fills you get a stipend
         public long stipendEveryFills;
     }
 

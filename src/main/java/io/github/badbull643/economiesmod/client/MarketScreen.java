@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.UUID;
 
 //idea was too make the whole control panel weve built be a craftable block instead so this whole marketscreen is teid too a block
-
+//this needs a massive refactor horrible class
 public class MarketScreen extends Screen {
 
     private TextFieldWidget amountField;
