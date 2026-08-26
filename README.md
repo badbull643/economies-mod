@@ -99,3 +99,8 @@ without opening anything, enter /trade too get the full list of commands.
 ## Licence
 
 MIT. See [LICENSE.txt](LICENSE.txt).
+
+---
+
+Credits are virtual, exist only inside your own world's market, and can never be exchanged
+for real money or any out-of-game currency.
