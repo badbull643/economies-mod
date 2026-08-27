@@ -23,7 +23,7 @@ where every person has a personal copy of the market information and the person 
 ## Notes on the changing hosts setup
 
 **Nobody is in charge of the numbers.** Every event is signed by whoever made it and chained
-to the one before. Whoever is hosting decides what order events happen in and nothing else.
+to the one before. Whoever is hosting decides what order events happen in.
 They can't give themselves credit or delete a trade, because everyone else would compute a
 different answer and spot it straight away.
 
