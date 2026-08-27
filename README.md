@@ -54,7 +54,7 @@ would rather one machine stay up. See
 
 1. [Fabric Loader](https://fabricmc.net/use/) for Minecraft 1.16.5
 2. [Fabric API](https://modrinth.com/mod/fabric-api)
-3. Drop `economiesmod-0.1.0.jar` into `.minecraft/mods`
+3. Drop `economiesmod-0.1.1.jar` into `.minecraft/mods`
 
 ---
 
