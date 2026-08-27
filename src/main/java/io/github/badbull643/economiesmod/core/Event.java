@@ -188,32 +188,34 @@ public abstract class Event {
     /**
      * Host rules a group has agreed once, published by the creator.
      *
-     * <b>Defaults, never enforcement.</b> Nothing in {@code EventApplier.validate} reads
-     * this, no replica has to agree about what it means, and a host that ignores it
-     * produces a perfectly valid market. It exists because a group's economy is
-     * otherwise only as protected as its most permissive host: a deposit cap that
-     * applied on Tuesday and not Wednesday capped nothing, since Wednesday's goods are
-     * in the ledger for good, and rotating to somebody who never opened
-     * {@code host-config.json} was enough to do it.
-     *
-     * Host rules cannot <i>travel</i> — be replicated and enforced — for three separate
-     * reasons the backlog records, any one of which is fatal. What they can do is be
-     * written down where the next host will find them. That is all this is.
+     * <b>Mostly defaults, never enforcement — with one narrow exception below.</b>
+     * Nothing in {@code EventApplier.validate} reads this, no replica has to agree about
+     * what most of it means, and a host that ignores most of it produces a perfectly
+     * valid market. It exists because a group's economy is otherwise only as protected
+     * as its most permissive host: a deposit cap that applied on Tuesday and not
+     * Wednesday capped nothing, since Wednesday's goods are in the ledger for good, and
+     * rotating to somebody who never opened {@code host-config.json} was enough to do it.
      *
      * <b>Every field is boxed, and that is the design.</b> A {@code MarketPolicy} event
      * is the whole policy, so anything it does not restate is set to zero — which once
      * silently wiped the stipend. Here null means "the group has never said", which is a
      * different thing from "the group said nought", and the two have to stay
      * distinguishable or publishing an admission list would quietly remove a deposit
-     * cap. The publisher still builds from what is already published, so a partial
-     * event is not expressible from the UI either; the boxing is the belt to that
-     * braces.
+     * cap.
      *
-     * <b>The subset is deliberate.</b> Deposit caps, migration limits, the welcome-grant
-     * ceiling and admission are things a group can sensibly agree. Attestation, the
-     * world checks and bans are not here and should not be: "I do not want this person
-     * on my machine" is a different decision from "this group excludes them", and making
-     * the first mean the second is heavier than it looks.
+     * <b>Why the world checks are here now, when they once weren't.</b> The original
+     * reasoning kept them out: "I do not want this person on my machine" is a host's own
+     * decision, and letting it travel makes it "this group excludes them" without anyone
+     * having agreed to that. That held while the only travel mechanism was "silence
+     * adopts the group's figure" — the same one admission and deny still use below. It
+     * stopped holding once the actual cost was weighed against it: these settings only
+     * ever refuse a connection before anything is written to the log, so publishing one
+     * can never fork a replica the way overriding {@code MarketPolicy} would — and the
+     * alternative is a market kept strict for months resetting to compiled defaults the
+     * instant hosting changes hands, permanently, since a deposit once accepted can't be
+     * un-accepted. So these six travel differently from the rest of this class: the
+     * published figure is a floor a host may tighten past but never loosen under. See
+     * {@code ServerConfig.adopt}, which is where that asymmetry actually lives.
      */
     public static class HostDefaults extends Event {
         public Long maxDepositUnitsPerWindow;
@@ -224,6 +226,16 @@ public abstract class Event {
         public String admission;
         public List<String> allow;
         public List<String> deny;
+
+        // The floor, not the fill-gaps-only defaults above. True/a positive figure here
+        // wins over whatever a host's own file says; null or false leaves the host free
+        // to choose either way, including tighter than this on their own initiative.
+        public Boolean requireAttestation;
+        public Boolean refuseCreativeWorlds;
+        public Boolean refuseCheatWorlds;
+        public Boolean banOnWorldChange;
+        public Long maxDepositUnitsPerPlayHour;
+        public Integer maxDepositMultipleOfHandled;
     }
 
     public static class Deposit extends Event {

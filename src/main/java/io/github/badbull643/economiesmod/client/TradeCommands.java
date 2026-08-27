@@ -256,9 +256,17 @@ public final class TradeCommands {
         describe(src, "admission", published.admission);
         describe(src, "allow", published.allow);
         describe(src, "deny", published.deny);
+        describe(src, "requires attestation", published.requireAttestation);
+        describe(src, "refuses creative worlds", published.refuseCreativeWorlds);
+        describe(src, "refuses cheat worlds", published.refuseCheatWorlds);
+        describe(src, "bans on world change", published.banOnWorldChange);
+        describe(src, "deposit cap per play-hour", published.maxDepositUnitsPerPlayHour);
+        describe(src, "deposit multiple of handled", published.maxDepositMultipleOfHandled);
 
-        info(src, "These are defaults, not rules. A host takes up whatever it has not set"
-                + " for itself, and is free to disagree with all of it.");
+        info(src, "Most of these are defaults, not rules: a host takes up whatever it has"
+                + " not set for itself, and is free to disagree with the rest.");
+        info(src, "The six world-check settings are a floor instead — a host may be"
+                + " stricter than these on its own, but never looser.");
         info(src, "/trade hostconfig shows what is actually in force here.");
         return 1;
     }
@@ -308,6 +316,12 @@ public final class TradeCommands {
         rules.admission = cfg.admission;
         rules.allow = cfg.allow == null ? null : new java.util.ArrayList<>(cfg.allow);
         rules.deny = cfg.deny == null ? null : new java.util.ArrayList<>(cfg.deny);
+        rules.requireAttestation = cfg.requireAttestation;
+        rules.refuseCreativeWorlds = cfg.refuseCreativeWorlds;
+        rules.refuseCheatWorlds = cfg.refuseCheatWorlds;
+        rules.banOnWorldChange = cfg.banOnWorldChange;
+        rules.maxDepositUnitsPerPlayHour = cfg.maxDepositUnitsPerPlayHour;
+        rules.maxDepositMultipleOfHandled = cfg.maxDepositMultipleOfHandled;
 
         MarketStateHolder.Submission sent = MarketStateHolder.submit(rules);
         if (sent != null && !sent.pending && !sent.accepted) {

@@ -4691,6 +4691,73 @@ public class MarketTests {
                     .maxDepositUnitsPerWindow, 0);
         }
 
+        section("L19: the world-check floor binds even over a host's own answer");
+        {
+            // Unlike everything in L18, these six are not fill-gaps-only: a published
+            // true or a published positive figure wins even where the host already
+            // decided otherwise, and a host may only push past it stricter, never looser.
+            Event.HostDefaults floor = new Event.HostDefaults();
+            floor.requireAttestation = Boolean.TRUE;
+            floor.refuseCreativeWorlds = Boolean.TRUE;
+            floor.refuseCheatWorlds = Boolean.TRUE;
+            floor.banOnWorldChange = Boolean.TRUE;
+            floor.maxDepositUnitsPerPlayHour = 100L;
+            floor.maxDepositMultipleOfHandled = 3;
+
+            ServerConfig lax = ServerConfig.friendGroup(25555);
+            lax.requireAttestation = false;
+            lax.refuseCreativeWorlds = false;
+            lax.refuseCheatWorlds = false;
+            lax.banOnWorldChange = false;
+            lax.maxDepositUnitsPerPlayHour = 0;
+            lax.maxDepositMultipleOfHandled = 0;
+            lax.adopt(floor);
+            check("a published requirement overrides a host that said no",
+                    lax.requireAttestation ? 1 : 0, 1);
+            check("same for refusing creative worlds",
+                    lax.refuseCreativeWorlds ? 1 : 0, 1);
+            check("same for refusing cheat worlds", lax.refuseCheatWorlds ? 1 : 0, 1);
+            check("same for banning on world change", lax.banOnWorldChange ? 1 : 0, 1);
+            check("an off play-hour cap is replaced by the published one",
+                    lax.maxDepositUnitsPerPlayHour, 100);
+            check("an off handled-multiple cap is replaced by the published one",
+                    lax.maxDepositMultipleOfHandled, 3);
+
+            // A host stricter than the group on its own initiative keeps that, published
+            // silence never loosens it back down.
+            Event.HostDefaults silentFloor = new Event.HostDefaults();
+            ServerConfig strict = ServerConfig.friendGroup(25555);
+            strict.requireAttestation = true;
+            strict.maxDepositUnitsPerPlayHour = 10;
+            strict.adopt(silentFloor);
+            check("a stricter local answer survives a group with no opinion",
+                    strict.requireAttestation ? 1 : 0, 1);
+            check("and a tighter local cap survives it too",
+                    strict.maxDepositUnitsPerPlayHour, 10);
+
+            // A host looser than the published figure is pulled down to it, not up past
+            // it — the published number is a ceiling on how loose, not a target.
+            ServerConfig looser = ServerConfig.friendGroup(25555);
+            looser.maxDepositUnitsPerPlayHour = 1000;
+            looser.adopt(floor);
+            check("a looser local cap is tightened down to the published one",
+                    looser.maxDepositUnitsPerPlayHour, 100);
+
+            // And a host already tighter than the published figure stays tighter —
+            // the floor is a minimum, not a value to converge on.
+            ServerConfig tighter = ServerConfig.friendGroup(25555);
+            tighter.maxDepositUnitsPerPlayHour = 5;
+            tighter.adopt(floor);
+            check("a tighter local cap is left alone",
+                    tighter.maxDepositUnitsPerPlayHour, 5);
+
+            // Signed like anything else EventCanonical covers — a floor that could be
+            // rewritten in flight would bind nobody.
+            String payload = EventCanonical.canonicalPayload(floor);
+            check("the floor fields are actually in the signed payload",
+                    payload.contains("100") && payload.contains("true") ? 1 : 0, 1);
+        }
+
         section("L12: the shape fingerprint sees the fields it has to see");
         {
             List<String> shape = MarketSnapshot.shapeLines();
