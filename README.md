@@ -1,4 +1,4 @@
-# Economies Mod (still experimental, so things may fail)
+# Economies Mod 
 
 A player-run market for Minecraft, with a real order book and trade across single-player worlds.
 
@@ -104,6 +104,6 @@ without opening anything; enter /trade to get the full list of commands.
 MIT. See [LICENSE.txt](LICENSE.txt).
 
 ---
-
+(still experimental/beta version, so things may not work entirely)
 Credits are virtual, exist only inside your own world's market, and can never be exchanged
 for real money or any out-of-game currency.
