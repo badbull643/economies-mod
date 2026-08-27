@@ -1,6 +1,6 @@
 # Economies Mod (still experimental, so things may fail)
 
-A player-run market for Minecraft, with a real order book.
+A player-run market for Minecraft, with a real order book and trade across single-player worlds.
 
 Able to place Buy and Sell orders for items at a price. Orders sit until they fill.
 
