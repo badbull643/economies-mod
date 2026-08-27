@@ -567,12 +567,25 @@ stops telling the truth.
 
 ### Rules a group can agree once
 
-Because host rules travel with the host, a market is only as protected as its most permissive
-member. The creator can **publish** a set of defaults into the history with `/trade hostrules
-publish`, and any host adopts them for anything it hasn't set itself.
+Most host rules are just defaults: the creator can **publish** a set into the history with
+`/trade hostrules publish`, and any host adopts them for anything it hasn't set for itself —
+but a host with an opinion of its own, in either direction, keeps it.
 
-Published rules are advisory: recorded, read by hosts, enforced by nothing. `/trade
-hostrules` shows what was agreed and what this host does with it.
+**Six of them work differently.** `requireAttestation`, `refuseCreativeWorlds`,
+`refuseCheatWorlds`, `banOnWorldChange`, `maxDepositUnitsPerPlayHour` and
+`maxDepositMultipleOfHandled` are a **floor** once published: a host may be stricter than the
+group's figure on its own initiative, but can never be looser than it, whatever its own file
+says. That's different from everything else here on purpose — refusing a connection never
+writes anything to the log, so it can't fork a replica the way overriding a market rule would,
+which is what lets these six actually bind rather than just advise. Without that, a market
+kept strict for months would reset to whatever the compiled defaults are the moment hosting
+passed to somebody with no file of their own — permanently, since a deposit once accepted
+can't be taken back.
+
+Everything else here — admission mode, the allow/deny lists, deposit caps by amount,
+migration limits, the welcome-grant ceiling — stays advisory: recorded, read by hosts, and a
+host that disagrees is free to. `/trade hostrules` shows what was agreed and what this host
+does with each part of it.
 
 ---
 

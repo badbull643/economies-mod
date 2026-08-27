@@ -233,6 +233,14 @@ public class ServerConfig {
      *
      * Nothing here can fail or refuse. A market whose published rules this build does
      * not understand hosts on its own settings, exactly as it would have before.
+     *
+     * <b>The six world-check fields at the bottom are not fill-gaps-only, on purpose.</b>
+     * Everything above is a default: silence adopts it, an explicit local choice — in
+     * either direction — stands over it. Those six are a floor instead: a published
+     * {@code true} or a published positive figure wins even over a host that explicitly
+     * chose otherwise, and a host may only push past it in the stricter direction, never
+     * the looser one. See {@link Event.HostDefaults} for why refusing a connection can
+     * carry that weight when nothing else here does — it never reaches the log.
      */
     public void adopt(Event.HostDefaults published) {
         if (published == null) return;
@@ -259,6 +267,33 @@ public class ServerConfig {
         }
         if ((deny == null || deny.isEmpty()) && published.deny != null) {
             deny = new ArrayList<>(published.deny);
+        }
+
+        // The floor. Boolean.TRUE.equals rather than a bare check, because these fields
+        // are boxed and a published false or null both mean "the group has no
+        // requirement here" — only an explicit true ever forces anything on, and it can
+        // only turn a local false into true, never the reverse.
+        if (Boolean.TRUE.equals(published.requireAttestation)) requireAttestation = true;
+        if (Boolean.TRUE.equals(published.refuseCreativeWorlds)) refuseCreativeWorlds = true;
+        if (Boolean.TRUE.equals(published.refuseCheatWorlds)) refuseCheatWorlds = true;
+        if (Boolean.TRUE.equals(published.banOnWorldChange)) banOnWorldChange = true;
+
+        // Same floor, for a rate rather than a switch. Zero is this class's "off" for
+        // both fields, so a published positive figure replaces a local zero outright —
+        // there is no zero-but-meant-it to preserve, unlike maxDepositUnitsPerWindow
+        // above — and only tightens a local value that was already a smaller positive
+        // number down further; it never loosens one back up.
+        if (published.maxDepositUnitsPerPlayHour != null
+                && published.maxDepositUnitsPerPlayHour > 0) {
+            maxDepositUnitsPerPlayHour = maxDepositUnitsPerPlayHour == 0
+                    ? published.maxDepositUnitsPerPlayHour
+                    : Math.min(maxDepositUnitsPerPlayHour, published.maxDepositUnitsPerPlayHour);
+        }
+        if (published.maxDepositMultipleOfHandled != null
+                && published.maxDepositMultipleOfHandled > 0) {
+            maxDepositMultipleOfHandled = maxDepositMultipleOfHandled == 0
+                    ? published.maxDepositMultipleOfHandled
+                    : Math.min(maxDepositMultipleOfHandled, published.maxDepositMultipleOfHandled);
         }
     }
 

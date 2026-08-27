@@ -122,6 +122,12 @@ public class EventCanonical {
                     .append('|').append(hd.admission);
             appendSorted(sb, hd.allow);
             appendSorted(sb, hd.deny);
+            sb.append('|').append(hd.requireAttestation)
+                    .append('|').append(hd.refuseCreativeWorlds)
+                    .append('|').append(hd.refuseCheatWorlds)
+                    .append('|').append(hd.banOnWorldChange)
+                    .append('|').append(hd.maxDepositUnitsPerPlayHour)
+                    .append('|').append(hd.maxDepositMultipleOfHandled);
         } else {
             // Not a guess about the future: every Event subclass is declared in one file
             // and this chain is the only place they are signed, so a type reaching here

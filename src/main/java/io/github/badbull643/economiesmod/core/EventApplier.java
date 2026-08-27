@@ -802,6 +802,12 @@ public class EventApplier {
             if (hd.admission != null && !ServerConfig.isAdmissionMode(hd.admission)) {
                 return Result.reject("unknown admission mode '" + hd.admission + "'");
             }
+            if (hd.maxDepositUnitsPerPlayHour != null && hd.maxDepositUnitsPerPlayHour < 0) {
+                return Result.reject("deposit-per-play-hour cap cannot be negative");
+            }
+            if (hd.maxDepositMultipleOfHandled != null && hd.maxDepositMultipleOfHandled < 0) {
+                return Result.reject("deposit multiple cannot be negative");
+            }
             return Result.ok(Collections.emptyList());
         }
 
