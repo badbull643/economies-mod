@@ -171,16 +171,21 @@ public class MarketScreen extends Screen {
     // hidden per tab rather than rebuilt, because ClickableWidget skips both rendering
     // and hit-testing when invisible, and rebuilding would clear what's typed.
 
-    static final int SCREEN_HOME = 0;
+
+
+    //need too  rename the variable too Market Info
+    static final int SCREEN_INFO = 0;
     static final int SCREEN_TRADING = 1;
     static final int SCREEN_NETWORK = 2;
     static final int SCREEN_MARKET = 3;
     static final int SCREEN_SETTINGS = 4;
+
+    //initially home was here in the list but changed too info
     private static final String[] SCREEN_NAMES =
-            {"Home", "Trading", "Network", "Market", "Settings"};
+            {"Info", "Trading", "Network", "Market", "Settings"};
 
     /** Static so the screen you were on survives closing and reopening. */
-    private static int activeScreen = SCREEN_HOME;
+    private static int activeScreen = SCREEN_INFO;
 
     /** One widget list per destination, indexed by the SCREEN_ constants. */
     private final List<List<ClickableWidget>> screenWidgets = new ArrayList<>();
@@ -598,7 +603,7 @@ public class MarketScreen extends Screen {
                     status = MarketStateHolder.pendingReplace().isEmpty()
                             ? "Local history discarded"
                             : "Local history discarded — orders from after the split are"
-                                    + " listed to re-place";
+                              + " listed to re-place";
                 });
     }
 
@@ -775,7 +780,7 @@ public class MarketScreen extends Screen {
             itemButton.setMessage(new LiteralText(selected == Items.AIR
                     ? "Choose item..."
                     : this.textRenderer.trimToWidth(
-                            selected.getName().getString(), itemButton.getWidth() - 8)));
+                    selected.getName().getString(), itemButton.getWidth() - 8)));
         }
 
         boolean has = MarketStateHolder.hasMarket();
@@ -1149,7 +1154,7 @@ public class MarketScreen extends Screen {
         return panelTop();
     }
 
-    // ─────────── home ───────────
+    // ─────────── INFO ───────────
 
     /**
      * The dashboard.
@@ -1166,11 +1171,17 @@ public class MarketScreen extends Screen {
      * side are deliberately empty for now; what belongs in them is a question best
      * answered by using the thing, not by guessing up front.
      */
-    private void renderHome(MatrixStack m) {
-        int gap = COL_GAP;
+
+
+
+    //change too render market info
+    private void renderInfo(MatrixStack m) {
+        //int gap = COL_GAP;
+
+        int gap = 0;
         // Same frame line the other screens use, so switching between them does not
         // shift everything by a few pixels — via the helpers rather than repeating
-        // their arithmetic, which is what left Home's titles under the alert band.
+        // their arithmetic, which is what left Info's titles under the alert band.
         int top = frameTop();
         int height = frameH();
         int total = contentW;
@@ -1183,7 +1194,10 @@ public class MarketScreen extends Screen {
         panel(m, listX, top, sideW, height, "Most traded");
         renderMostTraded(m, listX + 8, top + 18, sideW - 16, height - 24);
 
-        int hostsH = height / 2;
+
+
+        //old code im keeping for switch backs
+        /*int hostsH = height / 2;
         panel(m, midX, top, midW, hostsH, "Hosts");
         renderHostsPanel(m, midX + 8, top + 18, midW - 16, hostsH - 24);
 
@@ -1193,7 +1207,21 @@ public class MarketScreen extends Screen {
         renderHomePrice(m, midX + 8, priceY + 18, midW - 16, priceH - 24);
 
         panel(m, rightX, top, sideW, height, "Activity");
-        renderActivity(m, rightX + 8, top + 18, sideW - 16, height - 24);
+        renderActivity(m, rightX + 8, top + 18, sideW - 16, height - 24);*/
+
+        // Activity moves into the full height middle column.
+        panel(m, midX, top, midW, height, "Activity");
+        renderActivity(m, midX + 8, top + 18, midW - 16, height - 24);
+
+        // Hosts and Price move into the right column.
+        int hostsH = height / 2;
+        panel(m, rightX, top, sideW, hostsH, "Hosts");
+        renderHostsPanel(m, rightX + 8, top + 18, sideW - 16, hostsH - 24);
+
+        int priceY = top + hostsH + gap;
+        int priceH = height - hostsH - gap;
+        panel(m, rightX, priceY, sideW, priceH, "Price");
+        renderInfoPrice(m, rightX + 8, priceY + 18, sideW - 16, priceH - 24);
     }
 
     /** An item that has traded, with how much of it and what it last went for. */
@@ -1257,11 +1285,11 @@ public class MarketScreen extends Screen {
     /**
      * The chart for whatever item is selected, falling back to the busiest one.
      *
-     * The fallback matters more than it looks: on Home, nothing has been picked yet the
+     * The fallback matters more than it looks: on info, nothing has been picked yet the
      * first time anyone arrives, and an empty panel on the landing screen says the
      * feature is broken rather than that the player has not chosen anything.
      */
-    private void renderHomePrice(MatrixStack m, int x, int y, int w, int h) {
+    private void renderInfoPrice(MatrixStack m, int x, int y, int w, int h) {
         MarketState market = MarketStateHolder.get();
         if (market == null) {
             label(m, "no market", x, y, 0x808080);
@@ -1742,7 +1770,7 @@ public class MarketScreen extends Screen {
             if (typical > 0) {
                 body += typical < floor
                         ? ". Sales here have been worth about " + typical
-                                + ", so at this rate most would be untaxed."
+                          + ", so at this rate most would be untaxed."
                         : ", which recent sales here clear comfortably.";
             } else {
                 body += ".";
@@ -1750,7 +1778,7 @@ public class MarketScreen extends Screen {
         }
 
         showConfirm(bps == 0 ? "Remove the trading fee?" : "Set the trading fee to "
-                + formatBps(bps) + "?", body, "Set fee",
+                                                           + formatBps(bps) + "?", body, "Set fee",
                 () -> submitPolicy(p -> p.taxBps = bps));
     }
 
@@ -1846,13 +1874,13 @@ public class MarketScreen extends Screen {
                     + " list at all.";
             body += free > 0
                     ? " The first " + free + " orders somebody is holding open cost that"
-                            + " much each; the next costs double, the one after triple,"
-                            + " and so on. Cancelling one brings the cost back down, so"
-                            + " it prices what you are holding open rather than what you"
-                            + " have ever placed."
+                      + " much each; the next costs double, the one after triple,"
+                      + " and so on. Cancelling one brings the cost back down, so"
+                      + " it prices what you are holding open rather than what you"
+                      + " have ever placed."
                     : " The same for everyone, however many orders they are already"
-                            + " holding open. Add an allowance — 2/3 — to make it climb"
-                            + " for whoever is holding the most.";
+                      + " holding open. Add an allowance — 2/3 — to make it climb"
+                      + " for whoever is holding the most.";
         }
 
         String title;
@@ -1952,8 +1980,8 @@ public class MarketScreen extends Screen {
                 + " only people who are not here yet, and can be changed again before"
                 + " they arrive."
                 + (amount == 0 ? " At zero, newcomers arrive with nothing and cannot"
-                        + " place a buy order until somebody sells them something."
-                        : "")
+                                 + " place a buy order until somebody sells them something."
+                : "")
                 + " This is the largest single lever on what credits are worth: set it"
                 + " far above what things trade for and prices stop meaning much.";
 
@@ -2034,15 +2062,15 @@ public class MarketScreen extends Screen {
 
         String body = amount == 0
                 ? "Nobody will be paid a stipend from here on. Anything already claimed"
-                        + " stays where it is."
+                  + " stays where it is."
                 : "Every registered player may claim " + amount + " credits once per "
-                        + every + " trades this market settles. It exists because the"
-                        + " welcome grant is otherwise the only way credits ever enter,"
-                        + " so goods pile up against a money supply that never grows and"
-                        + " prices sink. Paid per trade rather than per minute, so it"
-                        + " follows the market being used rather than the clock — and so"
-                        + " it cannot be farmed by somebody trading with themselves,"
-                        + " which the listing fee makes cost more than it pays.";
+                  + every + " trades this market settles. It exists because the"
+                  + " welcome grant is otherwise the only way credits ever enter,"
+                  + " so goods pile up against a money supply that never grows and"
+                  + " prices sink. Paid per trade rather than per minute, so it"
+                  + " follows the market being used rather than the clock — and so"
+                  + " it cannot be farmed by somebody trading with themselves,"
+                  + " which the listing fee makes cost more than it pays.";
 
         showConfirm(amount == 0 ? "Stop paying a stipend?"
                         : "Pay " + amount + " credits every " + every + " trades?",
@@ -2100,11 +2128,11 @@ public class MarketScreen extends Screen {
             status = "Trading fee " + formatBps(policy.taxBps)
                     + ", listing fee " + policy.listingFee
                     + (policy.listingFreeOrders > 0
-                            ? " after " + policy.listingFreeOrders + " free" : "")
+                    ? " after " + policy.listingFreeOrders + " free" : "")
                     + (policy.stipendAmount > 0
-                            ? ", stipend " + policy.stipendAmount + " every "
-                                    + policy.stipendEveryFills + " trades"
-                            : "");
+                    ? ", stipend " + policy.stipendAmount + " every "
+                      + policy.stipendEveryFills + " trades"
+                    : "");
             feeField.setText("");
             listingFeeField.setText("");
             stipendField.setText("");
@@ -2233,14 +2261,14 @@ public class MarketScreen extends Screen {
             // leaves the market they already have exactly where it is.
             String advice = foreignIsDedicated()
                     ? foreign.reply.hostName + " is a dedicated server running a separate"
-                            + " market ('" + foreign.reply.marketName + "'), and it does"
-                            + " not take migrations. Use Add another market and connect"
-                            + " from that one. This market stays exactly as it is, and"
-                            + " you arrive there on their welcome grant like anyone else."
+                      + " market ('" + foreign.reply.marketName + "'), and it does"
+                      + " not take migrations. Use Add another market and connect"
+                      + " from that one. This market stays exactly as it is, and"
+                      + " you arrive there on their welcome grant like anyone else."
                     : foreign.reply.hostName + " is running a separate market ('"
-                            + foreign.reply.marketName + "'). Migrating carries your"
-                            + " whole position there and abandons this one. Add another"
-                            + " market to join without giving this one up.";
+                      + foreign.reply.marketName + "'). Migrating carries your"
+                      + " whole position there and abandons this one. Add another"
+                      + " market to join without giving this one up.";
             for (OrderedText line : this.textRenderer.wrapLines(
                     new LiteralText(advice), listW)) {
                 guideLine(m, line, x, y, 0x88CCFF);
@@ -2323,7 +2351,7 @@ public class MarketScreen extends Screen {
             // The fee rounds down, so below this it comes to nothing. Said plainly,
             // because a rate that quietly takes zero looks like a rate that is broken.
             y = wrapped(m, "Takes nothing from sales under "
-                    + MarketState.smallestTaxableSale(bps) + " credits.",
+                            + MarketState.smallestTaxableSale(bps) + " credits.",
                     x, y, 0x909090);
         }
 
@@ -2368,7 +2396,7 @@ public class MarketScreen extends Screen {
                 }
             }
             y = wrapped(m, "Stipend: " + stipend + " credits every "
-                    + market.stipendEveryFills() + " trades this market settles" + when,
+                            + market.stipendEveryFills() + " trades this market settles" + when,
                     x, y, 0x88FF88);
         }
 
@@ -3241,9 +3269,9 @@ public class MarketScreen extends Screen {
 
         return isBid
                 ? ". Best ask is " + best + ", so it waits until somebody sells at "
-                        + price + " or less"
+                  + price + " or less"
                 : ". Best bid is " + best + ", so it waits until somebody buys at "
-                        + price + " or more";
+                  + price + " or more";
     }
 
     // ─────────── rendering ───────────
@@ -3284,7 +3312,7 @@ public class MarketScreen extends Screen {
         // Frames around each column. Without them the controls float in the middle of
         // an empty screen with nothing saying where one grouping ends and the next
         // begins — the panels are most of what makes the layout read as a layout.
-        if (activeScreen != SCREEN_HOME) {
+        if (activeScreen != SCREEN_INFO) {
             vanillaPanel(matrices, listX, frameTop(), listW, frameH());
             vanillaPanel(matrices, rowX - PAD, frameTop(), controlsW + PAD * 2, frameH());
             if (invX >= 0 && activeScreen == SCREEN_TRADING) {
@@ -3333,8 +3361,8 @@ public class MarketScreen extends Screen {
             noteScrollable("marketcol", rowX - PAD, frameTop(), controlsW + PAD * 2,
                     frameH(), panelBottom() - panelTop(), marketColumnHeight,
                     mouseX, mouseY);
-        } else if (activeScreen == SCREEN_HOME) {
-            renderHome(matrices);
+        } else if (activeScreen == SCREEN_INFO) {
+            renderInfo(matrices);
         } else {
             renderSettingsPlaceholder(matrices);
         }
@@ -3345,7 +3373,7 @@ public class MarketScreen extends Screen {
             renderReplaceList(matrices, mouseX, mouseY);
         }
 
-        // After every panel on every destination, including Home's, so the current tab
+        // After every panel on every destination, including Info's, so the current tab
         // can overlap the border below it and read as joined to the panel.
         renderTabs(matrices, mouseX, mouseY);
 

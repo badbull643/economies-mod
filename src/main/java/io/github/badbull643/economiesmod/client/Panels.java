@@ -30,9 +30,9 @@ public final class Panels extends DrawableHelper {
     private Panels() {}
 
     /** The tooltip frame's own colours, shared so every panel in the mod agrees. */
-    public static final int PANEL_BG = 0xF0100010;
-    public static final int PANEL_EDGE_TOP = 0x505000FF;
-    public static final int PANEL_EDGE_BOTTOM = 0x5028007F;
+    public static final int PANEL_BG = 0xF0101010;
+    public static final int PANEL_EDGE_TOP = 0x50707070;
+    public static final int PANEL_EDGE_BOTTOM = 0x50383838;
 
     /**
      * Draws the frame around a content box, in vanilla's own proportions.
