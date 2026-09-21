@@ -13,7 +13,7 @@ Able to place Buy and Sell orders for items at a price. Orders sit until they fi
 
 ## How it works
 
-**It's a real order book.** List 20 iron at 5 credits; somebody bids 6, and the trade
+It uses a real order book. List 20 iron at 5 credits; somebody bids 6, and the trade
 happens at 5 with the difference going to them. Partly filled orders leave the rest resting.
 
 There are two ways to get a market working: either use a dedicated server as the central 
