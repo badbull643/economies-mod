@@ -265,12 +265,13 @@ mkdir ~/economies-server && cp economies-server.jar ~/economies-server/ && cd ~/
 java -jar economies-server.jar --config server.json --write-config
 ```
 
-**3. Edit it.** Three settings matter before the first start.
+**3. Edit it.** Four settings matter before the first start.
 
 ```jsonc
 "logFile": "market.jsonl",             // beside the jar, 
 "port": 25555,
 "hostName": "our server",              // what players see in the host list
+"gameVersion": "1.21.11",              // the Minecraft version your players are on
 
 "policy": {                    // the market's own economics, see below
   "taxBps": 100,               // 1% trading fee, taken from the seller and destroyed
@@ -483,6 +484,26 @@ they came to fix it from is the wrong answer to a bad line.
 
 A damaged history can't be hosted, since serving it would hand a joiner a chain that breaks
 partway. The Host button says so and points at Reset.
+
+### "This host serves Minecraft X players, and you are on Y"
+
+A market belongs to one Minecraft version, and nothing carries across to another. Items are
+named differently between versions and the rules of the game differ, so a trade one side
+couldn't honour is worse than a trade that never happened.
+
+Every host checks this before it sends anything: a player hosting from their game, and a
+dedicated server alike. Your own game checks the host as well, so even an older host that
+doesn't check can't pull you into a market on another version. Hosts on other versions are
+left off your host list, and when that is why the list is empty it says so: *"nobody hosting
+(1 on other Minecraft versions)"*.
+
+There's nothing to fix on your side. Join a host on your version, or start your own market.
+Migration is turned away for the same reason.
+
+A dedicated server needs `--game-version` (or `gameVersion` in its config) when it creates its
+market, and refuses to start without one rather than guess. An existing market with no setting
+is treated as a Minecraft 1.16.5 market, which is what every server before the setting was
+serving.
 
 ### Migration, or leaving with what you hold
 
