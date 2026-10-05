@@ -1,0 +1,119 @@
+// The engine on its own: no Minecraft, no Fabric, no Loom. Everything a version folder
+// (mc-1.16.5, mc-1.21.11, ...) shares comes from here, and every version folder compiles
+// these exact sources into its own mod jar — which is what keeps the wire format and the
+// event rules identical across Minecraft versions, so players on different versions can
+// still trade with each other.
+//
+// Java 8 on purpose: the dedicated server jar documents "a Java 8 runtime", and nothing in
+// here needs more.
+
+plugins {
+    id 'java'
+}
+
+group = 'io.github.badbull643'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.10.1'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(8)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    // ensure that the encoding is set to UTF-8, no matter what the system default is
+    it.options.encoding = "UTF-8"
+}
+
+/**
+ * One file somebody can run a dedicated server from, without this repository.
+ *
+ * The mod jar cannot do it. Gson is provided by Minecraft at runtime, so a standalone JVM
+ * loading that jar dies on NoClassDefFoundError before it prints anything — and the
+ * answer "also download gson and put it on the classpath" is not one to give somebody who
+ * just wants to run a server.
+ *
+ * java -jar economies-server.jar --write-config
+ */
+tasks.register('serverJar', Jar) {
+    group = 'build'
+    description = 'A standalone runnable jar for the dedicated server.'
+    archiveBaseName = 'economies-server'
+    archiveVersion = ''
+    destinationDirectory = layout.buildDirectory.dir('libs')
+
+    manifest {
+        attributes 'Main-Class': 'io.github.badbull643.economiesmod.core.net.HostServer'
+    }
+
+    from(sourceSets.main.output) {
+        include 'io/github/badbull643/economiesmod/core/**'
+    }
+    // Unpacked rather than nested: java -jar reads no classpath from inside a jar, so a
+    // dependency has to be flattened in beside the classes that use it.
+    from configurations.runtimeClasspath
+            .filter { it.name.startsWith('gson') }
+            .collect { zipTree(it) }
+    // META-INF/versions is gson's multi-release layout: one Java 9 module-info. The manifest
+    // here does not enable multi-release, so Java 8 ignores it — but a jar documented as
+    // running on Java 8 should not carry a class that cannot be loaded on it.
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'module-info.class',
+            'META-INF/versions/**'
+
+    from("../LICENSE.txt")
+    // Gson is bundled above (unpacked into this jar), so its own license travels with
+    // it too — Apache 2.0 §4 requires that of anyone redistributing it, and the gson
+    // jar itself carries no license file to fall back on.
+    from("../licenses/gson-LICENSE.txt")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// The suites. Each exits non-zero on a failed check, so any of them is safe to gate on.
+// coreTests is pure and instant; the rest bind sockets and sign events, so they are kept
+// apart from it.
+def suites = [
+        coreTests        : ['io.github.badbull643.economiesmod.core.MarketTests',
+                            'Runs the core engine test suite without launching Minecraft.'],
+        chunkTest        : ['io.github.badbull643.economiesmod.core.net.ChunkTest',
+                            'End-to-end check that an over-sized history still syncs.'],
+        replayGuardTest  : ['io.github.badbull643.economiesmod.core.net.ReplayGuardTest',
+                            'Checks a synced history is not mistaken for live traffic.'],
+        splitPointTest   : ['io.github.badbull643.economiesmod.core.net.SplitPointTest',
+                            'Checks two branches of one market can be told where they parted.'],
+        hostTrustTest    : ['io.github.badbull643.economiesmod.core.net.HostTrustTest',
+                            'Checks a host is trusted to order events and for nothing else.'],
+        gapRecoveryTest  : ['io.github.badbull643.economiesmod.core.net.GapRecoveryTest',
+                            'Checks a missed broadcast is noticed and can be recovered from.'],
+        admissionTest    : ['io.github.badbull643.economiesmod.core.net.AdmissionTest',
+                            'Checks admission policy holds on every door, including pre-handshake.'],
+        depositCapTest   : ['io.github.badbull643.economiesmod.core.net.DepositCapTest',
+                            'Checks a deposit cap is enforced against a real client.'],
+        attestationTest  : ['io.github.badbull643.economiesmod.core.net.AttestationTest',
+                            'Checks a world attestation reaches the host and is acted on.'],
+        gameVersionTest  : ['io.github.badbull643.economiesmod.core.net.GameVersionTest',
+                            'Checks a market refuses players on another Minecraft version at every door.'],
+]
+suites.each { taskName, spec ->
+    tasks.register(taskName, JavaExec) {
+        group = 'verification'
+        description = spec[1]
+        mainClass = spec[0]
+        classpath = sourceSets.main.runtimeClasspath
+    }
+}
+
+// Lets the dedicated launcher be exercised from a shell the same way an operator
+// would run it, rather than only through a JavaExec task with baked-in arguments.
+tasks.register('hostServer', JavaExec) {
+    group = 'application'
+    description = 'Runs the standalone dedicated server (no Minecraft).'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.HostServer'
+    classpath = sourceSets.main.runtimeClasspath
+}

@@ -78,7 +78,8 @@ without opening anything; enter /trade to get the full list of commands.
 ## Current limitations
 
 - **Singleplayer and LAN only**, as above.
-- **Minecraft 1.16.5 and Fabric.** No other versions or loaders yet.
+- **Fabric only, one Minecraft version per market.** 1.16.5 is released; 1.21.11 is in
+  progress. A market can't be shared across versions.
 - **A forked market can be recovered from but never merged.** If two copies of one market are
   both traded on while apart, the mod finds where they parted, hands back the items you
   deposited since, and lists the orders you'd need to re-place. One branch still has to be
@@ -87,6 +88,27 @@ without opening anything; enter /trade to get the full list of commands.
   so the market has no way to price it.
 - **Trading only happens while somebody is hosting** and at least one other player is
   connected. There's no offline order matching.
+
+---
+
+## Repository layout
+
+One folder per Minecraft version, and one shared engine.
+
+| Folder | What it is |
+| --- | --- |
+| `core/` | The market engine: events, signing, order book, networking. No Minecraft code. Builds the standalone server jar and runs the test suites. |
+| `mc-1.16.5/` | The Fabric mod for Minecraft 1.16.5. |
+| `mc-1.21.11/` | The Fabric mod for Minecraft 1.21.11 (in progress). |
+
+Each folder builds on its own: `cd` into it and run `./gradlew build`. Every `mc-*` folder
+compiles `core/` into its own jar, so all versions run identical market rules.
+
+**A market belongs to one Minecraft version.** Players on different versions can't trade with
+each other: every host, whether a player hosting from their game or a dedicated server, turns
+away anyone on another version, and the client refuses a host on another version too. Hosts on
+other versions are left off the host list. A dedicated server is told its version with
+`--game-version` (for example `1.21.11`) when it creates its market.
 
 ---
 
