@@ -12,6 +12,7 @@ import io.github.badbull643.economiesmod.core.ServerConfig;
 import net.fabricmc.fabric.api.client.command.v1.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v1.FabricClientCommandSource;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.option.KeyBinding;
 import net.minecraft.command.argument.ItemStackArgumentType;
 import net.minecraft.item.Item;
 import net.minecraft.text.LiteralText;
@@ -206,7 +207,7 @@ public final class TradeCommands {
                     + Settings.MAX_INVENTORY_PANEL_ROWS + ".");
             info(src, "It is a glance at what is new. A market busy enough to fill more"
                     + " rows than that is one where the last few listings have stopped"
-                    + " being news — the Market screen (M) is the one that scrolls.");
+                    + " being news — " + marketScreenWay() + " is the one that scrolls.");
         }
         if (!settings.inventoryPanel()) {
             info(src, "The panel is off, so this takes effect when you turn it on.");
@@ -223,7 +224,7 @@ public final class TradeCommands {
         info(src, "/trade hostrules — the rules this market's group agreed once");
         info(src, "/trade archive — whether this copy keeps the market's whole history");
         info(src, "/trade panel — the listings panel beside your inventory");
-        info(src, "Trading itself is on the market screen (M).");
+        info(src, "Trading itself is on " + marketScreenWay() + ".");
         return 1;
     }
 
@@ -581,8 +582,8 @@ public final class TradeCommands {
     private static MarketState marketOrComplain(FabricClientCommandSource src) {
         MarketState market = MarketStateHolder.get();
         if (market == null || market.marketId() == null) {
-            src.sendError(new LiteralText("No market here yet — open the market screen"
-                    + " (M) to create one or connect to a host."));
+            src.sendError(new LiteralText("No market here yet — open " + marketScreenWay()
+                    + " to create one or connect to a host."));
             return null;
         }
         return market;
@@ -651,7 +652,7 @@ public final class TradeCommands {
                 }
             }
         }
-        if (found == 0) info(src, "Nothing resting. Place orders on the market screen (M).");
+        if (found == 0) info(src, "Nothing resting. Place orders on " + marketScreenWay() + ".");
         return 1;
     }
 
@@ -697,6 +698,22 @@ public final class TradeCommands {
 
     private static void head(FabricClientCommandSource src, String text) {
         src.sendFeedback(new LiteralText(text).formatted(Formatting.GOLD));
+    }
+
+    /**
+     * How to reach the market screen, in words that are true for this player's controls.
+     *
+     * The open-market key ships unbound, so a message that says "(M)" sends a new player
+     * to press a key that does nothing — and says the wrong thing to anyone who rebound it
+     * as well. Names the key when there is one, and the inventory button, which is always
+     * there, when there is not.
+     */
+    private static String marketScreenWay() {
+        KeyBinding key = MarketKeybinds.openMarketKey;
+        if (key != null && !key.isUnbound()) {
+            return "the market screen (" + key.getBoundKeyLocalizedText().getString() + ")";
+        }
+        return "the market screen (the emerald button in your inventory)";
     }
 
     private static void info(FabricClientCommandSource src, String text) {
