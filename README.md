@@ -4,7 +4,7 @@ A player-run market for Minecraft, with a real order book and trade across singl
 
 Able to place Buy and Sell orders for items at a price. Orders sit until they fill.
 
-**Minecraft 1.16.5 and 1.21.11 (other version experimental still testing) · Fabric**
+**Minecraft 1.16.5, 1.21.1 and 1.21.11 (other versions experimental still testing) · Fabric**
 
 **[Download the latest release](https://github.com/badbull643/economies-mod/releases/latest)**
 — the mod jar for Minecraft, and a standalone server jar if you want a dedicated market.
@@ -78,8 +78,8 @@ without opening anything; enter /trade to get the full list of commands.
 ## Current limitations
 
 - **Singleplayer and LAN only**, as above.
-- **Fabric only, one Minecraft version per market.** 1.16.5 is released; 1.21.11 is in
-  progress. A market can't be shared across versions.
+- **Fabric only, one Minecraft version per market.** 1.16.5 is released; 1.21.1 and
+  1.21.11 are in progress. A market can't be shared across versions.
 - **A forked market can be recovered from but never merged.** If two copies of one market are
   both traded on while apart, the mod finds where they parted, hands back the items you
   deposited since, and lists the orders you'd need to re-place. One branch still has to be
@@ -99,6 +99,7 @@ One folder per Minecraft version, and one shared engine.
 | --- | --- |
 | `core/` | The market engine: events, signing, order book, networking. No Minecraft code. Builds the standalone server jar and runs the test suites. |
 | `mc-1.16.5/` | The Fabric mod for Minecraft 1.16.5. |
+| `mc-1.21.1/` | The Fabric mod for Minecraft 1.21.1 (in progress). `./gradlew runScreenTour` walks its screens in a real client, since 1.21.1 has no client game tests. |
 | `mc-1.21.11/` | The Fabric mod for Minecraft 1.21.11 (in progress). |
 
 Each folder builds on its own: `cd` into it and run `./gradlew build`. Every `mc-*` folder
