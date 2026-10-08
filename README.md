@@ -4,10 +4,10 @@ A player-run market for Minecraft, with a real order book and trade across singl
 
 Able to place Buy and Sell orders for items at a price. Orders sit until they fill.
 
-**Minecraft 1.16.5, 1.21.1 and 1.21.11 (other versions experimental still testing) · Fabric**
+Minecraft 1.16.5, 1.21.1 and 1.21.11 (other version experimental still testing), Fabric
 
-**[Download the latest release](https://github.com/badbull643/economies-mod/releases/latest)**
-— the mod jar for Minecraft, and a standalone server jar if you want a dedicated market.
+[Download the latest release](https://github.com/badbull643/economies-mod/releases/latest):
+the mod jar for Minecraft, and a standalone server jar if you want a dedicated market.
 
 ---
 
@@ -22,19 +22,19 @@ where every person has a personal copy of the market information and the person 
 
 ## Notes on the changing hosts setup
 
-**Nobody is in charge of the numbers.** Every event is signed by whoever made it and chained
+Nobody is in charge of the numbers. Every event is signed by whoever made it and chained
 to the one before. Whoever is hosting decides what order events happen in.
 They can't give themselves credit or delete a trade, because everyone else would compute a
 different answer and spot it straight away.
 
-**It survives the host logging off.** The history is a file. Anyone who has it can host next
+It survives the host logging off. The history is a file. Anyone who has it can host next
 and the market carries on.
 
 ---
 
 ## Before you install: what it does and doesn't cover
 
-**Singleplayer and Open to LAN.** A market lives beside a world on your own machine, so
+Singleplayer and Open to LAN. A market lives beside a world on your own machine, so
 there's no market when you join a server somebody else runs. The mod gives a warning for this, 
 and the Mods inert there, so as far as it's been tested should be safe to keep installed; however,
 would still recommend disabling the Mod to be sure.
@@ -44,7 +44,7 @@ port forwarding (wouldn't recommend port forwarding; just use the virtual LAN si
 much simpler to set up and safer). The handbook has
 [a section on it](docs/HANDBOOK.md#7-playing-with-friends-who-arent-on-your-network).
 
-There's also a **standalone dedicated server** for a group that
+There's also a standalone dedicated server for a group that
 would rather one machine stay up. See
 [the handbook](docs/HANDBOOK.md#the-dedicated-server).
 
@@ -61,12 +61,12 @@ would rather one machine stay up. See
 ## Using the Mod
 
 1. Open your inventory. There's an emerald button next to the recipe book. (Or bind a key in
-   **Options → Controls → EconomiesMod**. Nothing is bound by default.)
-2. **Market tab → Create a new market.** You're its creator now, which means you set its
+   Options, then Controls, then EconomiesMod. Nothing is bound by default.)
+2. In the Market tab, press Create a new market. You're its creator now, which means you set its
    rules.
-3. **Trading tab → Sell.** Pick an item, a quantity and a price. The items leave your
+3. In the Trading tab, press Sell. Pick an item, a quantity and a price. The items leave your
    inventory and rest on the book.
-4. **Network tab → Host**. Other people use **Connect** with your address or if 
+4. In the Network tab, press Host. Other people use Connect with your address or if 
    a dedicated server is used, enter the dedicated server address and press connect.
 5. They buy, you get credits, and everybody's copy agrees because everybody replayed the
    same events.
@@ -77,16 +77,15 @@ without opening anything; enter /trade to get the full list of commands.
 
 ## Current limitations
 
-- **Singleplayer and LAN only**, as above.
-- **Fabric only, one Minecraft version per market.** 1.16.5 is released; 1.21.1 and
-  1.21.11 are in progress. A market can't be shared across versions.
-- **A forked market can be recovered from but never merged.** If two copies of one market are
+- Singleplayer and LAN only, as above.
+- Minecraft 1.16.5, 1.21.1, 1.21.11 and Fabric. No other versions or loaders yet.
+- A forked market can be recovered from but never merged. If two copies of one market are
   both traded on while apart, the mod finds where they parted, hands back the items you
   deposited since, and lists the orders you'd need to re-place. One branch still has to be
   discarded.
-- **Items with NBT are skipped.** An enchanted pickaxe isn't interchangeable with a plain one,
+- Items with NBT are skipped. An enchanted pickaxe isn't interchangeable with a plain one,
   so the market has no way to price it.
-- **Trading only happens while somebody is hosting** and at least one other player is
+- Trading only happens while somebody is hosting and at least one other player is
   connected. There's no offline order matching.
 
 ---
@@ -105,7 +104,7 @@ One folder per Minecraft version, and one shared engine.
 Each folder builds on its own: `cd` into it and run `./gradlew build`. Every `mc-*` folder
 compiles `core/` into its own jar, so all versions run identical market rules.
 
-**A market belongs to one Minecraft version.** Players on different versions can't trade with
+A market belongs to one Minecraft version. Players on different versions can't trade with
 each other: every host, whether a player hosting from their game or a dedicated server, turns
 away anyone on another version, and the client refuses a host on another version too. Hosts on
 other versions are left off the host list. A dedicated server is told its version with
