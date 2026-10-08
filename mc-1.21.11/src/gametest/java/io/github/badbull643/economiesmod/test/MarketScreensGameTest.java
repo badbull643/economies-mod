@@ -117,6 +117,62 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
             context.waitTicks(3);
 
+            // An order whose item id is not an identifier at all. Core only insists an id is
+            // non-empty and a signature proves who wrote an event, not that it is sensible, so
+            // any participant can put one in the log — and every other client then draws it,
+            // from the inventory panel as well as the market screen. Drawing it must not throw.
+            context.runOnClient(client -> {
+                io.github.badbull643.economiesmod.core.MarketState state = MarketStateHolder.get();
+                UUID hostile = UUID.fromString("00000000-0000-0000-0000-0000000000a2");
+                state.deposit(hostile, "Not An Item!", 5);
+                state.wallets().adjust(hostile, 5000);
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        904, 10, "Not An Item!", 5, false, hostile));
+                // Below the ask, so the two rest side by side instead of filling each other.
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        905, 4, "Not An Item!", 5, true, hostile));
+            });
+            context.getInput().pressKey(GLFW.GLFW_KEY_E);
+            context.waitTicks(10);
+            context.takeScreenshot("08-hostile-order-inventory");
+            context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+            context.waitTicks(3);
+            for (int i = 0; i < TABS.length; i++) {
+                openTab(context, i);
+                context.takeScreenshot("09-hostile-order-" + TABS[i]);
+            }
+            context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+            context.waitTicks(3);
+
+            // Valid orders at the largest sizes a long allows. They pass every check core
+            // makes, so anyone in the market can place them, and the screens do arithmetic
+            // on prices and volumes — scaling a chart, measuring a label — that nobody
+            // ever tried with a number this big.
+            context.runOnClient(client -> {
+                io.github.badbull643.economiesmod.core.MarketState state = MarketStateHolder.get();
+                UUID whale = UUID.fromString("00000000-0000-0000-0000-0000000000a3");
+                state.deposit(whale, "minecraft:diamond", Long.MAX_VALUE - 10);
+                state.deposit(whale, "minecraft:iron_ingot", 5);
+                state.wallets().adjust(whale, Long.MAX_VALUE - 100);
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        906, 1, "minecraft:diamond", Long.MAX_VALUE - 10, false, whale));
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        907, Long.MAX_VALUE - 1, "minecraft:iron_ingot", 1, false, whale));
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        908, Long.MAX_VALUE - 200, "minecraft:cobblestone", 1, true, whale));
+            });
+            context.getInput().pressKey(GLFW.GLFW_KEY_E);
+            context.waitTicks(10);
+            context.takeScreenshot("10-extreme-orders-inventory");
+            context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+            context.waitTicks(3);
+            for (int i = 0; i < TABS.length; i++) {
+                openTab(context, i);
+                context.takeScreenshot("11-extreme-orders-" + TABS[i]);
+            }
+            context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+            context.waitTicks(3);
+
             // The chat commands, which now register through a different Fabric API.
             for (String command : new String[] {"trade", "trade balance", "trade price iron_ingot",
                     "trade hostrules", "trade hostconfig"}) {
