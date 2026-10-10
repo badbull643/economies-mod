@@ -35,10 +35,10 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /**
- * Walks the screens in a real 1.21.1 client and photographs each one, then quits.
+ * Walks the screens in a real 1.20.1 client and photographs each one, then quits.
  *
  * The stand-in for the client game test mc-1.21.11 has: Fabric's client game-test API does
- * not exist for 1.21.1, and without it nothing would ever draw these screens except a person.
+ * not exist for 1.20.1, and without it nothing would ever draw these screens except a person.
  * Like that test it asserts nothing about what is drawn — a screenshot cannot say whether a
  * layout is right — but a screen that throws while rendering crashes the client, and with it
  * the run, which is the failure a compile cannot catch.
@@ -124,8 +124,7 @@ public class ScreenTour implements ClientModInitializer {
             LevelInfo info = new LevelInfo(name, GameMode.SURVIVAL, false, Difficulty.PEACEFUL,
                     true, new GameRules(), DataConfiguration.SAFE_MODE);
             c.createIntegratedServerLoader().createAndStart(name, info,
-                    GeneratorOptions.createRandom(), WorldPresets::createDemoOptions,
-                    new TitleScreen());
+                    GeneratorOptions.createRandom(), WorldPresets::createDemoOptions);
         }, 20);
         when(c -> c.player != null && c.world != null && c.currentScreen == null,
                 c -> System.out.println("[screentour] in the world"), 100);
