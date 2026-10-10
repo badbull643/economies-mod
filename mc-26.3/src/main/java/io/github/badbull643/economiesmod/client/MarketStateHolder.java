@@ -1,0 +1,2418 @@
+package io.github.badbull643.economiesmod.client;
+
+import io.github.badbull643.economiesmod.core.*;
+import io.github.badbull643.economiesmod.core.net.HostServer;
+import io.github.badbull643.economiesmod.core.net.MarketClient;
+import io.github.badbull643.economiesmod.core.net.Message;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.Minecraft;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.storage.LevelResource;
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.GeneralSecurityException;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
+
+/**
+ * Owns the active market for the current world, in one of three modes:
+ *
+ *  LOCAL     — this process owns the log. Events are appended and applied
+ *              immediately. Single-player, no network.
+ *  CONNECTED — a remote host owns the log. Events are proposed and only applied
+ *              when the host broadcasts them back. Asynchronous.
+ *  HOSTING   — this process runs the HostServer AND connects to it as a client,
+ *              so the host's own trades take the same path as everyone else's.
+ */
+public class MarketStateHolder {
+
+    public enum Mode { LOCAL, CONNECTED, HOSTING }
+
+    /** Written from market-connect and market-host-start, read every frame by the
+     *  screen's render — so it crosses threads in both directions. */
+    private static volatile Mode mode = Mode.LOCAL;
+
+    // LOCAL mode
+    private static MarketState localState;
+    private static EventLog localLog;
+
+    private static PlayerKeys keys;
+    private static Path currentWorldDir;
+
+    private static MarketHighWater highWater;
+
+    private static PendingOps pendingOps;
+
+    /**
+     * The journal of half-finished inventory operations, or null before a world loads.
+     *
+     * Lives beside the log because it is scoped to the same world, and is meaningless
+     * against a different one.
+     */
+    public static PendingOps pendingOps() { return pendingOps; }
+
+    /**
+     * How far behind this world's log is from the furthest this market has been seen
+     * to reach, or 0 if we're level with it. Hosting while behind is what silently
+     * forks a market.
+     */
+    public static long eventsBehind() {
+        MarketState s = get();
+        if (highWater == null || s == null || s.marketId() == null) return 0;
+
+        long seen = highWater.seenFor(s.marketId());
+        long mine = localLog != null ? localLog.lastSeq() : 0;
+        if (client != null) mine = Math.max(mine, client.lastSeq());
+        return Math.max(0, seen - mine);
+    }
+
+    /**
+     * Records that a peer confirmed to be on our chain is at this height.
+     *
+     * The confirmation is the caller's job and is not optional: a forked peer's head is
+     * a different branch of this market, not this market advancing, and the mark is
+     * monotonic and persisted so a number written here wrongly outlives the session that
+     * wrote it. observeHostHead is the only caller and asks before it calls.
+     *
+     * The reporter travels with it so the claim can be withdrawn by whoever made it —
+     * see MarketHighWater.observe for the run that made that necessary.
+     */
+    public static void observeMarketHeight(UUID marketId, long seq, String fromUserId) {
+        if (highWater != null) highWater.observe(marketId, seq, fromUserId);
+    }
+
+    /**
+     * A host advertising a head that isn't on our chain.
+     *
+     * Not an error on its own — one of us is on a branch the other doesn't have, and
+     * which of us is "right" isn't a question the data answers. It's a warning that
+     * trading with that host will not do what either party expects.
+     */
+    public static class Divergence {
+        public final String hostName;
+        public final long seq;
+        public final String theirHash;
+        public final String ourHash;
+
+        /**
+         * The last event both chains hold, or -1 when it could not be found out.
+         *
+         * The thing this class could never say. It knew a point where the two disagree
+         * and could not name where they parted, because the split is somewhere at or
+         * below that point and no message carried a hash from below it — so "differs at
+         * event 400" might mean four events of divergence or four hundred, and nothing
+         * could tell the difference. See MarketClient.findSplitPoint.
+         */
+        public final long splitAt;
+
+        Divergence(String hostName, long seq, String theirHash, String ourHash) {
+            this(hostName, seq, theirHash, ourHash, -1);
+        }
+
+        Divergence(String hostName, long seq, String theirHash, String ourHash,
+                   long splitAt) {
+            this.hostName = hostName;
+            this.seq = seq;
+            this.theirHash = theirHash;
+            this.ourHash = ourHash;
+            this.splitAt = splitAt;
+        }
+
+        /** Events on our chain that are ours alone, or -1 if the split is unknown. */
+        public long oursSinceSplit(long ourHead) {
+            return splitAt < 0 ? -1 : Math.max(0, ourHead - splitAt);
+        }
+
+        public String describe() {
+            String who = hostName == null ? "a host" : hostName;
+            if (splitAt < 0) {
+                return who + " is on a different branch of this market (differs at event "
+                        + seq + ")";
+            }
+            // The number somebody can act on. "Differs at event 400" says nothing about
+            // what a reset would cost; "you parted 12 events ago" says most of it.
+            return who + " is on a different branch of this market — you parted after"
+                    + " event " + splitAt + ", and everything either of you did since is"
+                    + " on one branch only";
+        }
+    }
+
+    private static volatile Divergence divergence;
+
+    /**
+     * The most recently detected divergence, or null if everything we've seen agrees.
+     *
+     * Retires a claim that has been answered since. Reported from play: Alice warned that
+     * Bob was on a different branch, Bob discarded his branch and joined her, and the
+     * banner stayed up for the rest of the session. Only observeHostHead cleared a
+     * divergence, and it clears one by watching the named host agree — so a peer who
+     * stops hosting in order to join you leaves the warning with nothing that could ever
+     * take it down. Somebody synced to our own host is the strongest possible evidence
+     * that the fork is over, and it was the one source nothing consulted.
+     *
+     * Cleared through the accessor rather than at the moment of syncing, because the
+     * moment is in core and the claim is here — and because everything that acts on a
+     * divergence comes through this method, which is what stops the banner and the reset
+     * disagreeing about whether there is still a fork. Ask this, never the field.
+     */
+    public static Divergence divergence() {
+        Divergence d = divergence;
+        if (d == null) return null;
+
+        HostServer host = hostServer;
+        if (host != null && host.hasSyncedClient(d.hostName)) {
+            divergence = null;
+            System.out.println("[economiesmod] " + d.hostName + " is synced to this host"
+                    + " now — retiring the fork warning about them");
+            return null;
+        }
+        return d;
+    }
+
+    // (hostUserId → "seq:hash") for heads we've already compared. Checking costs a full
+    // read of the log, and a poll repeats every 10s against a head that usually hasn't
+    // moved, so the same comparison would otherwise be redone indefinitely.
+    private static final Map<String, String> checkedHeads = new ConcurrentHashMap<>();
+
+    /**
+     * Compares a discovered host's advertised head against our own chain.
+     *
+     * This is the cheap half of Certificate Transparency's gossip idea: participants
+     * comparing what they've each been told, so a split shows up without anyone having
+     * to attempt a connection first. Discovery already fetches (seq, hash) from every
+     * host it polls — signed, and nonce-bound against replay — so the comparison costs
+     * nothing extra on the wire.
+     *
+     * <h2>When their head is above ours</h2>
+     *
+     * This used to return without an opinion, because a probe carries a head and nothing
+     * below it and we have no hash at a sequence we have not reached. Two things went
+     * wrong with holding no opinion, and they were the same missing question:
+     *
+     * A fork with a longer peer stayed <b>invisible</b> until somebody pressed Connect,
+     * so which side saw the warning was decided by nothing more than which branch
+     * happened to be longer. And worse, the height was recorded anyway — the call to
+     * observeMarketHeight was the first line of this method, before a single hash had
+     * been compared — so a forked peer's head was filed as <b>this market</b> advancing.
+     * A host at 90 against a forked peer at 98 came away permanently "8 events behind" a
+     * branch that was never theirs, in a mark that is monotonic and persisted. That is
+     * not cosmetic: eventsBehind gates Host, and it told the participant who was on the
+     * chain everybody else shared that hosting it would split the market, then advised
+     * catching up from a peer who would refuse them.
+     *
+     * So it asks. One HashQuery for their hash at <b>our</b> head answers it: matching
+     * means our chain is a prefix of theirs and they genuinely extend us, so the height
+     * is real and "behind" is true; not matching means a fork, the height is not ours to
+     * record, and the split is worth finding.
+     *
+     * <h2>What it costs</h2>
+     *
+     * One round trip per peer, only when that peer's head has moved — checkedHeads
+     * already keyed the work by (peer, head) and the early return above pays for this.
+     * A peer sitting still costs nothing, which is the ordinary case for a poll on a
+     * timer. Blocking, and called from the discovery thread for that reason.
+     *
+     * The split point is looked up before it is searched for, because it does not move:
+     * two branches that have parted stay parted, and both only grow. Without that, an
+     * active fork would run a bracketing search every time either side placed an order.
+     */
+    public static void observeHostHead(UUID marketId, long seq, String hash,
+                                       String hostUserId, String hostName,
+                                       String hostAddress, int hostPort) {
+        MarketState s = get();
+        if (s == null || s.marketId() == null || marketId == null) return;
+        if (!s.marketId().equals(marketId)) return;          // different market entirely
+        if (hash == null || hostUserId == null || seq <= 0) return;
+        if (currentWorldDir == null || chainBrokenAt != -1) return;
+
+        String head = seq + ":" + hash;
+        if (head.equals(checkedHeads.get(hostUserId))) return;
+
+        try {
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            long ourHead = log.lastSeq();
+            if (ourHead <= 0) return;        // nothing of ours to compare against
+
+            // Where the two are compared, and what each says there. For a peer at or
+            // below us that is their head; for one above us it is ours, because that is
+            // the highest point we can hold an opinion about. Divergence.seq means "where
+            // the hashes were seen to disagree" and a reset falls back to one below it,
+            // so recording their head for a comparison made at ours would be a claim
+            // nothing checked.
+            long at = Math.min(seq, ourHead);
+            String ours = log.hashAt(at);
+            if (ours == null) return;
+
+            String theirs;
+            if (seq <= ourHead) {
+                theirs = hash;               // the probe already answered at this point
+            } else {
+                if (hostAddress == null || hostPort <= 0) return;
+                theirs = MarketClient.hashAt(hostAddress, hostPort, at);
+                // Unanswerable rather than answered: a peer that has gone away, or one
+                // that would not say. Not cached, so the next poll asks again — the
+                // alternative is filing "no opinion" as though it were one.
+                if (theirs == null) return;
+            }
+
+            checkedHeads.put(hostUserId, head);
+
+            if (ours.equals(theirs)) {
+                // On our chain: either level with us, or genuinely ahead. Only now is
+                // their height this market's height, and only now can "you are behind"
+                // be said honestly.
+                observeMarketHeight(marketId, seq, hostUserId);
+
+                Divergence d = divergence;
+                if (d != null && hostName != null && hostName.equals(d.hostName)) {
+                    divergence = null;
+                }
+            } else {
+                // A fork. Their height is not this market advancing — it is a different
+                // branch of it — so the watermark must not learn about it, whichever of
+                // the two is longer.
+                Divergence known = divergence;
+                long splitAt = known != null && known.splitAt >= 0
+                        && hostName != null && hostName.equals(known.hostName)
+                        ? known.splitAt
+                        : findSplitQuietly(hostAddress, hostPort, log);
+
+                divergence = new Divergence(hostName, at, theirs, ours, splitAt);
+                System.err.println("[economiesmod] divergence: " + hostName
+                        + " reports " + theirs + " at event " + at
+                        + ", we have " + ours
+                        + (splitAt >= 0
+                                ? " — parted after event " + splitAt + ", "
+                                        + (ourHead - splitAt) + " of ours since"
+                                : ""));
+            }
+        } catch (IOException e) {
+            // A poll is best-effort; a read failure here is not worth surfacing.
+        }
+    }
+
+    /** The split point, or -1, without letting a failed search cost the divergence. */
+    private static long findSplitQuietly(String hostAddress, int hostPort, EventLog log) {
+        if (hostAddress == null || hostPort <= 0) return -1;
+        try {
+            return MarketClient.findSplitPoint(hostAddress, hostPort, log);
+        } catch (IOException e) {
+            System.err.println("[economiesmod] could not locate the split point: "
+                    + e.getMessage());
+            return -1;
+        }
+    }
+
+    /** What the journal turned out to mean, once checked against the log. */
+    public static class Recovery {
+        /** Deposits whose event never landed — these items must go back. */
+        public final List<PendingOps.Op> refunds = new ArrayList<>();
+        /** Withdrawals that may never have reached the player. Reported, never re-given:
+         *  nothing records whether the hand-over completed, so acting on these would
+         *  mint items every time the crash landed after the give rather than before. */
+        public final List<PendingOps.Op> unconfirmed = new ArrayList<>();
+
+        public boolean isEmpty() { return refunds.isEmpty() && unconfirmed.isEmpty(); }
+    }
+
+    /**
+     * Settles the journal against the log, and empties it.
+     *
+     * Deposits are decided exactly: the log either contains the event or it doesn't,
+     * and it will never contain it later — the proposal died with the process that
+     * made it. Withdrawals can't be decided at all, so they are only described.
+     *
+     * If the log can't be read, nothing is resolved and the journal is left intact.
+     * Guessing here would either duplicate items or destroy them, and the entry costs
+     * nothing to keep until a start that can read the log properly.
+     */
+    public static Recovery resolvePendingOps() {
+        Recovery out = new Recovery();
+        if (pendingOps == null || pendingOps.isEmpty() || currentWorldDir == null) return out;
+
+        Set<String> landed = new HashSet<>();
+        try {
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            for (SequencedEvent se : log.readFrom(1)) {
+                if (se.event != null && se.event.clientEventId != null) {
+                    landed.add(se.event.clientEventId);
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("[economiesmod] could not read the log to settle pending"
+                    + " inventory operations — leaving them for next time: " + e);
+            return out;
+        }
+
+        for (PendingOps.Op op : pendingOps.all()) {
+            if (op.isDeposit()) {
+                if (!landed.contains(op.clientEventId)) out.refunds.add(op);
+                pendingOps.clearDeposit(op.clientEventId);
+            } else if (op.isWithdraw()) {
+                out.unconfirmed.add(op);
+                pendingOps.clearWithdraw(op.seq);
+            }
+        }
+        return out;
+    }
+
+    /** Seq of the first broken link in the local log, or -1 if the chain is sound. */
+    private static long chainBrokenAt = -1;
+    private static String damageReason;
+
+    public static long chainBrokenAt() { return chainBrokenAt; }
+
+    /** Why the local log can't be used, or null if it's fine. */
+    public static String damageReason() { return damageReason; }
+
+
+    private static HostServer hostServer;
+    private static Thread hostThread;
+
+    private static int myHostPort = 25555;
+
+    public static void setMyHostPort(int port) { myHostPort = port; }
+
+    /** The port a market hosted from this game binds. */
+    public static int myHostPort() { return myHostPort; }
+
+
+    private static Path identityFile;
+
+    /** Where this player's signing key lives. Deliberately visible in the UI. */
+    public static Path identityPath() { return identityFile; }
+
+    /** Loads (or generates) this player's signing identity. Call once at mod init. */
+    public static void loadKeys(Path keyFile) {
+        identityFile = keyFile;
+        try {
+            keys = PlayerKeys.loadOrCreate(keyFile);
+            System.out.println("[economiesmod] identity loaded from " + keyFile);
+        } catch (Exception e) {
+            System.err.println("[economiesmod] failed to load identity: " + e);
+        }
+    }
+
+    // CONNECTED mode
+    private static MarketClient client;
+
+    /** Called when a proposal is rejected, in either mode. */
+    private static Consumer<String> onRejected = reason -> {};
+
+    private static Consumer<AppliedEvent> onApplied = a -> {};
+
+    /**
+     * What actually gets wired to every apply path, in both modes.
+     *
+     * Bookkeeping that must happen whatever the UI does with the event goes here, so
+     * it can't be lost by a caller replacing the handler — and so LOCAL and CONNECTED
+     * cannot drift apart, which is where this class has been bitten before.
+     */
+    private static final Consumer<AppliedEvent> APPLIED = a -> {
+        noteApplied(a.event);
+        recordActivity(a.event);
+        onApplied.accept(a);
+    };
+
+    // ─────────── activity feed ───────────
+    //
+    // The tail of the log, kept in memory so a dashboard panel can show what has been
+    // happening without reading a file every frame. Fed from APPLIED rather than from
+    // either mode's own path, for the same reason everything else here is: LOCAL and
+    // CONNECTED must not be able to drift apart.
+    //
+    // Deliberately not filtered to live events. A synced history is exactly the thing
+    // someone joining wants to see in a "recent activity" panel, and unlike handing over
+    // items, showing an event twice costs nothing.
+
+    private static final int ACTIVITY_MAX = 64;
+
+    /** Guarded by itself: written from the network reader thread, read from the render
+     *  thread. */
+    private static final Deque<SequencedEvent> activity = new ArrayDeque<>();
+
+    private static void recordActivity(SequencedEvent se) {
+        if (se == null || se.event == null) return;
+        synchronized (activity) {
+            activity.addLast(se);
+            while (activity.size() > ACTIVITY_MAX) activity.removeFirst();
+        }
+    }
+
+    /** Fills the feed from a log that was replayed without going through APPLIED. */
+    private static void seedActivity(EventLog log) {
+        synchronized (activity) {
+            activity.clear();
+        }
+        if (log == null) return;
+        try {
+            long from = Math.max(0, log.lastSeq() - ACTIVITY_MAX);
+            for (SequencedEvent se : log.readFrom(from)) recordActivity(se);
+        } catch (IOException e) {
+            // A dashboard panel is not worth failing a world load over.
+            System.err.println("[economiesmod] could not read recent activity: " + e);
+        }
+    }
+
+    /** Most recent last. A copy, so the render thread never iterates a live deque. */
+    public static List<SequencedEvent> recentActivity() {
+        synchronized (activity) {
+            return new ArrayList<>(activity);
+        }
+    }
+
+    // ─────────── recovery note ───────────
+    //
+    // Result of settling interrupted inventory operations at world load.
+    //
+    // Held rather than shown immediately, because it is worked out before the player
+    // has any reason to open the market screen — and an item silently reappearing in
+    // your inventory with no explanation is worse than the original problem.
+    //
+    // Lives here rather than on MarketScreen because it is written at world load, when
+    // no screen exists, and read by whichever screen opens next. That is session state,
+    // not screen state, which is the reason the field on MarketScreen had to be static
+    // and could not simply be demoted to an instance field with the status line.
+
+    private static volatile String recoveryNote = "";
+
+    public static void reportRecovery(int returned, int unconfirmed) {
+        StringBuilder sb = new StringBuilder();
+        if (returned > 0) {
+            sb.append("Returned items from ").append(returned)
+              .append(returned == 1 ? " deposit that" : " deposits that")
+              .append(" never completed");
+        }
+        if (unconfirmed > 0) {
+            if (sb.length() > 0) sb.append(". ");
+            sb.append(unconfirmed).append(unconfirmed == 1 ? " withdrawal" : " withdrawals")
+              .append(" may not have reached you — see the log");
+        }
+        recoveryNote = sb.toString();
+    }
+
+    public static String recoveryNote() { return recoveryNote; }
+
+    /** Acknowledged: it describes something already done, so it is shown only once. */
+    public static void clearRecoveryNote() { recoveryNote = ""; }
+
+    public static void setOnApplied(Consumer<AppliedEvent> handler) {
+        onApplied = handler;
+        if (client != null) client.setOnApplied(APPLIED);
+    }
+
+    /**
+     * An event we were waiting on has landed, so its journal entry can go.
+     *
+     * Keyed on clientEventId rather than the event's contents: it is the only thing
+     * that ties a line in the log back to the specific inventory operation that
+     * started it, which is what makes the deposit recovery exact.
+     */
+    private static void noteApplied(SequencedEvent se) {
+        if (pendingOps == null || se == null || se.event == null) return;
+        if (se.event.clientEventId != null) {
+            pendingOps.clearDeposit(se.event.clientEventId);
+        }
+    }
+
+    public static void setOnRejected(Consumer<String> handler) {
+        onRejected = handler;
+        if (client != null) client.setOnRejected(handler);
+    }
+
+    /**
+     * Deposits the host turned down, waiting to be handed back.
+     *
+     * A refusal arrives on the reader thread and giving items back touches the player's
+     * inventory, which belongs to the game thread — so the id is parked here and the
+     * tick does the work. Concurrent because those are two different threads.
+     */
+    private static final java.util.Queue<String> refusedDeposits =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    static void noteRefusedProposal(String clientEventId) {
+        if (clientEventId != null) refusedDeposits.add(clientEventId);
+    }
+
+    /** The next refused deposit to hand back, or null. Drains one per call. */
+    public static PendingOps.Op nextRefundDue() {
+        String id;
+        while ((id = refusedDeposits.poll()) != null) {
+            if (pendingOps == null) continue;
+            for (PendingOps.Op op : pendingOps.all()) {
+                if (op.isDeposit() && id.equals(op.clientEventId)) {
+                    // Cleared before the items are handed over rather than after. The
+                    // journal exists so a crash mid-refund is recoverable, and an entry
+                    // that survives a completed refund would pay it out twice on the
+                    // next startup — which is the one direction this must never fail in.
+                    pendingOps.clearDeposit(id);
+                    return op;
+                }
+            }
+        }
+        return null;
+    }
+
+    public static Mode mode() { return mode; }
+
+    /**
+     * Whether a HostServer of ours is actually running.
+     *
+     * The server itself, not the mode. Those can disagree — disconnect() used to leave
+     * one bound while dropping us to LOCAL, which is the state that made "Disconnect"
+     * stop nothing — and when they disagree the socket is the fact.
+     */
+    public static boolean isHosting() { return hostServer != null; }
+
+    public static MarketState get() {
+        if (mode != Mode.LOCAL) {
+            return client != null ? client.state() : new MarketState();
+        }
+        if (localState == null) localState = new MarketState();
+        return localState;
+    }
+
+    private static PeerCache peerCache;
+
+    public static void loadPeers(Path peerFile) {
+        peerCache = new PeerCache(peerFile);
+    }
+
+    private static Settings settings;
+
+    public static void loadSettings(Path settingsFile) {
+        settings = new Settings(settingsFile);
+        myHostPort = settings.hostPort();
+    }
+
+    /**
+     * Persisted preferences, or null before they've been loaded.
+     *
+     * Callers must tolerate null — the screen can in principle be reached before
+     * SERVER_STARTED has run, and a missing settings file is not worth crashing over.
+     */
+    public static Settings settings() { return settings; }
+
+
+    // ─────────── LOCAL mode ───────────
+
+    public static void loadLocal(Path worldDir) {
+        // Only when the world itself changes. This is also called on reset, disconnect
+        // and switching, and re-reading the marker on those would quietly overrule a
+        // switch whose marker failed to write.
+        if (!worldDir.equals(currentWorldDir)) {
+            activeSlot = MarketSlots.active(worldDir);
+        }
+
+        currentWorldDir = worldDir;
+        mode = Mode.LOCAL;
+        disconnectIfConnected();
+
+        // Catches Exception, not just IOException: this runs on the server thread during
+        // world load, so anything escaping here takes the whole world down before the
+        // player can reach the Reset button that would fix it.
+        highWater = new MarketHighWater(
+                logPathFor(worldDir).resolveSibling("high-water.json"));
+        pendingOps = new PendingOps(
+                logPathFor(worldDir).resolveSibling("pending-ops.json"));
+
+        try {
+            localLog = new EventLog(logPathFor(worldDir));
+            // One pass for both. This was verifyChain, then damageReason (which verifies
+            // again), then replay — three walks of the whole file to open a world.
+            EventApplier.Replayed loaded = EventApplier.load(localLog);
+            chainBrokenAt = loaded.chainBrokenAt;
+            damageReason = localLog.damageReasonFor(chainBrokenAt);
+            localHistoryComplete = loaded.logCoversHead;
+            stateHeadSeq = loaded.headSeq;
+            if (chainBrokenAt != -1) {
+                System.err.println("[economiesmod] log unusable: " + damageReason);
+            }
+            localState = loaded.state;
+            // Replay here goes straight through EventApplier rather than through APPLIED,
+            // so the feed has to be filled from the log by hand. A synced history does
+            // arrive through APPLIED and fills it on its own.
+            seedActivity(localLog);
+            System.out.println("[economiesmod] local: " + loaded.describe());
+        } catch (Exception e) {
+            System.err.println("[economiesmod] local log load failed: " + e);
+            e.printStackTrace();
+            localLog = null;
+            localState = new MarketState();
+            chainBrokenAt = 0;
+            damageReason = "could not be read at all (" + e.getMessage() + ")";
+        }
+    }
+
+    // ─────────── CONNECTED mode ───────────
+
+    public static void connect(String host, int port, UUID userId, String displayName) {
+        // A damaged log must not join a market. Its lastHash can coincidentally match
+        // the host's — that is exactly what a duplicated sequence number produces — so
+        // the handshake admits it and the replica then diverges silently: orders that
+        // exist locally and nowhere else, fills that resolve differently on each side.
+        if (chainBrokenAt != -1) {
+            onRejected.accept("your log is damaged at event " + chainBrokenAt
+                    + " — Reset log before connecting (you would lose "
+                    + describeLoss(userId) + ")");
+            return;
+        }
+
+        // Stop hosting first. A running HostServer owns the log file; connecting while
+        // it runs leaves two EventLog instances appending to the same file, which
+        // silently corrupts it (duplicate sequence numbers, broken chain).
+        if (hostServer != null) {
+            System.out.println("[economiesmod] stopping host before connecting out");
+            stopHosting();
+        }
+        connect(host, port, userId, displayName, Mode.CONNECTED, true);
+
+        // If we were refused for being ahead, and our history simply extends theirs,
+        // hand them the difference and try once more. Otherwise this needs two people
+        // to work out between them which of them should host next, for a situation the
+        // machine can settle on its own.
+        if (!isConnected() && lastRefusal != null
+                && HostServer.Refusal.AHEAD.equals(lastRefusal.code)) {
+            if (offerCatchUp(host, port, userId, lastRefusal)) {
+                connect(host, port, userId, displayName, Mode.CONNECTED, true);
+            }
+        }
+    }
+
+    /** The most recent handshake refusal, kept so connect() can act on it. */
+    private static MarketClient.Refused lastRefusal;
+
+    /**
+     * Hands a stale host the events it's missing. Returns true if it took them.
+     *
+     * Only attempted when their head is genuinely an ancestor of ours — checked here,
+     * on our own log, because the host can't tell: Hello only carries our head, so from
+     * where they stand "ahead of me" and "diverged from me" look identical.
+     */
+    private static boolean offerCatchUp(String host, int port, UUID userId,
+                                        MarketClient.Refused refusal) {
+        try {
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            String ourHashAtTheirHead = log.hashAt(refusal.hostSeq);
+
+            if (ourHashAtTheirHead == null
+                    || !ourHashAtTheirHead.equals(refusal.hostHash)) {
+                // Their head isn't on our chain — we've genuinely diverged, and the
+                // extra events aren't ours to give. Migrate is NOT the answer here:
+                // it refuses a branch of the same market, because our position already
+                // includes the shared history their copy also has, and crediting it
+                // again would pay us twice for it.
+                onRejected.accept("your history diverged from that host's — Reset log to"
+                        + " rejoin them. You keep everything from before you diverged;"
+                        + " only what you did afterwards is lost.");
+                // Logged, not just shown: without this a genuine fork is invisible in the
+                // console — the connect attempt simply stops, looking identical to a hang.
+                // The fast-forward case below announces itself, so the two outcomes have
+                // to be told apart from the log alone.
+                System.err.println("[economiesmod] diverged from host at seq "
+                        + refusal.hostSeq + " (ours " + ourHashAtTheirHead
+                        + ", theirs " + refusal.hostHash + ") — not a fast-forward");
+
+                // This is where a fork is actually found in practice, and it used to end
+                // here — noted on the console, shown to the player, and forgotten. But a
+                // reset computes its re-place checklist from divergence, so leaving it
+                // null meant the reset that this very message recommends had nothing to
+                // offer back. The only thing that ever set it was the discovery poll,
+                // which is why the list appeared after Refresh and not before.
+                //
+                // The split is asked for here for the same reason noteForkFromRefusal
+                // asks: without it the reset falls back to hostSeq - 1, and the comment
+                // that used to sit here claimed that was "safe as a split point because
+                // AHEAD means their head is below ours, so anything after it on our
+                // chain is genuinely ours alone".
+                //
+                // That justification is false in precisely the branch it was written in.
+                // This is the case where our hash at their head does NOT match theirs —
+                // their chain is not a prefix of ours, it is a different chain that
+                // happens to be shorter, so their head number says nothing about where
+                // the two parted. Measured on a real run: a host at 90 and a client at
+                // 98 that had actually parted at or below 84, where the fallback offered
+                // back 9 deposits and 9 orders out of 14. Under-refunding cannot create
+                // items, which is why it was quiet, and quiet is how it survived.
+                long splitAt = -1;
+                try {
+                    splitAt = MarketClient.findSplitPoint(host, port, log);
+                } catch (IOException probe) {
+                    System.err.println("[economiesmod] could not locate the split point: "
+                            + probe.getMessage());
+                }
+
+                divergence = new Divergence(refusal.hostName, refusal.hostSeq,
+                        refusal.hostHash, ourHashAtTheirHead, splitAt);
+                if (splitAt >= 0) {
+                    System.out.println("[economiesmod] parted after event " + splitAt
+                            + ", " + (log.lastSeq() - splitAt) + " of ours since");
+                }
+                return false;
+            }
+
+            List<String> missing = log.rawLinesFrom(refusal.hostSeq + 1);
+            if (missing.isEmpty()) return false;
+
+            System.out.println("[economiesmod] host is " + missing.size()
+                    + " events behind on its own market — offering them");
+
+            Message.CatchUpResult result =
+                    MarketClient.offerCatchUp(host, port, userId, missing);
+
+            if (!result.accepted) {
+                onRejected.accept("host would not catch up: " + result.reason);
+                System.err.println("[economiesmod] host refused the catch-up after "
+                        + result.applied + " events: " + result.reason);
+                return false;
+            }
+            System.out.println("[economiesmod] host accepted " + result.applied + " events");
+            return true;
+
+        } catch (IOException e) {
+            onRejected.accept("could not bring that host up to date: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static void connect(String host, int port, UUID userId, String displayName,
+                                Mode targetMode, boolean persist) {
+
+        if (keys == null) {
+            onRejected.accept("no identity loaded");
+            return;
+        }
+
+        // Cleared at the top of every attempt, not just on success — otherwise a
+        // refusal from one host (or one earlier attempt to this one) can still be
+        // sitting here when a later attempt fails a different way, e.g. a plain
+        // socket IOException, and the public connect() wrapper would act on stale
+        // hostSeq/hostHash that has nothing to do with the current target.
+        lastRefusal = null;
+
+        // Capture what a reset would cost BEFORE tearing down the current connection.
+        // disconnectIfConnected() drops the client while leaving mode as CONNECTED, so
+        // get() would hand back an empty MarketState and the refusal would cheerfully
+        // report "you would lose nothing" about an irreversible action.
+        String lossIfReset = describeLoss(userId);
+
+        disconnectIfConnected();
+
+        // Declared out here so the failure paths can still reach it — see
+        // adoptAfterFailedConnect for why dropping it was the bug.
+        EventLog log = null;
+        try {
+            // Always re-open from disk rather than reusing localLog. A reused instance
+            // carries an in-memory lastSeq/lastHash that may have gone stale — which is
+            // precisely what let a duplicate sequence number get appended before.
+            log = new EventLog(logPathFor(currentWorldDir));
+
+            // Whether to archive this market if the host turns out to be a dedicated
+            // server. A question rather than an answer, because it is asked about the
+            // host's market id during the handshake — which is the only id that is
+            // certain to exist. Somebody joining a big server for the first time holds
+            // no market at all, and they are precisely who this feature is for.
+            java.util.function.Predicate<UUID> archive =
+                    id -> settings == null || settings.archives(id);
+
+            MarketClient c = new MarketClient(userId, displayName, keys, log, persist,
+                    peerCache, myHostPort, archive);
+            // Which slot we are about to fill, so the check below can exempt it — the
+            // active slot reconnecting to its own market is the ordinary case.
+            final String activeSlot = MarketSlots.active(currentWorldDir);
+            final Path world = currentWorldDir;
+            c.setHeldElsewhere(id -> MarketSlots.slotHolding(world, id, activeSlot) != null);
+            c.setOnRejected(onRejected);
+            // A market belongs to one Minecraft version; hosts turn away anybody else, and
+            // this is what they compare against.
+            c.setGameVersion(GameVersion.current());
+            c.setOnProposalRefused(MarketStateHolder::noteRefusedProposal);
+            c.setOnApplied(APPLIED);
+            // Describes the world we are actually in. Honest, which is why it catches
+            // only people who are also being honest — see WorldAttestation.
+            WorldAttestation described = WorldFacts.of(
+                    Minecraft.getInstance().getSingleplayerServer());
+            c.setAttestation(described);
+            // Remembered as the baseline, so the first poll after connecting does not
+            // re-send what the handshake has just said.
+            lastToldCheats = described != null && described.cheatsAvailable();
+            lastToldGameMode = described == null || described.gameMode == null
+                    ? "" : described.gameMode;
+            c.connect(host, port);
+
+            client = c;
+            localLog = log;
+            localState = null;
+            mode = targetMode;
+            lastRefusal = null;
+
+            // Every divergence on record was a claim about our chain against somebody
+            // else's, and we have just adopted this host's. The claims are not wrong so
+            // much as measured against a head we no longer have, and the poll recomputes
+            // any that still hold the moment it next sees that host — so this retires
+            // them rather than losing them. The mirror of hasSyncedClient in
+            // divergence(): that covers the peer joining us, this covers us joining them,
+            // and between them a fork warning cannot outlive the fork whichever way round
+            // the two players settled it.
+            divergence = null;
+            checkedHeads.clear();
+
+            // Remembered so a dropped broadcast can be recovered by reconnecting to
+            // the same host without the player re-entering anything. See resync().
+            connectedHost = host;
+            connectedPort = port;
+            connectedAs = displayName;
+            connectedUserId = userId;
+
+            System.out.println("[economiesmod] connected to " + host + ":" + port
+                    + " at seq " + c.lastSeq());
+        } catch (MarketClient.Refused e) {
+            lastRefusal = e;
+            noteForkFromRefusal(log, e, host, port);
+            onRejected.accept(e.getMessage() + explainRemedy(e.code, lossIfReset));
+            System.err.println("[economiesmod] refused: " + e.getMessage());
+            adoptAfterFailedConnect(log);
+        } catch (IOException e) {
+            onRejected.accept("connect failed: " + e.getMessage());
+            System.err.println("[economiesmod] connect failed: " + e);
+            adoptAfterFailedConnect(log);
+        }
+    }
+
+    /**
+     * Raises the FORKED banner when a refusal says our chain disagrees with the host's.
+     *
+     * This is the narrower of the two fork routes, and worth telling apart from the one
+     * in offerCatchUp. A FORK refusal is only sent when we are at or behind the host —
+     * the host tests AHEAD first — so the seq it names is our own head, and the hash it
+     * sends is theirs at that point. That is enough to know we disagree and to say so.
+     *
+     * It is NOT enough to compute a re-place checklist. The split is somewhere at or
+     * before our head, and locating it would need hashes below that point which neither
+     * side sends, so ordersOnlyAfter is handed our head and correctly finds nothing.
+     * That errs the safe way: a split point guessed too low would offer back orders the
+     * host still holds, which is how a reset creates duplicates.
+     *
+     * The case that produces a usable checklist is the opposite ordering — we are ahead,
+     * the host's head sits below ours, and everything after it on our chain is
+     * demonstrably ours alone. That is AHEAD, and offerCatchUp records it.
+     *
+     * The host's name rides along because observeHostHead clears a divergence by
+     * matching the name it stored; a mismatched label would strand the banner.
+     */
+    private static void noteForkFromRefusal(EventLog log, MarketClient.Refused e,
+                                            String forkHost, int forkPort) {
+        if (log == null || e == null) return;
+        if (!HostServer.Refusal.FORK.equals(e.code)) return;
+        if (e.hostSeq <= 0 || e.hostHash == null) return;
+
+        try {
+            if (e.hostSeq > log.lastSeq()) return;
+            String ours = log.hashAt(e.hostSeq);
+            if (ours == null || ours.equals(e.hostHash)) return;
+
+            // Ask where we actually parted, which until now nothing could. It is a
+            // separate round trip to a host that has just refused us — deliberately, so
+            // a failure here costs the detail and not the refusal itself, which the
+            // player needs either way.
+            long splitAt = -1;
+            if (forkHost != null && forkPort > 0) {
+                try {
+                    splitAt = MarketClient.findSplitPoint(forkHost, forkPort, log);
+                } catch (IOException probe) {
+                    System.err.println("[economiesmod] could not locate the split point: "
+                            + probe.getMessage());
+                }
+            }
+
+            divergence = new Divergence(e.hostName, e.hostSeq, e.hostHash, ours, splitAt);
+            System.err.println("[economiesmod] divergence: "
+                    + (e.hostName == null ? "that host" : e.hostName)
+                    + " reports " + e.hostHash + " at event " + e.hostSeq
+                    + ", we have " + ours
+                    + (splitAt >= 0
+                            ? " — parted after event " + splitAt + ", "
+                                    + (log.lastSeq() - splitAt) + " of ours since"
+                            : " — split point unknown"));
+        } catch (IOException io) {
+            // The refusal still reaches the player either way; only the checklist that
+            // a later reset could have offered is lost.
+            System.err.println("[economiesmod] could not locate the split point: " + io);
+        }
+    }
+
+    /**
+     * Takes over the log opened for a connect that did not succeed.
+     *
+     * The success path above installs this instance as localLog; the failure paths used
+     * to simply drop it, which left two EventLog objects on one file. That is the exact
+     * situation assertSoleWriter exists to catch: a client that got far enough to append
+     * sync lines before failing has grown the file, and the still-installed localLog is
+     * holding a byte count from before it. The next local write then dies with "log file
+     * changed underneath us", having written nothing — safe, but the market is stuck
+     * until the world is reloaded.
+     *
+     * Installing it rather than discarding it leaves exactly one live instance, and this
+     * is the one whose position is right, because it is the handle that did the writing.
+     * State is replayed from it for the same reason: if it appended, localState is a
+     * record of the log as it was before those lines.
+     *
+     * Skipped while still connected. A failed resync stays in CONNECTED mode with the
+     * previous client installed, and that client still owns the log it was handed —
+     * swapping underneath it would recreate the very problem this closes.
+     */
+    private static void adoptAfterFailedConnect(EventLog log) {
+        if (log == null || log == localLog || isConnected()) return;
+
+        try {
+            localLog = log;
+            EventApplier.Replayed loaded = EventApplier.load(log);
+            chainBrokenAt = loaded.chainBrokenAt;
+            damageReason = log.damageReasonFor(chainBrokenAt);
+            localHistoryComplete = loaded.logCoversHead;
+            stateHeadSeq = loaded.headSeq;
+            localState = loaded.state;
+            seedActivity(log);
+        } catch (Exception e) {
+            // Same reasoning as loadLocal: this runs on a UI-driven path, and a throw
+            // here would strand the player with no way back to their own market.
+            System.err.println("[economiesmod] could not reopen the local log after a"
+                    + " failed connect: " + e);
+            localLog = null;
+            localState = new MarketState();
+            chainBrokenAt = 0;
+            damageReason = "could not be read at all (" + e.getMessage() + ")";
+        }
+    }
+
+    /**
+     * Turns a refusal into something the player can act on.
+     *
+     * Every one of these ends in "reset your log", and resetting is irreversible, so
+     * the cost is stated up front rather than left to be discovered after clicking.
+     */
+    private static String explainRemedy(String code, String loss) {
+        if (code == null) return "";
+
+        // Right identity, wrong key — resetting your log would not help, since the
+        // market's record of you lives in everyone else's copy too.
+        if (HostServer.Refusal.KEY_MISMATCH.equals(code)) {
+            Path id = identityPath();
+            return " — copy your identity file across from your other computer"
+                    + (id == null ? "" : " (" + id.getFileName() + ")");
+        }
+
+        // AHEAD is the one refusal where resetting is the WRONG move. It means we hold
+        // events the host does not — so the host is the stale one and our log is the
+        // current history. Telling the up-to-date party to discard theirs is how a
+        // group destroys the real market to match a copy that fell behind.
+        if (HostServer.Refusal.AHEAD.equals(code)) {
+            return " — this host is behind you, not the other way round."
+                    + " Do NOT reset; ask them to connect and catch up first.";
+        }
+
+        // A fork is a divergence within a market you both hold, so resetting costs only
+        // what you did after you split — everything before it is in their copy too.
+        // Quoting the whole position here, as if it were a different market, makes a
+        // cheap recovery look ruinous and pushes people towards keeping a dead branch.
+        if (HostServer.Refusal.FORK.equals(code)) {
+            return " — Reset log to rejoin them. You keep everything from before you"
+                    + " diverged; only what you did afterwards is lost.";
+        }
+
+        boolean recoverable = HostServer.Refusal.DIFFERENT_MARKET.equals(code)
+                || HostServer.Refusal.NO_IDENTITY.equals(code);
+        if (!recoverable) return "";
+
+        // These two really do share nothing with the destination, so the full position
+        // is the honest figure.
+        //
+        // "Add another market" leads the list because it is the only one of the three
+        // that costs nothing: slots are separate logs, so joining from a fresh one keeps
+        // this market exactly where it is. It used to go unmentioned, which left Migrate
+        // and Reset — import your wealth, or destroy it — as if those were the options.
+        // A dedicated server does not take migrations by default, so it is not offered
+        // one at all.
+        String action = HostServer.Refusal.DIFFERENT_MARKET.equals(code)
+                ? " — to join theirs, Add another market and connect from it (keeps this"
+                        + " one), or Migrate to carry your balance across, or Reset log"
+                : " — to join, Add another market and connect from it, or Reset log";
+
+        return "nothing".equals(loss)
+                ? action + " (Reset would lose nothing)"
+                : action + " (Reset would lose " + loss + ")";
+    }
+
+
+    /**
+     * Leaves the network, whichever way we were on it.
+     *
+     * Hosting is a network role like any other, and this is what somebody presses to
+     * stop. It used to drop only the client — which, while hosting, meant dropping the
+     * self-connection and leaving the server bound, still serving whoever was already
+     * on it, still answering the discovery poll, and still advertising on everyone
+     * else's host list. The button said Disconnect and nothing disconnected.
+     *
+     * The quiet half was worse. stopHosting is the only thing that releases the
+     * HostServer's EventLog, so falling through to loadLocal below opened a *second*
+     * EventLog on the file the running host still owned — two writers, duplicate
+     * sequence numbers, broken chain. connect() has guarded against exactly that since
+     * it was written, with a comment saying so; the guard was never carried here.
+     *
+     * HOSTING and CONNECTED are mutually exclusive — connect() stops hosting first — so
+     * there is no case where somebody wants to leave one and keep the other.
+     */
+    public static void disconnect() {
+        if (hostServer != null) {
+            stopHosting();   // drops the self-connect and reopens the local log itself
+            return;
+        }
+        disconnectIfConnected();
+        if (currentWorldDir != null) {
+            loadLocal(currentWorldDir);
+        } else {
+            mode = Mode.LOCAL;
+        }
+    }
+
+    private static void disconnectIfConnected() {
+        if (client != null) {
+            client.disconnect();
+            client = null;
+        }
+    }
+
+    public static boolean isConnected() {
+        return mode != Mode.LOCAL && client != null && client.isConnected();
+    }
+
+    /**
+     * Whether the host we are connected to is a dedicated server.
+     *
+     * False when not connected, which callers must read as "unknown" rather than "no" —
+     * it is only ever learned from a Sync.
+     */
+    public static boolean hostIsDedicated() {
+        return client != null && client.hostIsDedicated();
+    }
+
+    /**
+     * Drops back to LOCAL when the link died without an explicit Disconnect.
+     *
+     * Without this, mode stays CONNECTED after the host goes away: trading is still
+     * permitted (and fails later with a vague "not connected"), the order book keeps
+     * showing the dead connection's replica, and the local log is never reopened.
+     * Cheap enough to call every frame — it only does work on the transition.
+     */
+    // ─────────── resync after a missed broadcast ───────────
+
+    private static String connectedHost;
+    private static int connectedPort;
+    private static String connectedAs;
+    private static UUID connectedUserId;
+
+    /**
+     * Consecutive resync attempts, and when the last one was.
+     *
+     * Bounded because the failure this recovers from can also be permanent. An event
+     * that fails to persist — a broken chain, a full disk — leaves appliedSeq parked,
+     * so the next broadcast looks exactly like a gap; without a cap that is an
+     * unbroken reconnect loop against a host that is doing nothing wrong. The window
+     * exists so that an occasional dropped packet over a long session does not
+     * eventually exhaust a counter that never resets.
+     */
+    private static final int MAX_RESYNC_ATTEMPTS = 3;
+    private static final long RESYNC_WINDOW_MS = 60_000;
+    private static int resyncAttempts = 0;
+    private static long lastResyncAt = 0;
+
+    /**
+     * Recovers a client that missed a broadcast, by reconnecting to the same host.
+     *
+     * There is no "send me events from N" message in the protocol — CatchUp is the
+     * opposite direction, a client offering events to a host that is behind. What does
+     * backfill is the handshake itself: Hello carries our lastSeq and the host replies
+     * with everything after it. So the recovery for a gap is the ordinary join path,
+     * which is already chunked for oversized histories and already marks replayed
+     * lines non-live. Reusing it costs no new message type and no protocol bump.
+     */
+    private static void resync() {
+        long now = System.currentTimeMillis();
+        if (now - lastResyncAt > RESYNC_WINDOW_MS) resyncAttempts = 0;
+        lastResyncAt = now;
+
+        if (++resyncAttempts > MAX_RESYNC_ATTEMPTS) {
+            System.err.println("[economiesmod] giving up after " + MAX_RESYNC_ATTEMPTS
+                    + " resync attempts");
+            disconnect();
+            onRejected.accept("lost events and could not catch up — disconnected");
+            return;
+        }
+
+        long gap = client.gapAt();
+        System.out.println("[economiesmod] missed events before " + gap
+                + " — reconnecting to " + connectedHost + ":" + connectedPort
+                + " (attempt " + resyncAttempts + ")");
+
+        // Straight to the private overload: the public connect() would stop hosting and
+        // re-check the damaged-log guard, neither of which applies to a peer we are
+        // already connected to. persist=true because this is only ever reached in
+        // CONNECTED mode, where our own log is the replica being repaired.
+        connect(connectedHost, connectedPort, connectedUserId, connectedAs,
+                Mode.CONNECTED, true);
+
+        if (isConnected()) {
+            System.out.println("[economiesmod] resynced to seq " + client.lastSeq());
+        }
+    }
+
+    /**
+     * What we last told a host about this world, so a change can be noticed.
+     *
+     * Only the parts a rule can turn on: the world's age is always changing and saying
+     * so every tick would be noise.
+     */
+    private static boolean lastToldCheats;
+    private static String lastToldGameMode;
+
+    /**
+     * Re-describes this world to the host when it stops matching what was said.
+     *
+     * The handshake happens once, and Open to LAN with cheats enabled happens whenever
+     * somebody feels like it — including immediately after connecting from a world that
+     * was clean at the time. Without this the host would be holding a description that
+     * stopped being true, which is a more comfortable hole than the one it was built to
+     * close.
+     *
+     * Cheap enough to run every frame: it reads two fields off the running server and
+     * only sends when one of them differs.
+     */
+    public static void reattestIfChanged() {
+        if (client == null || !client.isConnected()) return;
+
+        // The cheap read first. This runs every client tick, and building a full
+        // attestation hashes the world seed — not something to do sixty times a second
+        // to answer a question that is two field reads.
+        MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+        if (server == null) return;
+
+        // The sticky note counts too, so a world that has been reloaded to clear the
+        // live flag still differs from what a clean one would report.
+        boolean cheats = WorldFacts.cheatsAvailable(server)
+                || WorldFacts.cheatsEverSeen(server);
+        String gameMode = WorldFacts.gameModeOf(server);
+        if (cheats == lastToldCheats && gameMode.equals(lastToldGameMode)) return;
+
+        WorldAttestation now = WorldFacts.of(server);
+        if (now == null) return;
+
+        lastToldCheats = cheats;
+        lastToldGameMode = gameMode;
+        client.reattest(now);
+        System.out.println("[economiesmod] world changed — telling the host ("
+                + gameMode + (cheats ? ", commands enabled" : "") + ")");
+    }
+
+    public static void pollConnection() {
+        if (mode == Mode.LOCAL) return;
+        if (client == null) return;
+
+        if (client.isConnected()) {
+            // A gapped client is still connected — it is receiving broadcasts and
+            // discarding every one of them — so this has to be checked before the
+            // healthy-connection early return, not after it.
+            if (client.needsResync()) {
+                if (mode == Mode.CONNECTED) {
+                    resync();
+                } else {
+                    // HOSTING's client is a loopback to our own HostServer, which owns
+                    // the log file. Reconnecting would open a second EventLog on it,
+                    // which is the duplicate-sequence corruption startHosting exists to
+                    // avoid. A gap against ourselves is a local defect, not a network
+                    // one, so it is reported rather than papered over.
+                    System.err.println("[economiesmod] sequence gap against our own host"
+                            + " at " + client.gapAt() + " — this is a bug, not a drop");
+                }
+            }
+            return;
+        }
+
+        if (mode == Mode.HOSTING) {
+            // A host that can't reach its own server can't sequence anything.
+            System.err.println("[economiesmod] lost self-connection while hosting");
+            stopHosting();
+            onRejected.accept("hosting stopped — lost connection to own server");
+        } else {
+            disconnect();
+            onRejected.accept("host disconnected — market is closed");
+        }
+    }
+
+    // ─────────── submitting events ───────────
+
+    /**
+     * Submits an event.
+     *
+     * In LOCAL mode this is synchronous — the returned Result is meaningful.
+     * In CONNECTED mode it returns a "pending" result; the real outcome arrives
+     * later via the state-changed callback or onRejected.
+     */
+    /**
+     * Tells the host what Minecraft's statistics say about an item, before depositing it.
+     *
+     * Sent per item at the moment it is needed rather than as a whole inventory at the
+     * handshake: the host wants one number to judge one deposit, and shipping every
+     * item anybody has ever touched to answer that would be absurd.
+     *
+     * Ordering holds because both travel the same channel and the host reads an Attest
+     * inline on the connection thread while a proposal goes to the sequencer queue — so
+     * the figure is always filed before the deposit it belongs to is judged.
+     */
+    private static void tellHostWhatWeHandled(Event event) {
+        if (client == null || !client.isConnected()) return;
+
+        String itemId;
+        if (event instanceof Event.Deposit) {
+            itemId = ((Event.Deposit) event).itemId;
+        } else if (event instanceof Event.DepositAndList) {
+            itemId = ((Event.DepositAndList) event).itemId;
+        } else {
+            return;
+        }
+        if (itemId == null) return;
+
+        MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
+        if (server == null) return;
+
+        WorldAttestation now = WorldFacts.of(server);
+        if (now == null) return;
+
+        now.handledByItem = new HashMap<>();
+        now.handledByItem.put(itemId, WorldFacts.handledCountOf(server, itemId));
+        client.reattest(now);
+    }
+
+    public static Submission submit(Event event) {
+        // Before the proposal, so the host has the figure when it judges it.
+        tellHostWhatWeHandled(event);
+
+
+        //the local branch only for testing though
+        if (mode != Mode.LOCAL) {
+            if (client == null || !client.isConnected()) {
+                return Submission.failed("not connected");
+            }
+            client.propose(event);
+            return Submission.pending();
+        }
+
+        // LOCAL — recover the log if something left us without one.
+        if (localLog == null) {
+            if (currentWorldDir != null) {
+                loadLocal(currentWorldDir);
+            }
+            if (localLog == null) return Submission.failed("no log open");
+        }
+
+        try {
+            // Stamped before validation, not after it. checkGenesis refuses any event
+            // whose marketId is not this market's, so stamping afterwards meant every
+            // non-genesis event submitted locally was validated with a null id and
+            // refused as belonging to a different market. Genesis carries its own id.
+            // See MarketClient.propose for the mirror of this.
+            if (!(event instanceof Event.MarketCreated)) {
+                event.marketId = get().marketId();
+            }
+
+            // Validate before logging — a rejected event must not enter history.
+            SequencedEvent probe = new SequencedEvent();
+            probe.seq = localLog.lastSeq() + 1;
+            probe.event = event;
+            EventApplier.Result check = EventApplier.validate(get(), probe);
+            if (!check.accepted) {
+                return Submission.failed(check.reason);
+            }
+
+            // Sign local appends too. Trading is refused in LOCAL mode — but not here,
+            // and looking for the guard at this layer will not find it. It is
+            // requireConnected() in MarketScreen, on every trading action, and it tests
+            // the live socket rather than the mode because being in CONNECTED with a
+            // dead client is the case that used to let a trade through to fail later.
+            //
+            // What still reaches this branch is market management: genesis, policy, and
+            // anything else authored while offline. An unsigned line among those would
+            // make the whole log unverifiable to anyone who later imports it.
+            if (keys == null) return Submission.failed("no identity loaded");
+            String signature;
+            try {
+                signature = keys.sign(EventCanonical.canonicalPayload(event));
+            } catch (GeneralSecurityException e) {
+                return Submission.failed("could not sign event: " + e.getMessage());
+            }
+
+            SequencedEvent se = localLog.append(event, signature);
+            EventApplier.Result r = EventApplier.apply(get(), se);
+            if (r.accepted) {
+                // Always live here — this path only ever applies an event the player
+                // has just authored, never a replayed one.
+                APPLIED.accept(new AppliedEvent(se, r, true));
+            }
+            return r.accepted ? Submission.accepted(r) : Submission.failed(r.reason);
+        } catch (IOException e) {
+            return Submission.failed("log write failed: " + e.getMessage());
+        }
+    }
+
+    /** What the caller learns immediately. In CONNECTED mode that's usually just "pending". */
+    public static class Submission {
+        public final boolean pending;
+        public final boolean accepted;
+        public final String reason;
+        public final EventApplier.Result result;
+
+        private Submission(boolean pending, boolean accepted, String reason,
+                           EventApplier.Result result) {
+            this.pending = pending;
+            this.accepted = accepted;
+            this.reason = reason;
+            this.result = result;
+        }
+
+        static Submission pending() {
+            return new Submission(true, false, null, null);
+        }
+
+        static Submission accepted(EventApplier.Result r) {
+            return new Submission(false, true, null, r);
+        }
+
+        static Submission failed(String reason) {
+            return new Submission(false, false, reason, null);
+        }
+    }
+
+
+    /**
+     * True if this world's log holds a market — so Host has something to serve.
+     *
+     * Reads the replayed state rather than the log file: this is polled every frame
+     * by the UI, and it must not touch a file a HostServer may own.
+     */
+    public static boolean hasMarket() {
+        MarketState s = get();
+        return s != null && s.marketId() != null;
+    }
+
+    /**
+     * Whether this machine holds the history behind the market it is showing.
+     *
+     * It usually does, and on a rotating host it always does. What makes this a question
+     * is step 4 of the compaction note: a client of a dedicated market keeps a snapshot
+     * and no history by default, so its state can be a hundred thousand events ahead of
+     * a log that holds nothing at all.
+     *
+     * Hosting is what this gates, and the reason is not tidiness. A host serves a joiner
+     * by reading raw lines out of its log; one with no history would accept the
+     * connection and hand over nothing, and the market it advertised would be a market
+     * nobody could actually join. The Host button is already greyed while a dedicated
+     * server is serving this market — but that check is deliberately live-only, so the
+     * moment the box stops being discovered the button comes back, which is exactly the
+     * moment a snapshot-only replica must not take it.
+     *
+     * Being false is not damage and not an error. It is what somebody chose by not
+     * archiving a market that a server was looking after.
+     */
+    /** How many events are actually on disk here, as opposed to how far our state got. */
+    public static long localHeadSeq() {
+        // The file, not the primed head. lastSeq() answers from the state after a load,
+        // so it reported nine events on disk for a slot holding nought bytes.
+        try {
+            return localLog == null ? 0 : localLog.headSeqOnDisk();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Recorded at load, because it cannot be asked for cheaply afterwards and the cheap
+     * way of asking is wrong.
+     *
+     * The first version of {@link #hasFullHistory()} read {@code localLog.lastSeq()},
+     * which after a load is primed from the state rather than the file — so a slot with
+     * a nought-byte log answered with the state's head, and the gate that exists to stop
+     * a historyless replica hosting said yes to every one of them. Measured on a real
+     * slot: nought bytes on disk, {@code lastSeq()} of nine.
+     *
+     * Only changes at a load, or when a client stops writing mid-session. A log being
+     * written stays in step with the state it is building, so nothing else can move it.
+     */
+    private static boolean localHistoryComplete = true;
+
+    /**
+     * Where the state this world is showing actually got to, recorded at the same load.
+     *
+     * The other half of the pair above, and it exists so that "is my log readable through
+     * my head" can be asked without asking {@code lastSeq()}, which after a load is
+     * primed from the state and would compare the state against itself — the same wrong
+     * question that let a historyless replica host. Read once, by startHosting.
+     */
+    private static long stateHeadSeq = 0;
+
+    /**
+     * Whether this machine holds the history behind the market it is showing.
+     *
+     * See the field above for why this is a stored answer rather than a computed one.
+     */
+    public static boolean hasFullHistory() {
+        MarketState s = get();
+        if (s == null || s.marketId() == null) return false;
+        if (!localHistoryComplete) return false;
+        // A connected client that has stopped writing is building state its log will not
+        // contain, so completeness ends the moment that decision is taken rather than at
+        // the next load.
+        if (client != null && client.isConnected() && !client.keepsHistory()) return false;
+        return localLog != null;
+    }
+
+    /** The name of the market in this world's log, or null if there isn't one. */
+    public static String marketName() {
+        MarketState s = get();
+        return s != null ? s.marketName() : null;
+    }
+
+    /**
+     * Creates a brand-new market in this world's log. Deliberately separate from
+     * startHosting — see MarketBootstrap for why.
+     */
+    public static boolean createMarket(Path worldDir, UUID userId, String marketName) {
+        currentWorldDir = worldDir;
+
+        if (keys == null) {
+            onRejected.accept("no identity loaded");
+            return false;
+        }
+
+        // A damaged log can report lastSeq 0 while the file is full of lines we simply
+        // couldn't read. Creating into that would write genesis after the garbage.
+        if (chainBrokenAt != -1) {
+            onRejected.accept("this world's log " + damageReason + " — Reset log first");
+            return false;
+        }
+
+        try {
+            disconnectIfConnected();
+            EventLog log = localLog != null ? localLog : new EventLog(logPathFor(worldDir));
+
+            if (log.lastSeq() != 0 || log.isUnreadable()) {
+                onRejected.accept("this world already has a market — reset the log first");
+                return false;
+            }
+
+            MarketBootstrap.createMarket(log, userId, marketName, keys);
+            localLog = log;
+            localState = EventApplier.replay(log);
+            mode = Mode.LOCAL;
+            return true;
+        } catch (IOException e) {
+            onRejected.accept("could not create market: " + e.getMessage());
+            System.err.println("[economiesmod] create market failed: " + e);
+            return false;
+        }
+    }
+
+    /**
+     * Where a world keeps the rules it hosts under.
+     *
+     * One method because two callers need the same answer: hosting reads it, and
+     * /trade hostconfig writes it. A command that created the file somewhere other than
+     * where hosting looks would be the §4 defect exactly, and silent — the file would
+     * appear, and nothing would ever read it.
+     *
+     * Normalised, because the world directory arrives with a trailing "." from
+     * getSavePath and the raw form prints as saves\world\.\economiesmod\... — which is
+     * the path an operator is about to go and edit.
+     *
+     * World-level rather than per-slot: the rules belong to whoever hosts, and every
+     * market slot in a world is hosted by the same person on the same port.
+     */
+    public static Path hostConfigPathFor(Path worldDir) {
+        return worldDir.resolve("economiesmod").resolve("host-config.json").normalize();
+    }
+
+    /** The world this client has a market open in, or null when there is none. */
+    public static Path currentWorldDir() {
+        return currentWorldDir;
+    }
+
+    /**
+     * The policy this world hosts under.
+     *
+     * Friend-group defaults unless the world holds a host-config.json, which nothing
+     * creates on its own and everything ignores when absent — so the ordinary case is
+     * exactly what it was, and somebody who wants admission rules, deposit caps or world
+     * checks on a market they host from their own game can have them without running a
+     * separate server.
+     *
+     * Deliberately not server-config.json. That file belongs to the dedicated launcher
+     * and lives beside it; a market hosted from a world keeps its settings with that
+     * world, so copying a save takes its rules along.
+     *
+     * Port, name and identity are facts about this session rather than settings, so they
+     * are imposed on whatever the file said.
+     */
+    private static ServerConfig hostPolicyFor(Path worldDir, int port, String playerName,
+                                              UUID userId) {
+        Path file = hostConfigPathFor(worldDir);
+
+        ServerConfig cfg;
+        try {
+            cfg = ServerConfig.load(file);
+            if (Files.exists(file)) {
+                System.out.println("[economiesmod] hosting under the rules in " + file);
+            } else {
+                // Said out loud for the same reason the launcher says it: silence makes
+                // "no rules" and "rules that did not fire" look identical. The file also
+                // belongs to whoever hosts, which is easy to get wrong when two worlds
+                // are involved and only one of them is serving.
+                //
+                // The second line is the discoverability half, and it is here rather
+                // than in the UI because this is the moment the defaults start applying.
+                // A setting nobody can find is the same as a setting that does not
+                // exist — which is how the free-order allowance shipped switched off —
+                // and the welcome-grant ceiling is the sharpest case: a player refused
+                // at 10,000 has no way to learn the figure is movable. Naming the
+                // command rather than the keys, because the command writes every key
+                // with the value it currently resolves to.
+                System.out.println("[economiesmod] no " + file
+                        + " — hosting with friend-group settings: open admission,"
+                        + " no deposit caps, refusing creative and cheat-enabled worlds,"
+                        + " migrations accepted, welcome grants capped at "
+                        + ServerConfig.ROTATING_MAX_WELCOME_GRANT);
+                System.out.println("[economiesmod] to change any of that, run"
+                        + " /trade hostconfig write in game — it creates that file with"
+                        + " every setting in it — then edit it and host again");
+            }
+        } catch (IOException e) {
+            // Unreadable rather than absent. Refusing to host would strand somebody
+            // over a file they may not know exists, so this says so and carries on
+            // with the defaults every other world uses.
+            System.err.println("[economiesmod] could not read " + file + " (" + e
+                    + ") — hosting with the usual friend-group settings");
+            cfg = ServerConfig.friendGroup(port);
+        }
+
+        cfg.asWorldHost(port, playerName, userId.toString(), GameVersion.current());
+
+        String bad = cfg.problem();
+        if (bad != null) {
+            System.err.println("[economiesmod] " + file + " is not usable (" + bad
+                    + ") — hosting with the usual friend-group settings");
+            cfg = ServerConfig.friendGroup(port)
+                    .asWorldHost(port, playerName, userId.toString(),
+                            GameVersion.current());
+        }
+        return cfg;
+    }
+
+    public static void startHosting(Path worldDir, int port, UUID userId, String playerName) {
+        // Asked here as well as by the button that greys itself, because a greyed control
+        // with a live handler behind it is this file's oldest recurring defect and has
+        // caused three of the entries in the session log's §0. The button can also be
+        // reached by a confirmation overlay that does not re-check.
+        if (!hasFullHistory() && hasMarket()) {
+            // Long form to the console, short form to the screen. The footer draws one
+            // trimmed line, so the sentence this used to send — a hundred and fifty
+            // characters ending in the only instruction it contained — arrived as
+            // "...so it cannot serve any..." and told nobody anything. It had never been
+            // seen at all until the reason stopped being overwritten by "Failed to start
+            // host", which is how a message this shape survived being written.
+            System.err.println("[economiesmod] not hosting: this copy of the market is a"
+                    + " snapshot without the history behind it, so it has no lines to send"
+                    + " anybody who joins. Turn archiving on for this market with"
+                    + " /trade archive on, reconnect once to fetch the history, and it can"
+                    + " be hosted from here afterwards.");
+            onRejected.accept("no history here to serve — /trade archive on, then reconnect");
+            return;
+        }
+
+        // Whether the file can actually be read through, which is a different question
+        // from the one above and the only place in the mod that has to ask it. Hosting
+        // means handing this history to somebody who will verify it; a log with a line
+        // this build cannot parse hands over a truncated chain and forks whoever takes
+        // it.
+        //
+        // It costs a pass over the file, and it is here rather than on the load path
+        // because here is where it is decided. Every world load used to pay it, through
+        // logCoversHead, for a case that arises when a snapshot sits on top of a damaged
+        // log — rare, invisible on screen, and worth one pause at the moment somebody
+        // presses Host. The button beside it cannot ask this: it is set from a render
+        // path, and a parse of the log per frame is not a trade anybody would make.
+        //
+        // Says what is wrong, too. The refusal above would have covered this case before
+        // and told the player to turn on archiving, which is advice for a different
+        // problem — archiving is already on, and their file is damaged.
+        if (localLog != null && localState != null && hasMarket()) {
+            // localHeadSeq answers 0 rather than throwing when the file cannot be read at
+            // all, which lands in the same refusal as a file that stops early — right in
+            // both cases, and the reason the message names the number it reached.
+            long readable = localHeadSeq();
+            if (readable < stateHeadSeq) {
+                // Short enough to survive the footer, which trims to one line and would
+                // otherwise cut off the half that says what to do — the defect §0 of the
+                // session log records twice. The reasoning goes to the console, where
+                // there is room for it.
+                System.err.println("[economiesmod] not hosting: this world's log stops"
+                        + " being readable at event " + readable + " while the market is"
+                        + " at " + stateHeadSeq + ". A snapshot is standing in for the"
+                        + " history, so the market itself is intact on screen — but the"
+                        + " file is damaged, and serving it would hand a joiner a chain"
+                        + " that breaks partway. Reset the local history and rejoin"
+                        + " whoever else holds this market.");
+                onRejected.accept("log damaged after event " + readable
+                        + " — reset before hosting");
+                return;
+            }
+        }
+
+        currentWorldDir = worldDir;
+        myHostPort = port;
+        disconnectIfConnected();
+        localLog = null;   // the HostServer's own EventLog owns the file while hosting
+        localState = null;
+
+        try {
+            hostServer = new HostServer(hostPolicyFor(worldDir, port, playerName, userId),
+                    logPathFor(worldDir), keys, peerCache);
+            hostThread = new Thread(() -> {
+                try {
+                    hostServer.start();
+                } catch (IOException e) {
+                    System.err.println("[economiesmod] host stopped: " + e);
+                }
+            }, "market-host");
+            hostThread.setDaemon(true);
+            hostThread.start();
+
+            IOException bindErr = hostServer.awaitBound(3000);
+            if (bindErr != null) {
+                System.err.println("[economiesmod] could not bind port " + port + ": " + bindErr);
+                // Stopped rather than dropped, like the self-connect failure below.
+                // Nulling the field alone left whatever start() had already brought up
+                // running, holding an EventLog on this world's market — and loadLocal
+                // then opens a second one on the same file.
+                hostServer.stop();
+                hostServer = null;
+                loadLocal(worldDir);
+                // Names the fix, because the overwhelmingly common cause is two clients
+                // on one machine both defaulting to 25555 — and "already in use" alone
+                // doesn't tell you the Port field is where you resolve it.
+                onRejected.accept("port " + port + " is already in use — set a different"
+                        + " one in the Port field (another host may be running here)");
+                return;
+            }
+
+            connect("localhost", port, userId, playerName, Mode.HOSTING, false);
+
+            if (client == null || !client.isConnected()) {
+                System.err.println("[economiesmod] host started but self-connect failed");
+                hostServer.stop();
+                hostServer = null;
+                loadLocal(worldDir);
+                onRejected.accept("host started but could not connect to itself");
+                return;
+            }
+
+            System.out.println("[economiesmod] hosting on port " + port);
+        } catch (Exception e) {
+            if (hostServer != null) {
+                hostServer.stop();
+                hostServer = null;
+            }
+            loadLocal(worldDir);
+            onRejected.accept("failed to start host: " + e.getMessage());
+            System.err.println("[economiesmod] host start failed: " + e);
+        }
+    }
+
+    public static void stopHosting() {
+        disconnectIfConnected();
+        if (hostServer != null) {
+            hostServer.stop();
+            hostServer = null;
+        }
+        if (currentWorldDir != null) {
+            loadLocal(currentWorldDir);   // reopens the local log and sets mode
+        } else {
+            mode = Mode.LOCAL;
+        }
+    }
+
+    /** Full teardown — the world is closing. Unlike stopHosting, doesn't reopen a local log. */
+    public static void shutdown() {
+        if (hostServer != null) {
+            hostServer.stop();
+            hostServer = null;
+        }
+        disconnectIfConnected();
+        localLog = null;
+        localState = null;
+        currentWorldDir = null;
+        mode = Mode.LOCAL;
+    }
+
+    /**
+     * Which market in this world is in use. Still the single place a log path is decided.
+     *
+     * Every file a market owns is a sibling of its log, so pinning a different log here
+     * moves the high-water mark, pending ops and known keys with it. That is the whole
+     * of switching: nothing else in this class knows there is more than one.
+     */
+    private static String activeSlot = MarketSlots.DEFAULT;
+
+    public static String activeSlot() { return activeSlot; }
+
+    public static List<String> availableSlots() {
+        return MarketSlots.list(currentWorldDir);
+    }
+
+    /** What the market in a slot calls itself, or null when it holds none yet. */
+    public static String slotMarketName(String slot) {
+        return MarketSlots.marketNameIn(currentWorldDir, slot);
+    }
+
+    /**
+     * Makes room for another market in this world and switches to it.
+     *
+     * The new slot is empty, which the Market screen already reads as MS_NO_MARKET —
+     * so the player lands on exactly the Create, Import and Connect choices that a
+     * market-to-be needs, with no new flow to learn.
+     */
+    /**
+     * Removes the market currently in use and falls back to the default slot.
+     *
+     * Only ever the active one, so what is about to be destroyed is what the screen is
+     * describing — deleting a market from a list, while looking at a different one's
+     * balances, is how the wrong thing gets deleted.
+     */
+    public static boolean deleteActiveMarketSlot() {
+        if (currentWorldDir == null) {
+            onRejected.accept("no world open");
+            return false;
+        }
+        String doomed = activeSlot;
+        if (MarketSlots.DEFAULT.equalsIgnoreCase(doomed)) {
+            onRejected.accept("the first market in a world cannot be removed —"
+                    + " use Discard to empty it instead");
+            return false;
+        }
+
+        // Nothing may be holding the files open when they go.
+        if (hostServer != null) stopHosting();
+        disconnectIfConnected();
+        localLog = null;
+        localState = null;
+
+        try {
+            MarketSlots.delete(currentWorldDir, doomed);
+        } catch (IOException e) {
+            onRejected.accept("could not remove that market: " + e.getMessage());
+            loadLocal(currentWorldDir);
+            return false;
+        }
+
+        activeSlot = MarketSlots.DEFAULT;
+        try {
+            MarketSlots.setActive(currentWorldDir, activeSlot);
+        } catch (IOException e) {
+            System.err.println("[economiesmod] could not remember the active market: " + e);
+        }
+
+        divergence = null;
+        checkedHeads.clear();
+        pendingReplace = new ArrayList<>();
+
+        loadLocal(currentWorldDir);
+        System.out.println("[economiesmod] removed market slot '" + doomed + "'");
+        return true;
+    }
+
+    public static boolean addMarketSlot() {
+        if (currentWorldDir == null) {
+            onRejected.accept("no world open");
+            return false;
+        }
+        try {
+            return switchTo(MarketSlots.createNext(currentWorldDir));
+        } catch (IOException e) {
+            onRejected.accept("could not add a market: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static Path logPathFor(Path worldDir) {
+        Path p = MarketSlots.logPath(worldDir, activeSlot);
+        // A name that cannot be a path should have been refused long before this, but
+        // falling back to the default beats handing a null to a file operation.
+        return p != null ? p : MarketSlots.logPath(worldDir, MarketSlots.DEFAULT);
+    }
+
+    /**
+     * Puts this world on a different market.
+     *
+     * Disconnects and stops hosting first, for the same reason resetLog does: a running
+     * HostServer owns the log file it was started on, and leaving it running while the
+     * holder pins a different one leaves two EventLog instances writing to files neither
+     * agrees about.
+     *
+     * An empty slot is a market that does not exist yet, not an error — the Market
+     * screen reads that as MS_NO_MARKET and offers Create, Import and Connect, which is
+     * exactly the right set of choices for one.
+     */
+    public static boolean switchTo(String slot) {
+        if (currentWorldDir == null) return false;
+        if (!MarketSlots.isValidName(slot)) {
+            onRejected.accept("'" + slot + "' is not a usable market name");
+            return false;
+        }
+        if (slot.equalsIgnoreCase(activeSlot)) return true;
+
+        if (hostServer != null) stopHosting();
+        disconnectIfConnected();
+
+        activeSlot = slot.trim();
+        try {
+            MarketSlots.setActive(currentWorldDir, activeSlot);
+        } catch (IOException e) {
+            // The switch still happens; it just will not be remembered next session.
+            System.err.println("[economiesmod] could not remember the active market: " + e);
+        }
+
+        // Judgements about the market we just left, not this one.
+        divergence = null;
+        checkedHeads.clear();
+        pendingReplace = new ArrayList<>();
+
+        loadLocal(currentWorldDir);
+        System.out.println("[economiesmod] now using market slot '" + activeSlot + "'");
+        return true;
+    }
+
+    /**
+     * What a reset would cost, worked out before one happens.
+     *
+     * Exists so the confirmation can say the actual numbers rather than describe the
+     * shape of them. "Items you deposited after the split are handed back" is a promise
+     * a reader has to take on trust and cannot check; "60 cobblestone and 1 crafting
+     * table are handed back" is the same sentence with the doubt removed — and the doubt
+     * is the whole problem with a button that cannot be undone.
+     *
+     * Asked by resetLog as well, so what is shown and what is done are one computation.
+     * Two would be §4 in its most expensive form: a confirmation that promises something
+     * the action does not do is worse than no confirmation, because it was believed.
+     */
+    public static final class ResetCost {
+        /** The last event both branches hold, or -1 when there is no fork or it is unknown. */
+        public final long splitAt;
+        /** Events on this branch alone, or -1 when that cannot be worked out. */
+        public final long oursSince;
+        /** Items handed back, because discarding this branch destroys the only record. */
+        public final List<Refund> refunds;
+        /** Orders listed afterwards so they can be put back by hand. */
+        public final List<OldOrder> orders;
+
+        ResetCost(long splitAt, long oursSince, List<Refund> refunds, List<OldOrder> orders) {
+            this.splitAt = splitAt;
+            this.oursSince = oursSince;
+            this.refunds = refunds;
+            this.orders = orders;
+        }
+
+        /**
+         * Whether anything here is held by somebody else.
+         *
+         * The two cases the confirmation must not confuse. After a fork there is a host
+         * with the shared history, so most of what a reset destroys comes back on
+         * reconnecting. Without one there is nothing to rejoin, and every word about
+         * recovery would be false.
+         */
+        public boolean rejoinable() { return splitAt >= 0; }
+    }
+
+    /** @see ResetCost */
+    public static ResetCost resetCost() {
+        long splitAt = -1;
+        long oursSince = -1;
+
+        Divergence d = divergence();
+        if (d != null && currentWorldDir != null) {
+            splitAt = d.splitAt;
+            try {
+                oursSince = d.oursSinceSplit(new EventLog(logPathFor(currentWorldDir)).lastSeq());
+            } catch (IOException e) {
+                // The count is decoration; the lists below are the substance.
+                oursSince = -1;
+            }
+        }
+        return new ResetCost(splitAt, oursSince, depositsLostToReset(), ordersLostToReset());
+    }
+
+    /** Discards the local history entirely. Only for resolving a fork — destructive. */
+    public static void resetLog() {
+        // Stop hosting first — otherwise the running HostServer keeps its in-memory
+        // lastSeq and would append to a recreated file mid-chain, and its socket
+        // stays bound so nothing else can host.
+        if (hostServer != null) {
+            hostServer.stop();
+            hostServer = null;
+        }
+        disconnectIfConnected();
+
+        if (currentWorldDir == null) return;
+
+        // Before anything is deleted, and before divergence is cleared below — both are
+        // needed to work out what this reset actually costs. Through resetCost rather
+        // than the two methods directly, because the confirmation the player just read
+        // came from there: a dialog that promised items back and an action that returned
+        // different ones would be believed, which is what makes that pair worse than no
+        // dialog at all.
+        ResetCost cost = resetCost();
+        List<OldOrder> lost = cost.orders;
+        List<Refund> owed = cost.refunds;
+
+        try {
+            Path log = logPathFor(currentWorldDir);
+            Files.deleteIfExists(log);
+            // known-keys.json only has meaning relative to the market that's just been
+            // discarded. Leaving it behind meant a stale entry could refuse the very
+            // player who owns the world, including their own self-connection when
+            // hosting — with no way to fix it from inside the game.
+            Files.deleteIfExists(log.resolveSibling("known-keys.json"));
+            // The snapshot is state computed from the log being deleted. Its chain-hash
+            // binding means a leftover one is refused rather than believed — a new log
+            // will not carry the hash it names — so this is tidiness rather than a
+            // guard. Which is exactly why it is done here and not relied on there.
+            Files.deleteIfExists(log.resolveSibling(log.getFileName() + ".snapshot.json"));
+            // The watermark describes the market being discarded, so it goes with it —
+            // otherwise a fresh market would look permanently behind the old one.
+            if (highWater != null) highWater.clear();
+            // Both are judgements about a history that no longer exists.
+            divergence = null;
+            checkedHeads.clear();
+            loadLocal(currentWorldDir);
+            System.out.println("[economiesmod] local history discarded");
+
+            // Offered after the reset rather than before, so the list belongs to the
+            // market being rejoined rather than the one just discarded.
+            if (!lost.isEmpty()) {
+                pendingReplace = lost;
+                System.out.println("[economiesmod] " + lost.size()
+                        + " orders held for re-placing after the reset");
+            }
+
+            // Queued rather than handed over here. The inventory belongs to the server
+            // thread and this runs from a button; the client tick already drains refused
+            // deposits on the right thread and this rides along with them.
+            for (Refund r : owed) {
+                resetRefunds.add(r);
+                System.out.println("[economiesmod] returning " + r.quantity + " "
+                        + r.itemId + " — deposited after the split, and this reset would"
+                        + " otherwise destroy them");
+            }
+        } catch (IOException e) {
+            System.err.println("[economiesmod] reset failed: " + e);
+        }
+    }
+
+    /**
+     * Orders a reset would destroy without offering them back.
+     *
+     * Only meaningful after a fork. Everything up to the divergence point is history
+     * this market shares with the host, so it comes back on reconnecting and needs no
+     * help; only what was placed on our own branch afterwards is genuinely lost.
+     * Migration snapshots every order instead, and that difference is not an
+     * inconsistency — migration abandons the whole market, so every order goes with it.
+     *
+     * A reset with no fork returns nothing. There is no host holding a shared history
+     * to rejoin, so an offer to re-place would be an offer to re-place them into
+     * nothing.
+     */
+    /** Items a reset would destroy, waiting for a thread that may touch an inventory. */
+    public static class Refund {
+        public final String itemId;
+        public final long quantity;
+
+        Refund(String itemId, long quantity) {
+            this.itemId = itemId;
+            this.quantity = quantity;
+        }
+    }
+
+    private static final java.util.Queue<Refund> resetRefunds =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    /** The next batch of items a reset owes back, or null. Drains one per call. */
+    public static Refund nextResetRefund() { return resetRefunds.poll(); }
+
+    /**
+     * Puts one back when the hand-over could not happen at all.
+     *
+     * Only ever called with a refund {@code InventoryBridge.give} refused outright, which
+     * it does before touching an inventory — so this cannot duplicate anything, and the
+     * next tick with a world to give into settles it. Draining a queue is not the same as
+     * delivering it, and until this existed the two were the same line of code.
+     */
+    public static void returnResetRefund(Refund refund) {
+        if (refund != null) resetRefunds.add(refund);
+    }
+
+    /**
+     * The same for a refused deposit whose journal entry was already cleared.
+     *
+     * {@code nextRefundDue} clears before handing over on purpose — an entry that
+     * survives a *completed* refund pays it twice at the next start, and that is the one
+     * direction this must never fail in. That argument holds only while "handed over" and
+     * "attempted" are the same thing. When give refuses outright, nothing was handed over
+     * and nothing was touched, so recording it again is safe and losing it is not.
+     */
+    public static void returnRefundDue(PendingOps.Op op) {
+        if (op == null || pendingOps == null || op.userId == null) return;
+        pendingOps.recordDeposit(UUID.fromString(op.userId), op.clientEventId,
+                op.itemId, op.quantity);
+        // Back on the queue as well as back in the journal, so this session retries
+        // rather than leaving it for the next startup. The journal alone would settle it
+        // eventually — that is what makes this safe — but "eventually" here means after
+        // a restart, for items the player is standing there waiting for.
+        if (op.clientEventId != null) refusedDeposits.add(op.clientEventId);
+    }
+
+    /**
+     * What this reset would destroy that no history can restore.
+     *
+     * Items deposited after the split left a Minecraft inventory, and the branch holding
+     * the record of them is about to be deleted. Everything else a reset costs comes
+     * back — balances from the shared history when it is adopted again, orders as a
+     * checklist — so this is the only part that is simply gone.
+     *
+     * Needs the split point, which is why it could not be written until there was one.
+     * Prefers the measured answer and falls back to the old upper bound if the search
+     * could not reach the host: divergence.seq is where the hashes were seen to disagree,
+     * so one before it is the latest the split can possibly be. Erring high refunds less,
+     * which is the direction that cannot create items.
+     */
+    private static List<Refund> depositsLostToReset() {
+        List<Refund> out = new ArrayList<>();
+
+        Divergence split = divergence();
+        if (split == null || currentWorldDir == null) return out;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return out;
+        UUID me = MinecraftIds.userIdOf(mc.player);
+
+        try {
+            long sharedThrough = split.splitAt >= 0
+                    ? split.splitAt : Math.max(0, split.seq - 1);
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            for (Map.Entry<String, Long> e
+                    : BranchDiff.depositsOnlyAfter(log, sharedThrough, me).entrySet()) {
+                out.add(new Refund(e.getKey(), e.getValue()));
+            }
+        } catch (Exception e) {
+            // The reset goes ahead regardless — being stuck on a forked branch is worse
+            // than losing the refund. Loud, because this is the one cost that is real.
+            System.err.println("[economiesmod] could not work out which deposits the"
+                    + " reset would destroy, so none are being returned: " + e);
+            return new ArrayList<>();
+        }
+        return out;
+    }
+
+    private static List<OldOrder> ordersLostToReset() {
+        List<OldOrder> out = new ArrayList<>();
+
+        Divergence split = divergence();
+        if (split == null || currentWorldDir == null) return out;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return out;
+        UUID me = MinecraftIds.userIdOf(mc.player);
+
+        try {
+            // The arithmetic lives in core so it can be tested without Minecraft; all
+            // that belongs here is knowing whose keyboard this is.
+            //
+            // One before the divergence, because the two numbers mean different things.
+            // Divergence.seq is where the hashes were seen to *disagree*, which is what
+            // its own message reports; ordersOnlyAfter wants the last seq both branches
+            // *agree* on, and that can be no later than one before. Passing the
+            // disagreement point straight through treated the first event of the split
+            // as shared, so a fork found at our own head — the ordinary case when both
+            // sides have written the same number of events — asked for orders after our
+            // last event and correctly found none.
+            //
+            // Still only an upper bound: the real split may be earlier, which under-
+            // reports. That is the safe direction. Guessing lower would offer back
+            // orders the host still holds, and re-placing those is how a reset ends up
+            // creating duplicates.
+            EventLog log = new EventLog(logPathFor(currentWorldDir));
+            long sharedThrough = Math.max(0, split.seq - 1);
+            for (Order o : BranchDiff.ordersOnlyAfter(log, sharedThrough, me)) {
+                out.add(new OldOrder(o.itemID(), o.value(), o.volume(), o.isBid()));
+            }
+        } catch (Exception e) {
+            // The reset itself must go ahead regardless. Losing the convenience of a
+            // checklist is not a reason to leave somebody stuck on a forked branch.
+            System.err.println("[economiesmod] could not work out which orders the reset"
+                    + " would cost: " + e);
+            return new ArrayList<>();
+        }
+
+        return out;
+    }
+
+
+    /** Summarises what the local player would lose if the log were discarded. */
+    public static String describeLoss(UUID userId) {
+        return NetPosition.of(get(), userId).describe();
+    }
+
+    public static PeerCache peers() {
+        return peerCache;
+    }
+
+    /**
+     * This world's save directory, or null when there is no world of ours to save into.
+     *
+     * <h2>The one question that decides whether this mod can do anything at all</h2>
+     *
+     * Every market lives beside a world on this machine, and the only worlds on this
+     * machine are the ones the integrated server runs — singleplayer, and Open to LAN,
+     * which is singleplayer with the door open. Joined a server somebody else runs and
+     * there is no save path here to put a market beside, so there is no market, and
+     * nothing that needs one can work.
+     *
+     * That is a scope, not a bug: the ledger reaches real inventories through the
+     * server-side player object, which only exists for a world this process is running.
+     * Real multiplayer would need client-to-server packets and a mod on the server, which
+     * is a different piece of software. See InventoryBridge.
+     *
+     * <h2>Why it is a method rather than three calls to getServer()</h2>
+     *
+     * Because it was three calls, and two of them did not check. Pressing Create or Host
+     * while connected to somebody's server threw a NullPointerException out of a button
+     * handler, which in Minecraft means a crash report — the worst possible way to learn
+     * that a mod is singleplayer-only, and the first thing a stranger would have done
+     * with it. Asked in one place, it is one answer, and the screen can say it in words.
+     */
+    public static Path worldDirOrNull() {
+        Minecraft mc = Minecraft.getInstance();
+        return mc.getSingleplayerServer() == null ? null : mc.getSingleplayerServer().getWorldPath(LevelResource.ROOT);
+    }
+
+    /** Whether this session has a world of its own — see {@link #worldDirOrNull()}. */
+    public static boolean hasOwnWorld() {
+        return worldDirOrNull() != null;
+    }
+
+    // ─────────── migration ───────────
+
+    /** One of your orders from an abandoned market, kept so you can re-place it. */
+    public static class OldOrder {
+        public final String itemId;
+        public final long price;
+        public final long volume;
+        public final boolean isBid;
+
+        OldOrder(String itemId, long price, long volume, boolean isBid) {
+            this.itemId = itemId;
+            this.price = price;
+            this.volume = volume;
+            this.isBid = isBid;
+        }
+    }
+
+    // Captured before the abandoned log is discarded. In memory only — a convenience,
+    // not a record: the balances themselves are carried by the MigrateBalance event.
+    private static List<OldOrder> pendingReplace = new ArrayList<>();
+
+    public static List<OldOrder> pendingReplace() { return pendingReplace; }
+    public static void clearPendingReplace() { pendingReplace = new ArrayList<>(); }
+
+    /**
+     * Hands this world's market to another host, which verifies it and credits what we
+     * hold there. Does not touch the local log — the caller resets and connects after.
+     */
+    public static boolean migrateTo(String host, int port, UUID userId) {
+        if (currentWorldDir == null) {
+            onRejected.accept("no world open");
+            return false;
+        }
+        MarketState mine = get();
+        if (mine == null || mine.marketId() == null) {
+            onRejected.accept("you hold no market to migrate");
+            return false;
+        }
+
+        try {
+            disconnectIfConnected();
+            if (hostServer != null) {
+                hostServer.stop();
+                hostServer = null;
+                loadLocal(currentWorldDir);
+                mine = get();
+            }
+
+            // Snapshot the orders first — once the log is reset they're unrecoverable,
+            // and re-placing them is the whole reason this is less painful than a reset.
+            List<OldOrder> orders = new ArrayList<>();
+            for (String itemId : mine.activeItems()) {
+                // peekBook: activeItems only names items that already have one, so this
+                // is never null in practice — but bookFor creates on read, and nothing
+                // that is only reading should be able to write.
+                OrderBook book = mine.peekBook(itemId);
+                if (book == null) continue;
+                for (Order o : book.restingAsks()) {
+                    if (o.userID().equals(userId)) {
+                        orders.add(new OldOrder(itemId, o.value(), o.volume(), false));
+                    }
+                }
+                for (Order o : book.restingBids()) {
+                    if (o.userID().equals(userId)) {
+                        orders.add(new OldOrder(itemId, o.value(), o.volume(), true));
+                    }
+                }
+            }
+
+            List<String> lines = new EventLog(logPathFor(currentWorldDir)).rawLinesFrom(1);
+            // Described the same way a handshake describes it. Migration hands over more
+            // at once than any deposit does, so it is the last path that should be
+            // arriving without saying where the goods came from.
+            Message.MigrateResult result = MarketClient.requestMigration(host, port,
+                    userId, lines,
+                    WorldFacts.of(Minecraft.getInstance().getSingleplayerServer()), GameVersion.current());
+
+            if (!result.accepted) {
+                onRejected.accept("migration refused: " + result.reason);
+                // A refusal here is a real outcome — the double-mint guards live behind
+                // it — so it belongs in the log next to the success and failure cases,
+                // not only on a status line that scrolls away.
+                System.err.println("[economiesmod] migration of '" + mine.marketName()
+                        + "' refused by " + host + ":" + port + ": " + result.reason);
+                return false;
+            }
+
+            pendingReplace = orders;
+            System.out.println("[economiesmod] migrated " + result.summary
+                    + "; " + orders.size() + " orders held for re-placing");
+            return true;
+
+        } catch (IOException e) {
+            onRejected.accept("migration failed: " + e.getMessage());
+            System.err.println("[economiesmod] migration failed: " + e);
+            return false;
+        }
+    }
+
+    // ─────────── export / import ───────────
+
+    /**
+     * Anchored to the game directory, not the process working directory.
+     *
+     * A relative path resolves against CWD, which is only the game folder by accident
+     * — several launchers start the JVM elsewhere. The on-screen instructions name
+     * these folders, so they have to be where the player will actually look.
+     */
+    private static Path shareDir(String name) {
+        return FabricLoader.getInstance().getGameDir().resolve(name);
+    }
+
+    private static Path exportDir() {
+        return shareDir("economiesmod-exports");
+    }
+
+    private static Path importDir() {
+        return shareDir("economiesmod-imports");
+    }
+
+    /**
+     * Creates both share folders up front.
+     *
+     * Import needs a file placed in a folder before it runs, so creating that folder
+     * lazily on first Import means the first attempt can only ever fail — you press it
+     * once to find out where to put the file.
+     */
+    public static void ensureShareFolders() {
+        try {
+            Files.createDirectories(exportDir());
+            Files.createDirectories(importDir());
+        } catch (IOException e) {
+            System.err.println("[economiesmod] could not create share folders: " + e);
+        }
+    }
+
+    /** Writes this world's market to a shareable file. Returns the path written. */
+    public static Path exportMarket() throws IOException {
+        if (currentWorldDir == null) throw new IOException("no world open");
+
+        MarketState s = get();
+        String name = s != null && s.marketName() != null ? s.marketName() : "market";
+        String safe = name.replaceAll("[^a-zA-Z0-9-_]", "_");
+        Path dest = exportDir().resolve(safe + "-" + System.currentTimeMillis() + ".jsonl");
+
+        MarketArchive.export(logPathFor(currentWorldDir), dest);
+        return dest.toAbsolutePath();
+    }
+
+    /**
+     * Adopts a market from a file in the import folder.
+     *
+     * Requires exactly one archive present — picking one on the player's behalf when
+     * several are there would be guessing about which market they meant to join.
+     */
+    public static MarketArchive.Summary importMarket() throws IOException {
+        if (currentWorldDir == null) throw new IOException("no world open");
+
+        Path dir = importDir();
+        Files.createDirectories(dir);
+
+        List<Path> found = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "*.jsonl")) {
+            for (Path p : stream) found.add(p);
+        }
+
+        if (found.isEmpty()) {
+            throw new IOException("put a .jsonl market file in "
+                    + dir.toAbsolutePath() + " first");
+        }
+        if (found.size() > 1) {
+            throw new IOException("found " + found.size() + " market files in "
+                    + dir.toAbsolutePath() + " — leave only the one you want");
+        }
+
+        disconnectIfConnected();
+        if (hostServer != null) {
+            hostServer.stop();
+            hostServer = null;
+        }
+
+        MarketArchive.Summary summary =
+                MarketArchive.importInto(found.get(0), logPathFor(currentWorldDir));
+        loadLocal(currentWorldDir);
+        return summary;
+    }
+
+
+
+}

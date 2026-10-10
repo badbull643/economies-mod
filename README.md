@@ -98,8 +98,10 @@ One folder per Minecraft version, and one shared engine.
 | --- | --- |
 | `core/` | The market engine: events, signing, order book, networking. No Minecraft code. Builds the standalone server jar and runs the test suites. |
 | `mc-1.16.5/` | The Fabric mod for Minecraft 1.16.5. |
+| `mc-1.20.1/` | The Fabric mod for Minecraft 1.20.1 (in progress). Has the same `./gradlew runScreenTour` as 1.21.1. |
 | `mc-1.21.1/` | The Fabric mod for Minecraft 1.21.1 (in progress). `./gradlew runScreenTour` walks its screens in a real client, since 1.21.1 has no client game tests. |
 | `mc-1.21.11/` | The Fabric mod for Minecraft 1.21.11 (in progress). |
+| `mc-26.3/` | The Fabric mod for Minecraft 26.3 (in progress). Uses Mojang's own names instead of Yarn, and needs Java 25, which Gradle downloads into its own cache on the first build. |
 
 Each folder builds on its own: `cd` into it and run `./gradlew build`. Every `mc-*` folder
 compiles `core/` into its own jar, so all versions run identical market rules.
