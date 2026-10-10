@@ -1,0 +1,113 @@
+// Minecraft 26.3 / Fabric (Mojang's own names, Java 25). The game-facing half of the mod only:
+// client/, mixin/ and the mod entrypoint live in this folder, and the engine is ../core,
+// compiled into this mod jar below so every Minecraft version runs the same event rules.
+//
+// 26.x ships unobfuscated, so there are no mappings and nothing is remapped: this uses the
+// non-remapping Loom plugin and Mojang's names throughout. The client code was carried over
+// from mc-1.21.11 by Loom's migrateMappings (Yarn to Mojang names), then fixed up for what
+// changed between 1.21.11 and 26.3.
+
+plugins {
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+    id 'maven-publish'
+}
+
+// economiesmod-0.2.0+26.3.jar — the Minecraft version rides along in the file name, so
+// jars from different folders can sit side by side without anyone guessing which is which.
+version = "${project.mod_version}+${project.minecraft_version}"
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+// The shared engine, compiled straight into this module rather than consumed as a jar.
+sourceSets {
+    main {
+        java {
+            srcDir '../core/src/main/java'
+        }
+    }
+}
+
+processResources {
+    inputs.property "version", project.version
+    inputs.property "minecraft_version", project.minecraft_version
+    inputs.property "loader_version", project.loader_version
+    filteringCharset "UTF-8"
+
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version,
+                "minecraft_version": project.minecraft_version,
+                "loader_version": project.loader_version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = "UTF-8"
+    it.options.release = 25
+    // Port work: javac stops at 100 errors by default, which hides most of what has changed.
+    it.options.compilerArgs += ['-Xmaxerrs', '10000']
+}
+
+java {
+    // Java 25, fetched into Gradle's cache by the resolver in settings.gradle if not installed.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    withSourcesJar()
+}
+
+jar {
+    from("../LICENSE.txt") {
+        rename { "${it}_${project.archives_base_name}" }
+    }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = project.archives_base_name
+            from components.java
+        }
+    }
+    repositories {
+    }
+}
+
+// Two dev clients at once, for trying a host and a joiner on one machine.
+loom {
+    runs {
+        clientAlice {
+            client()
+            configName = "Minecraft Alice"
+            programArgs "--username", "Alice"
+        }
+        clientBob {
+            client()
+            configName = "Minecraft Bob"
+            programArgs "--username", "Bob"
+        }
+    }
+}
+
+// Drives a real client — makes a world, opens the screens, takes screenshots — so the GUI
+// can be looked at without a person clicking through it. `./gradlew runClientGameTest`.
+// Screenshots land under build/run/clientGameTest/screenshots.
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = "economiesmod-test"
+        enableClientGameTests = true
+    }
+}

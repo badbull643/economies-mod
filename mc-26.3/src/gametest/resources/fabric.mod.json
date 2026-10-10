@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "economiesmod-test",
+  "version": "1.0.0",
+  "name": "EconomiesMod client game tests",
+  "environment": "client",
+  "entrypoints": {
+    "fabric-client-gametest": [
+      "io.github.badbull643.economiesmod.test.MarketScreensGameTest"
+    ]
+  }
+}

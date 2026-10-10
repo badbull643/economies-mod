@@ -1,0 +1,16 @@
+pluginManagement {
+    repositories {
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+// Minecraft 26.3 needs Java 25, and this lets Gradle fetch one into its own cache
+// (~/.gradle/jdks) when the machine has none, instead of asking whoever builds this to install it.
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
