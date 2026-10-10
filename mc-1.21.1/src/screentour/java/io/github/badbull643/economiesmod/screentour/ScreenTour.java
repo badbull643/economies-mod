@@ -114,7 +114,11 @@ public class ScreenTour implements ClientModInitializer {
         // A fresh survival world with commands on, so the tour can give itself items. From the
         // title screen — or the accessibility screen a fresh game directory opens on instead,
         // which is where this run always starts.
-        when(c -> c.world == null && (c.currentScreen instanceof TitleScreen
+        // Only once the loading overlay has gone: the first screen appears while resources
+        // are still loading, and a world started then gets block updates before the block
+        // models exist — vanilla throws on every one of them until they do.
+        when(c -> c.world == null && c.getOverlay() == null
+                && (c.currentScreen instanceof TitleScreen
                 || c.currentScreen instanceof AccessibilityOnboardingScreen), c -> {
             String name = "screentour-" + System.currentTimeMillis();
             LevelInfo info = new LevelInfo(name, GameMode.SURVIVAL, false, Difficulty.PEACEFUL,
