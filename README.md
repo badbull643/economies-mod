@@ -108,7 +108,7 @@ A market belongs to one Minecraft version. Players on different versions can't t
 each other: every host, whether a player hosting from their game or a dedicated server, turns
 away anyone on another version, and the client refuses a host on another version too. Hosts on
 other versions are left off the host list. A dedicated server is told its version with
-`--game-version` (for example `1.21.11`) when it creates its market.
+`--game-version` (for example `1.21.11`) when it creates its market. (Will try to work on seeing if the cross-version trading thing actually works and makes sense)
 
 ---
 
