@@ -122,13 +122,30 @@ public class HostServer {
         private final Thread writer;
         private volatile boolean open = true;
 
+        /**
+         * What was broadcast while this client's history was still being sent, held until
+         * that is done. See handshake: a link is in the broadcast set before the history is
+         * read, so nothing written in between can miss both.
+         */
+        private final ArrayDeque<Message> heldDuringSync = new ArrayDeque<>();
+        /** Guarded by this. */
+        private boolean syncing = true;
+        /** How much may be held during a sync before the client is given up on. */
+        static final int SYNC_BACKLOG_MAX = 20_000;
+
+        /** Starts holding broadcasts; nothing is written until goLive(). */
         ClientLink(MessageChannel channel, int queueDepth, String peerName) {
             this.channel = channel;
             this.peerName = peerName;
             this.outbound = new ArrayBlockingQueue<>(queueDepth);
             this.writer = new Thread(this::drain, "market-writer");
             this.writer.setDaemon(true);
-            this.writer.start();
+        }
+
+        /** The history has been sent: what was held goes out first, then live traffic. */
+        synchronized void goLive() {
+            syncing = false;
+            writer.start();
         }
 
         /**
@@ -136,12 +153,27 @@ public class HostServer {
          * queue is full, so it is further behind than we are willing to buffer, or the
          * socket has already failed underneath it.
          */
-        boolean enqueue(Message msg) {
-            return open && outbound.offer(msg);
+        synchronized boolean enqueue(Message msg) {
+            if (!open) return false;
+            if (syncing) {
+                if (heldDuringSync.size() >= SYNC_BACKLOG_MAX) return false;
+                heldDuringSync.add(msg);
+                return true;
+            }
+            return outbound.offer(msg);
         }
 
         private void drain() {
             try {
+                // Only this thread touches it once syncing is over, which goLive saw to
+                // before starting it.
+                for (Message held; open && (held = heldDuringSync.poll()) != null; ) {
+                    channel.send(held);
+                    if (channel.failed()) {
+                        open = false;
+                        return;
+                    }
+                }
                 while (open) {
                     Message msg = outbound.take();
                     channel.send(msg);
@@ -823,7 +855,8 @@ public class HostServer {
             System.out.println("[host] connection from " + channel.remoteAddress());
 
             Message.Hello hello = (Message.Hello) first;
-            if (!handshake(channel, hello)) {
+            link = handshake(channel, hello);
+            if (link == null) {
                 return;   // handshake sent its own Error
             }
 
@@ -837,9 +870,9 @@ public class HostServer {
 
 
 
-            //
-            link = new ClientLink(channel, config.outboundQueueDepth, hello.displayName);
-            clients.add(link);
+            // Already in the broadcast set since before its history was read (see
+            // handshake); this releases what was held meanwhile.
+            link.goLive();
             System.out.println("[host] " + channel.remoteAddress() + " synced and live ("
                     + clients.size() + " connected)");
 
@@ -959,13 +992,17 @@ public class HostServer {
         return "protocol version mismatch — server is " + PROTOCOL_VERSION;
     }
 
-    /** Returns true if the client is caught up and should join the live set. */
-    private boolean handshake(MessageChannel channel, Message.Hello hello) throws IOException {
+    /**
+     * Checks a joining client and sends it the history it is missing. Returns its link,
+     * already in the broadcast set and holding what arrived meanwhile, or null if it was
+     * refused (with the Error already sent). The caller calls goLive() on it.
+     */
+    private ClientLink handshake(MessageChannel channel, Message.Hello hello) throws IOException {
         if (!PROTOCOL_VERSION.equals(hello.protocolVersion)) {
             System.out.println("[host] refused " + hello.displayName + " — their protocol "
                     + hello.protocolVersion + ", ours " + PROTOCOL_VERSION);
             sendError(channel, protocolRefusal(hello.protocolVersion));
-            return false;
+            return null;
         }
 
         // Before anything about the person is read, let alone any history sent: a market
@@ -978,7 +1015,7 @@ public class HostServer {
                     + GameVersions.normalize(hello.gameVersion) + ", this host serves "
                     + gameVersion());
             sendError(channel, Refusal.GAME_VERSION, wrongVersion);
-            return false;
+            return null;
         }
 
         UUID claimedUser;
@@ -986,12 +1023,12 @@ public class HostServer {
             claimedUser = UUID.fromString(hello.userId);
         } catch (Exception e) {
             sendError(channel, "malformed userId");
-            return false;
+            return null;
         }
 
         if (hello.publicKey == null || hello.publicKey.isEmpty()) {
             sendError(channel, "no public key presented");
-            return false;
+            return null;
         }
 
         // Before the sync, which is the expensive part: an identity that is not welcome
@@ -1001,7 +1038,7 @@ public class HostServer {
             System.out.println("[host] refused " + hello.displayName + " ("
                     + hello.userId + ") — " + notWelcome);
             sendError(channel, Refusal.NOT_ADMITTED, notWelcome);
-            return false;
+            return null;
         }
 
         if (config.requireAttestation && hello.attestation == null) {
@@ -1009,7 +1046,7 @@ public class HostServer {
                     + " — described no world");
             sendError(channel, Refusal.NOT_ADMITTED, "this server asks connecting"
                     + " players to describe their world, and yours did not");
-            return false;
+            return null;
         }
 
         if (hello.attestation != null) {
@@ -1022,7 +1059,7 @@ public class HostServer {
                 System.out.println("[host] refused " + hello.displayName + " — "
                         + String.join("; ", objections));
                 sendError(channel, Refusal.NOT_ADMITTED, String.join("; ", objections));
-                return false;
+                return null;
             }
             attestations.put(claimedUser, hello.attestation);
             System.out.println("[host] " + hello.displayName + " reports "
@@ -1047,7 +1084,7 @@ public class HostServer {
             sendError(channel, Refusal.KEY_MISMATCH,
                     "your signing key doesn't match the one this market has for you"
                             + " — if you moved computers, copy your identity file across");
-            return false;
+            return null;
         }
 
         // Still recorded, for peer display and so a changed key is visible in the logs,
@@ -1065,7 +1102,7 @@ public class HostServer {
             if (hello.lastSeq != 0) {
                 sendError(channel, Refusal.NO_IDENTITY, "your log has " + hello.lastSeq
                         + " events but belongs to no market — it predates market identity");
-                return false;
+                return null;
             }
         } else if (!hello.marketId.equals(ourMarket)) {
             System.err.println("[host] REFUSED " + claimedUser + " — different market ("
@@ -1074,7 +1111,7 @@ public class HostServer {
             sendError(channel, Refusal.DIFFERENT_MARKET,
                     "you hold '" + theirs + "', this host serves '" + state.marketName()
                             + "' — separate economies, which cannot be merged");
-            return false;
+            return null;
         }
 
         // Client ahead of us: we're stale, or they're on a different history.
@@ -1094,7 +1131,7 @@ public class HostServer {
             err.hostHash = log.lastHash();
             err.hostName = hostName;
             channel.send(err);
-            return false;
+            return null;
         }
 
         // Matching sequence numbers don't imply matching history — check the hash.
@@ -1119,7 +1156,7 @@ public class HostServer {
             err.hostHash = ourHash;
             err.hostName = hostName;
             channel.send(err);
-            return false;
+            return null;
         }
 
 // Catch them up.
@@ -1177,29 +1214,44 @@ public class HostServer {
         // A chunk is only ever sent once the line that did not fit proves another is
         // coming, so "complete" can be set truthfully without knowing the length in
         // advance — the last chunk is the one sent after the walk ends.
-        log.forEachRawLine(hello.lastSeq + 1, line -> {
-            int lineBytes = line.getBytes(StandardCharsets.UTF_8).length;
-            if (!current.isEmpty() && bytes[0] + lineBytes > MessageChannel.CHUNK_BUDGET_BYTES) {
-                sendSyncChunk(channel, current, false, chunksSent[0] == 0,
-                        ourMarket, shareable);
-                chunksSent[0]++;
-                current.clear();
-                bytes[0] = 0;
-            }
-            current.add(line);
-            bytes[0] += lineBytes;
-            total[0]++;
-            return true;
-        });
-        // Always one final frame, even for a client that is already up to date: the
-        // handshake is not finished until something says so.
-        sendSyncChunk(channel, current, true, chunksSent[0] == 0, ourMarket, shareable);
-        chunksSent[0]++;
+        // Into the broadcast set before the history is read, not after it is sent. Added
+        // after, anything written while the history was being read and sent was in
+        // neither: past the end of what was read, and broadcast before this client was
+        // listening. On a quiet market that window was rarely hit; with bots writing
+        // dozens of events a second, the first stress run hit it on every join. Now
+        // anything broadcast meanwhile is held on the link and sent once the history is
+        // done, and an event that turns up in both is one the client already skips.
+        final ClientLink link = new ClientLink(channel, config.outboundQueueDepth, hello.displayName);
+        clients.add(link);
+        try {
+            log.forEachRawLine(hello.lastSeq + 1, line -> {
+                int lineBytes = line.getBytes(StandardCharsets.UTF_8).length;
+                if (!current.isEmpty() && bytes[0] + lineBytes > MessageChannel.CHUNK_BUDGET_BYTES) {
+                    sendSyncChunk(channel, current, false, chunksSent[0] == 0,
+                            ourMarket, shareable);
+                    chunksSent[0]++;
+                    current.clear();
+                    bytes[0] = 0;
+                }
+                current.add(line);
+                bytes[0] += lineBytes;
+                total[0]++;
+                return true;
+            });
+            // Always one final frame, even for a client that is already up to date: the
+            // handshake is not finished until something says so.
+            sendSyncChunk(channel, current, true, chunksSent[0] == 0, ourMarket, shareable);
+            chunksSent[0]++;
+        } catch (IOException | RuntimeException e) {
+            clients.remove(link);
+            link.close();
+            throw e;
+        }
 
         System.out.println("[host] synced " + total[0] + " events to "
                 + channel.remoteAddress()
                 + (chunksSent[0] > 1 ? " in " + chunksSent[0] + " chunks" : ""));
-        return true;
+        return link;
     }
 
     /**
@@ -1494,6 +1546,12 @@ public class HostServer {
     PlayerKeys hostKeys() { return hostKeys; }
 
     BotRunner botRunner() { return botRunner; }
+
+    /** How much is waiting for the sequencer right now. For the stress run's report. */
+    int pendingWork() { return queue.size(); }
+
+    /** The newest sequence number in the log. */
+    long headSeq() { return log.lastSeq(); }
 
     /** Runs some work on the sequencer thread, after whatever is already queued. False if the queue is full. */
     boolean enqueueHostWork(Runnable work) {

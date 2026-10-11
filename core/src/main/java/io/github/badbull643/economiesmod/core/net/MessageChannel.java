@@ -72,7 +72,14 @@ public class MessageChannel implements AutoCloseable {
                 throw new IOException("message exceeded " + MAX_LINE_LENGTH + " bytes");
             }
         }
-        return sb.length() > 0 ? sb.toString() : null;
+        // The connection ended partway through a message. That is not a message: handing the
+        // fragment on had it parsed as JSON, and the parse error escaped as a crash instead of
+        // reading as the dropped connection it is. Found by a stress run, where the server gave
+        // up on a client that had fallen behind and closed it in the middle of a sync frame.
+        if (sb.length() > 0) {
+            throw new IOException("connection closed partway through a message");
+        }
+        return null;
     }
 
     private Class<? extends Message> classFor(String type) {

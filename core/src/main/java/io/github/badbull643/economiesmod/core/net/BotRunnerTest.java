@@ -11,6 +11,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.function.BooleanSupplier;
@@ -185,6 +186,7 @@ public class BotRunnerTest {
 
         System.out.println("  [R7: a restart picks the bots back up]");
         HostServer again = server(logPath, serverKeys);
+        int againPort = lastPort;
         start(again);
         check("the runner starts again", await(() -> again.botRunner() != null, 5000));
         String list = say(again, "bot list");
@@ -195,6 +197,51 @@ public class BotRunnerTest {
         check("a bot spawned after the restart joins the rest",
                 take(replies, 1, 5000).stream().anyMatch(s -> s.startsWith("spawned Market maker #3")));
         check("and acts", await(() -> orders(again, again.botRunner().resolve("maker#3")) > 0, 5000));
+
+        System.out.println("  [R10: players joining a busy market miss nothing]");
+        {
+            // A player used to be added to the broadcast set only after its history was sent,
+            // so an event written in between reached it neither way — the stress run hit that
+            // on every join. The bots here go quiet once their quotes settle, so the creator
+            // keeps the log busy while they join, the way a crowd of traders would.
+            AtomicBoolean busy = new AtomicBoolean(true);
+            Thread writer = new Thread(() -> {
+                while (busy.get()) {
+                    Event.Deposit d = new Event.Deposit();
+                    d.userId = HOST;
+                    d.itemId = WOOD;
+                    d.quantity = 1;
+                    try {
+                        asHost(again, serverKeys, d);
+                        Thread.sleep(5);   // a couple of hundred a second: busy, not a flood
+                    } catch (Exception ignored) {}
+                }
+            }, "busy-writer");
+            writer.setDaemon(true);   // never outlives the test, whatever happens to it
+            writer.start();
+            List<MarketClient> joiners = new ArrayList<>();
+            for (int i = 0; i < 20; i++) {
+                Path jd = dir.resolve("joiner-" + i);
+                Files.createDirectories(jd);
+                MarketClient c = new MarketClient(UUID.randomUUID(), "Joiner " + i, PlayerKeys.generate(),
+                        new EventLog(jd.resolve("market.jsonl")), true, new PeerCache(jd.resolve("peers.json")), 0);
+                c.connect("127.0.0.1", againPort);
+                joiners.add(c);
+            }
+            Thread.sleep(500);
+            busy.set(false);
+            writer.join();
+            Thread.sleep(500);
+            boolean noGaps = true;
+            for (MarketClient c : joiners) noGaps &= !c.needsResync();
+            check("none of twenty joiners found a hole in what it was sent", noGaps);
+            long head = again.headSeq();
+            check("and every one is caught up", await(() -> {
+                for (MarketClient c : joiners) if (c.lastSeq() < head) return false;
+                return true;
+            }, 5000));
+            for (MarketClient c : joiners) c.disconnect();
+        }
         again.stop();
 
         System.out.println("  [R8: the action budget]");
@@ -239,8 +286,12 @@ public class BotRunnerTest {
         return t;
     }
 
+    /** The port the last server() call picked. */
+    private static int lastPort;
+
     private static HostServer server(Path logPath, PlayerKeys keys) throws IOException {
         ServerConfig cfg = ServerConfig.friendGroup(TestPorts.free());
+        lastPort = cfg.port;
         cfg.hostName = "bot runner";
         cfg.hostUserId = HOST.toString();
         cfg.dedicated = true;
