@@ -695,6 +695,12 @@ public class MarketStateHolder {
     /** The most recent handshake refusal, kept so connect() can act on it. */
     private static MarketClient.Refused lastRefusal;
 
+    /** Whether the last connect was turned away for holding a different market than the host serves. */
+    public static boolean lastRefusedForDifferentMarket() {
+        MarketClient.Refused r = lastRefusal;
+        return r != null && HostServer.Refusal.DIFFERENT_MARKET.equals(r.code);
+    }
+
     /**
      * Hands a stale host the events it's missing. Returns true if it took them.
      *

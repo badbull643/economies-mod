@@ -115,3 +115,35 @@ loom {
         }
     }
 }
+
+// A dev-only tour of the screens in a real client, standing in for the client game test
+// mc-1.21.11 has — Fabric's client game-test API does not exist for 1.16.5. It makes a
+// world, opens every screen, screenshots each, and quits; a screen that throws crashes the
+// run. `./gradlew runScreenTour`, screenshots under build/run-screentour/screenshots.
+// Never part of the mod jar: it is its own source set and its own mod.
+sourceSets {
+    screentour {
+        compileClasspath += main.compileClasspath + main.output
+        runtimeClasspath += main.runtimeClasspath + main.output
+    }
+}
+
+loom {
+    mods {
+        economiesmod {
+            sourceSet sourceSets.main
+        }
+        "economiesmod-screentour" {
+            sourceSet sourceSets.screentour
+        }
+    }
+    runs {
+        screenTour {
+            client()
+            configName = "Screen tour"
+            source sourceSets.screentour
+            vmArg "-Deconomiesmod.screentour=true"
+            runDir "build/run-screentour"
+        }
+    }
+}

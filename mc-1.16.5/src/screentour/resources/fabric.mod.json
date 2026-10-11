@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "economiesmod-screentour",
+  "version": "1.0.0",
+  "name": "EconomiesMod screen tour (dev only)",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "io.github.badbull643.economiesmod.screentour.ScreenTour"
+    ]
+  },
+  "depends": {
+    "economiesmod": "*"
+  }
+}
