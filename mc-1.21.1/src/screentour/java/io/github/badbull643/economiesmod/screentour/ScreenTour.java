@@ -48,7 +48,10 @@ import java.util.function.Predicate;
  */
 public class ScreenTour implements ClientModInitializer {
 
-    private static final String[] TABS = {"info", "trading", "network", "market", "settings"};
+    // In MarketScreen's SCREEN_ order. "item" is one item's view, reached from Browse.
+    private static final String[] TABS = {"browse", "sell", "orders", "history", "leaderboard",
+            "network", "market", "settings", "item"};
+    private static final int BROWSE = 0, MARKET = 6, ITEM = 8;
 
     /** One thing to do, once {@code ready} holds, followed by {@code after} idle ticks. */
     private static final class Step {
@@ -142,7 +145,7 @@ public class ScreenTour implements ClientModInitializer {
         }
 
         // The create-a-market confirmation: a modal over a screen full of text.
-        tab(3);
+        tab(MARKET);
         then(c -> {
             ((TextFieldWidget) field(c.currentScreen, "marketNameField")).setText("Test Market");
             press(c.currentScreen, "Create a new market");
@@ -192,6 +195,26 @@ public class ScreenTour implements ClientModInitializer {
             state.submitOrder(new Order(906, 1, "minecraft:diamond", Long.MAX_VALUE - 10, false, whale));
             state.submitOrder(new Order(907, Long.MAX_VALUE - 1, "minecraft:iron_ingot", 1, false, whale));
             state.submitOrder(new Order(908, Long.MAX_VALUE - 200, "minecraft:cobblestone", 1, true, whale));
+
+            // Some trading of our own, so Your orders, History and the leaderboard have rows:
+            // fills through the applier, so they are recorded as trades, a run of iron at
+            // drifting prices for the chart, and more resting orders than the panel shows.
+            UUID me = c.player.getUuid();
+            state.wallets().adjust(me, 2000);
+            state.deposit(me, "minecraft:iron_ingot", 40);
+            apply(state, me, 9001, "minecraft:diamond", 40, 2, true);
+            apply(state, me, 9002, "minecraft:iron_ingot", 3, 10, false);
+            long[] prices = {4, 5, 5, 6, 5, 7, 6, 8, 7, 6, 7, 8};
+            for (int i = 0; i < prices.length; i++) {
+                state.submitOrder(new Order(920 + i, prices[i], "minecraft:iron_ingot", 2, false, other));
+                apply(state, me, 9100 + i, "minecraft:iron_ingot", prices[i], 2, true);
+            }
+            state.submitOrder(new Order(910, 30, "minecraft:diamond", 4, true, me));
+            state.submitOrder(new Order(911, 9, "minecraft:iron_ingot", 16, false, me));
+            for (int i = 0; i < 12; i++) {
+                state.submitOrder(new Order(940 + i, 1 + i, "minecraft:cobblestone", 2, true, me));
+            }
+            if (MarketStateHolder.settings() != null) MarketStateHolder.settings().setLastItem("minecraft:iron_ingot");
         }, 5);
 
         for (int i = 0; i < TABS.length; i++) {
@@ -199,10 +222,19 @@ public class ScreenTour implements ClientModInitializer {
             screenshot("market-" + TABS[i]);
         }
 
-        // The item picker, which layers over the screen and clips a scrolling grid — the
-        // part that depends on the depth lift this version needs.
-        tab(1);
-        then(c -> ((ButtonWidget) field(c.currentScreen, "itemButton")).onPress(), 5);
+        // An item's advanced side, and the view menu open — both drawn over icons, which is
+        // what the depth lift this version needs is for.
+        then(c -> setStaticBool("itemAdvanced", true), 0);
+        tab(ITEM);
+        screenshot("market-item-advanced");
+        then(c -> setStaticBool("itemAdvanced", false), 0);
+        tab(BROWSE);
+        then(c -> setBool(c.currentScreen, "menuOpen", true), 3);
+        screenshot("market-menu");
+
+        // The item picker, which layers over the screen and clips a scrolling grid.
+        tab(BROWSE);
+        then(c -> call(c.currentScreen, "openPicker"), 5);
         screenshot("picker");
         then(c -> c.currentScreen.keyPressed(GLFW.GLFW_KEY_ESCAPE, 0, 0), 3);
         then(c -> c.setScreen(null), 3);
@@ -240,6 +272,54 @@ public class ScreenTour implements ClientModInitializer {
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private static void setStaticBool(String name, boolean value) {
+        try {
+            Field f = MarketScreen.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.setBoolean(null, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void setBool(Screen screen, String name, boolean value) {
+        try {
+            Field f = MarketScreen.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.setBoolean(screen, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void call(Screen screen, String method) {
+        try {
+            java.lang.reflect.Method m = MarketScreen.class.getDeclaredMethod(method);
+            m.setAccessible(true);
+            m.invoke(screen);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** An order put through the applier, so a fill is recorded as a trade the way a real one is. */
+    private static void apply(MarketState state, UUID who, long seq, String item, long price, long volume, boolean bid) {
+        io.github.badbull643.economiesmod.core.Event.PlaceOrder p =
+                new io.github.badbull643.economiesmod.core.Event.PlaceOrder();
+        p.userId = who;
+        p.marketId = state.marketId();
+        p.itemId = item;
+        p.price = price;
+        p.volume = volume;
+        p.isBid = bid;
+        p.timestamp = System.currentTimeMillis() - 5 * 60_000;
+        io.github.badbull643.economiesmod.core.SequencedEvent se =
+                new io.github.badbull643.economiesmod.core.SequencedEvent();
+        se.seq = seq;
+        se.event = p;
+        io.github.badbull643.economiesmod.core.EventApplier.apply(state, se);
     }
 
     private static void setStatic(String name, int value) {

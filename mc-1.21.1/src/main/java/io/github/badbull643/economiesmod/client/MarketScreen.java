@@ -34,7 +34,8 @@ public class MarketScreen extends Screen {
     private TextFieldWidget itemField;
     private TextFieldWidget priceField;
     private TextFieldWidget hostField;
-    private TextFieldWidget cancelField;
+    /** The item view's one action button; what it does follows the Buy / Sell / Withdraw switch. */
+    private ButtonWidget placeButton;
     private TextFieldWidget hostPortField;
     private TextFieldWidget marketNameField;
     private ButtonWidget hostButton;
@@ -43,7 +44,8 @@ public class MarketScreen extends Screen {
     private ButtonWidget createButton;
     private ButtonWidget importButton;
     private ButtonWidget migrateButton;
-    private ButtonWidget itemButton;
+    /** Browse's search box, in the footer. */
+    private TextFieldWidget searchField;
     private ButtonWidget exportButton;
     private ButtonWidget resetButton;
     private TextFieldWidget feeField;
@@ -118,6 +120,20 @@ public class MarketScreen extends Screen {
      */
     private int invX = -1;
 
+    // ─── the trading screens' own columns ───
+    //
+    // Browse is the item list with what you are carrying beside it; an item's view is its
+    // book on the left and the order form on the right. Measured from the same content box
+    // as everything else, so the frame lines up across every tab.
+
+    /** Item view: the book column's width, and the order form's left edge and width. */
+    private int itemLeftW;
+    private int formX;
+    private int formW;
+
+    /** Where the order form's labels end and its fields begin. */
+    private static final int FORM_LABEL_W = 58;
+
     // Row positions, set in init() so render and hit-tests can't drift.
     private int rowX;
     private int rowY;
@@ -156,7 +172,7 @@ public class MarketScreen extends Screen {
      */
     private int panelTop() { return frameTop() + 5; }
     /** One past the last usable row inside a panel. */
-    private int panelBottom() { return frameTop() + frameH() - 5; }
+    private int panelBottom() { return frameTop() + frameH() - 5 - FOOTER_H; }
 
     // ─── tabs ───
     //
@@ -171,19 +187,39 @@ public class MarketScreen extends Screen {
 
 
 
-    //need too  rename the variable too Market Info
-    static final int SCREEN_INFO = 0;
-    static final int SCREEN_TRADING = 1;
-    static final int SCREEN_NETWORK = 2;
-    static final int SCREEN_MARKET = 3;
-    static final int SCREEN_SETTINGS = 4;
+    // One panel, and a menu in its top corner choosing what it shows. Trading first,
+    // because that is what the screen is opened for: what is on offer (Browse, and an
+    // item's own view from there), what you could sell (Sell), what you have open, and
+    // what you have done. Connecting, the market's own setup and preferences come after a
+    // divider, being used once a session or less. A row of tabs offered all seven at the
+    // same weight, which is most of what made the screen look busy.
+    //
+    // The Info tab's dashboard and its live feed of every order are gone. On a busy
+    // market — bots make every market busy — the feed was a blur of orders nobody could
+    // act on, and Browse answers the question it was there for.
+    static final int SCREEN_BROWSE = 0;
+    static final int SCREEN_SELL = 1;
+    static final int SCREEN_ORDERS = 2;
+    static final int SCREEN_HISTORY = 3;
+    static final int SCREEN_LEADERBOARD = 4;
+    static final int SCREEN_NETWORK = 5;
+    static final int SCREEN_MARKET = 6;
+    static final int SCREEN_SETTINGS = 7;
+    /** One item's view. Not in the menu: it is reached from a row, and the menu still says where from. */
+    static final int SCREEN_ITEM = 8;
 
-    //initially home was here in the list but changed too info
     private static final String[] SCREEN_NAMES =
-            {"Info", "Trading", "Network", "Market", "Settings"};
+            {"Browse", "Sell", "Your orders", "History", "Leaderboard", "Network", "Market", "Settings", "Item"};
 
     /** Static so the screen you were on survives closing and reopening. */
-    private static int activeScreen = SCREEN_INFO;
+    private static int activeScreen = SCREEN_BROWSE;
+
+    /** The list an item's view was opened from, which its back arrow and the menu return to. */
+    private static int itemOpenedFrom = SCREEN_BROWSE;
+
+    private static boolean isSetupScreen(int screen) {
+        return screen == SCREEN_NETWORK || screen == SCREEN_MARKET || screen == SCREEN_SETTINGS;
+    }
 
     /** One widget list per destination, indexed by the SCREEN_ constants. */
     private final List<List<ClickableWidget>> screenWidgets = new ArrayList<>();
@@ -194,7 +230,9 @@ public class MarketScreen extends Screen {
     }
 
     private void selectScreen(int screen) {
+        if (screen == SCREEN_ITEM && activeScreen != SCREEN_ITEM) itemOpenedFrom = activeScreen;
         activeScreen = screen;
+        menuOpen = false;
         applyScreenVisibility();
     }
 
@@ -226,10 +264,190 @@ public class MarketScreen extends Screen {
     private static final int TAB_H = 18;
     private static final int TAB_GAP = 2;
 
-    private int[] tabRect(int index) {
-        int span = contentW - TAB_GAP * (SCREEN_NAMES.length - 1);
-        int w = span / SCREEN_NAMES.length;
-        return new int[]{listX + index * (w + TAB_GAP), frameTop() - TAB_H - 2, w, TAB_H};
+    // ─── the panel's frame ───
+    //
+    // A header where the tab row used to be, so everything inside the panel stays exactly
+    // where it was, and a footer for the search box and your credits. Measured from the
+    // same frameTop as the content, so the alert band moves the whole panel together.
+
+    private static final int HEADER_H = 20;
+    private static final int FOOTER_H = 18;
+
+    private int panelOuterTop() { return frameTop() - HEADER_H; }
+    private int panelOuterBottom() { return frameTop() + frameH(); }
+    private int footerTop() { return panelOuterBottom() - FOOTER_H; }
+
+    /** The menu's entries, in order. -1 is the divider between trading and setup. */
+    private static final int[] MENU = {SCREEN_BROWSE, SCREEN_SELL, SCREEN_ORDERS, SCREEN_HISTORY,
+            SCREEN_LEADERBOARD, -1, SCREEN_NETWORK, SCREEN_MARKET, SCREEN_SETTINGS};
+    private static final int MENU_ROW_H = 12;
+    private static final int MENU_DIVIDER_H = 5;
+
+    private boolean menuOpen = false;
+
+    /** What the menu says you are looking at. An item's view belongs to the list it came from. */
+    private static int menuScreen() {
+        return activeScreen == SCREEN_ITEM ? itemOpenedFrom : activeScreen;
+    }
+
+    private int[] menuButtonRect() {
+        int w = this.textRenderer.getWidth(SCREEN_NAMES[menuScreen()]) + 14;
+        return new int[]{listX + contentW - 6 - w, panelOuterTop() + 4, w, 12};
+    }
+
+    private int[] menuRect() {
+        int w = 0, h = 4;
+        for (int s : MENU) {
+            if (s < 0) h += MENU_DIVIDER_H;
+            else { w = Math.max(w, this.textRenderer.getWidth(SCREEN_NAMES[s])); h += MENU_ROW_H; }
+        }
+        w += 16;
+        int[] b = menuButtonRect();
+        return new int[]{b[0] + b[2] - w, b[1] + b[3] + 2, w, h};
+    }
+
+    /** Top of each menu entry. The drawing and the click test both read this. */
+    private int menuEntryY(int index) {
+        int y = menuRect()[1] + 2;
+        for (int i = 0; i < index; i++) y += MENU[i] < 0 ? MENU_DIVIDER_H : MENU_ROW_H;
+        return y;
+    }
+
+    /** Translucent black, so the world shows through behind the market as it does behind a chat line. */
+    private static final int PANEL_FILL = 0xC8000000;
+    private static final int PANEL_LINE = 0x30FFFFFF;
+    /**
+     * This market's own colour: emerald, after the emerald that marks credits. On the line
+     * under the header, the view you are on, links and headings — the places a neutral
+     * grey panel would otherwise have nothing of its own.
+     */
+    private static final int ACCENT = 0x4CD07A;
+    private static final int ACCENT_LINE = 0xFF000000 | ACCENT;
+    /** Connection state: green when a host is there for you, red when it is not. */
+    private static final int STATE_GOOD = 0x55FF55;
+    private static final int STATE_BAD = 0xFF5555;
+
+    /** A vertical line between two columns, header to footer. */
+    private void divider(DrawContext m, int x) {
+        m.fill(x, frameTop(), x + 1, footerTop(), PANEL_LINE);
+    }
+
+    private void renderFrame(DrawContext m, int mouseX, int mouseY) {
+        int top = panelOuterTop(), bottom = panelOuterBottom(), right = listX + contentW;
+        m.fill(listX, top, right, bottom, PANEL_FILL);
+        m.fill(listX, top, right, top + HEADER_H, 0x40000000);
+        m.fill(listX, top + HEADER_H - 1, right, top + HEADER_H, ACCENT_LINE);
+        m.fill(listX, footerTop(), right, footerTop() + 1, PANEL_LINE);
+
+        int[] b = menuButtonRect();
+        String state;
+        int colour;
+        if (MarketStateHolder.mode() == MarketStateHolder.Mode.HOSTING) { state = "hosting"; colour = STATE_GOOD; }
+        else if (MarketStateHolder.isConnected()) { state = "connected"; colour = STATE_GOOD; }
+        else if (MarketStateHolder.mode() == MarketStateHolder.Mode.CONNECTED) { state = "connection lost"; colour = STATE_BAD; }
+        else { state = "not connected"; colour = STATE_BAD; }
+        String stateText = "· " + state;
+        MarketState named = MarketStateHolder.get();
+        String name = named == null || named.marketName() == null ? "Market" : "Market - " + named.marketName();
+        int room = b[0] - listX - 18 - this.textRenderer.getWidth(stateText);
+        String shownName = trim(name, Math.max(40, room));
+        label(m, shownName, listX + 6, top + 6, 0xFFFFFF);
+        label(m, stateText, listX + 10 + this.textRenderer.getWidth(shownName), top + 6, colour);
+
+        boolean hot = menuOpen || within(mouseX, mouseY, b);
+        label(m, SCREEN_NAMES[menuScreen()], b[0], b[1] + 2, hot ? 0xFFFFFF : 0xC0C0C0);
+        int tx = b[0] + b[2] - 7, ty = b[1] + 5;   // a small down-pointing triangle
+        for (int i = 0; i < 3; i++) m.fill(tx - 2 + i, ty + i, tx + 3 - i, ty + i + 1, hot ? 0xFFFFFFFF : 0xFFC0C0C0);
+
+        // Your credits, always in the same corner, with the emerald that marks money.
+        MarketState market = MarketStateHolder.get();
+        UUID me = myId();
+        if (market != null && me != null) {
+            String credits = market.wallets().getBalance(me) + " credits";
+            int cw = this.textRenderer.getWidth(credits);
+            label(m, credits, right - 6 - cw, footerTop() + 5, 0xFFFF88);
+            drawIcon(m, new ItemStack(Items.EMERALD), right - 6 - cw - 18, footerTop() + 1, null);
+
+            // Your profit so far, beside the money it is measured in.
+            long pnl = market.realizedPnl(me);
+            String profit = "PnL " + MarketView.signed(pnl);
+            int px = right - 6 - cw - 18 - 10 - this.textRenderer.getWidth(profit);
+            label(m, profit, px, footerTop() + 5, pnlColour(pnl));
+            if (mouseX >= px && mouseX < right - cw - 24 && mouseY >= footerTop() && mouseY < panelOuterBottom()) {
+                hoverTip = "Your profit: what you have made by selling, after fees and after what"
+                        + " those goods cost you. History shows the rest.";
+            }
+        }
+        String note = footerNote();
+        if (!note.isEmpty()) label(m, trim(note, contentW / 2), listX + 6, footerTop() + 5, 0x909090);
+    }
+
+    private static int pnlColour(long v) {
+        return v > 0 ? STATE_GOOD : v < 0 ? STATE_BAD : 0x909090;
+    }
+
+    /** The footer's left side, where Browse has its search box instead. */
+    private String footerNote() {
+        MarketState market = MarketStateHolder.get();
+        UUID me = myId();
+        if (market == null) return "";
+        switch (activeScreen) {
+            case SCREEN_SELL: return "click something to sell it";
+            case SCREEN_ORDERS: {
+                int n = yourOrdersCached().size();
+                return n + (n == 1 ? " open order" : " open orders");
+            }
+            case SCREEN_HISTORY: {
+                int n = historyRows().size();
+                return n + (n == 1 ? " trade" : " trades") + (n >= HISTORY_LIMIT ? " (the latest)" : "");
+            }
+            case SCREEN_LEADERBOARD: {
+                int n = market.registeredUsers().size();
+                return n + (n == 1 ? " trader" : " traders");
+            }
+            default: return "";
+        }
+    }
+
+    private void renderMenu(DrawContext m, int mouseX, int mouseY) {
+        if (!menuOpen) return;
+        // Lifted above the screen by render, which pushes MODAL_Z around this call.
+        int[] r = menuRect();
+        m.fill(r[0], r[1], r[0] + r[2], r[1] + r[3], 0xF0080808);
+        m.fill(r[0], r[1], r[0] + r[2], r[1] + 1, PANEL_LINE);
+        m.fill(r[0], r[1] + r[3] - 1, r[0] + r[2], r[1] + r[3], PANEL_LINE);
+        m.fill(r[0], r[1], r[0] + 1, r[1] + r[3], PANEL_LINE);
+        m.fill(r[0] + r[2] - 1, r[1], r[0] + r[2], r[1] + r[3], PANEL_LINE);
+        for (int i = 0; i < MENU.length; i++) {
+            int y = menuEntryY(i);
+            if (MENU[i] < 0) {
+                m.fill(r[0] + 4, y + 2, r[0] + r[2] - 4, y + 3, PANEL_LINE);
+                continue;
+            }
+            boolean here = MENU[i] == menuScreen();
+            boolean hot = mouseX >= r[0] && mouseX < r[0] + r[2] && mouseY >= y && mouseY < y + MENU_ROW_H;
+            if (hot) m.fill(r[0] + 1, y, r[0] + r[2] - 1, y + MENU_ROW_H, 0x30FFFFFF);
+            label(m, SCREEN_NAMES[MENU[i]], r[0] + 8, y + 2, here ? ACCENT : hot ? 0xFFFFFF : 0xC0C0C0);
+        }
+    }
+
+    /** Clicks while the menu is open, or on its button. True when the click was the menu's. */
+    private boolean menuClicked(double mouseX, double mouseY) {
+        if (within(mouseX, mouseY, menuButtonRect())) {
+            menuOpen = !menuOpen;
+            return true;
+        }
+        if (!menuOpen) return false;
+        int[] r = menuRect();
+        for (int i = 0; i < MENU.length; i++) {
+            int y = menuEntryY(i);
+            if (MENU[i] >= 0 && mouseX >= r[0] && mouseX < r[0] + r[2] && mouseY >= y && mouseY < y + MENU_ROW_H) {
+                selectScreen(MENU[i]);
+                return true;
+            }
+        }
+        menuOpen = false;   // clicking away closes it, and does nothing else
+        return true;
     }
 
     /**
@@ -325,47 +543,48 @@ public class MarketScreen extends Screen {
         this.buttonsY = rowY + ROW_STEP;
         this.cancelY = rowY + ROW_STEP * 2;
 
-        // ─── TRADING ───
-        this.amountField = new TextFieldWidget(this.textRenderer,
-                rowX, rowY, halfWS, FIELD_HEIGHT, Text.literal("Amount"));
-        hint(this.amountField, "qty");
-        onScreen(SCREEN_TRADING, this.amountField);
+        // ─── BROWSE and the ITEM view ───
+        // Narrower than the setup screens' control column: the form is three short rows,
+        // and the book beside it is what needs the width.
+        this.formW = Math.max(160, Math.min(230, contentW * 2 / 5));
+        this.itemLeftW = contentW - formW - PAD * 2 - COL_GAP;
+        this.formX = listX + itemLeftW + COL_GAP + PAD;
 
-        // Built but deliberately NOT registered as a widget. It is now pure storage for
-        // the selection — every handler still reads the item from here, and the slot
-        // and picker write to it, so none of them had to change. Nothing types into it.
+        // Built but deliberately NOT registered as a widget. It is pure storage for the
+        // selection — every handler reads the item from here, and the rows, the picker and
+        // the carrying list write to it. Nothing types into it.
         this.itemField = new TextFieldWidget(this.textRenderer,
-                rowX + halfWS + PAD, rowY, controlsW - (halfWS + PAD) * 2, FIELD_HEIGHT, Text.literal("Item"));
+                formX, rowY, formW, FIELD_HEIGHT, Text.literal("Item"));
         this.itemField.setMaxLength(64);
         this.itemField.setText(savedItem());
 
-        this.itemButton = onScreen(SCREEN_TRADING,
-                ButtonWidget.builder(Text.literal("Choose item..."), b -> openPicker())
-                .dimensions(rowX + halfWS + PAD, rowY, controlsW - (halfWS + PAD) * 2, FIELD_HEIGHT).build());
+        // Placed in the footer every frame (see refreshMarketButtons), since the footer
+        // stays put when the alert band pushes everything else down.
+        this.searchField = new TextFieldWidget(this.textRenderer,
+                listX + 6, rowY, Math.min(150, contentW / 3), 14, Text.literal("Search"));
+        this.searchField.setMaxLength(40);
+        hint(this.searchField, "search");
+        this.searchField.setChangedListener(text -> {
+            this.searchField.setSuggestion(text.isEmpty() ? "search" : null);
+            scrollOffsets.put("browse", 0);
+        });
+        onScreen(SCREEN_BROWSE, this.searchField);
+
+        int fieldX = formX + FORM_LABEL_W;
+        int fieldW = formW - FORM_LABEL_W;
+        this.amountField = new TextFieldWidget(this.textRenderer,
+                fieldX, rowY + 18, fieldW, FIELD_HEIGHT, Text.literal("Amount"));
+        hint(this.amountField, "how many");
+        onScreen(SCREEN_ITEM, this.amountField);
 
         this.priceField = new TextFieldWidget(this.textRenderer,
-                rowX + controlsW - halfWS, rowY, halfWS, FIELD_HEIGHT, Text.literal("Price"));
-        hint(this.priceField, "price");
-        onScreen(SCREEN_TRADING, this.priceField);
+                fieldX, rowY + 18 + ROW_STEP - 2, fieldW, FIELD_HEIGHT, Text.literal("Price"));
+        hint(this.priceField, "credits each");
+        onScreen(SCREEN_ITEM, this.priceField);
 
-        onScreen(SCREEN_TRADING, ButtonWidget.builder(Text.literal("Buy"), b -> onBuy())
-                .dimensions(rowX, buttonsY, halfW, FIELD_HEIGHT).build());
-        onScreen(SCREEN_TRADING, ButtonWidget.builder(Text.literal("Sell"), b -> onSell())
-                .dimensions(rowX + halfW + PAD, buttonsY, halfW, FIELD_HEIGHT).build());
-
-        // Withdraw takes its own row. Sharing one with the cancel controls left three
-        // things competing for a width that only comfortably fits two, and the order-id
-        // box was the one that lost.
-        onScreen(SCREEN_TRADING, ButtonWidget.builder(Text.literal("Withdraw"), b -> onWithdraw())
-                .dimensions(rowX, cancelY, controlsW, FIELD_HEIGHT).build());
-
-        int cancelRowY = cancelY + ROW_STEP;
-        this.cancelField = new TextFieldWidget(this.textRenderer,
-                rowX, cancelRowY, halfW, FIELD_HEIGHT, Text.literal("Order ID"));
-        hint(this.cancelField, "order id");
-        onScreen(SCREEN_TRADING, this.cancelField);
-        onScreen(SCREEN_TRADING, ButtonWidget.builder(Text.literal("Cancel"), b -> onCancel())
-                .dimensions(rowX + halfW + PAD, cancelRowY, halfW, FIELD_HEIGHT).build());
+        this.placeButton = onScreen(SCREEN_ITEM,
+                ButtonWidget.builder(Text.literal("Place buy order"), b -> onPlace())
+                .dimensions(formX, rowY + 98, formW, FIELD_HEIGHT).build());
 
         // ─── NETWORK ───
         this.hostField = new TextFieldWidget(this.textRenderer,
@@ -719,8 +938,42 @@ public class MarketScreen extends Screen {
             // generic "Connect failed" throws away the only useful part.
             if (MarketStateHolder.isConnected()) {
                 status = "Connected to " + finalHost + ":" + finalPort;
+            } else if (MarketStateHolder.lastRefusedForDifferentMarket()) {
+                // Shown on the render thread, which owns the overlays.
+                offerNewSlot = new String[]{finalHost, String.valueOf(finalPort), finalHost + ":" + finalPort};
             }
         }, "market-connect").start();
+    }
+
+    /** Set from the connect thread when a typed address turned out to serve another market: {host, port, label}. */
+    private volatile String[] offerNewSlot;
+
+    /**
+     * Offers to join a market in a new, empty slot of this world, keeping the market it is
+     * using now. The empty slot is "no market": nothing to create and throw away first.
+     */
+    private void askToJoinInNewSlot(String host, int port, String label) {
+        MarketState mine = MarketStateHolder.get();
+        String current = mine == null || mine.marketName() == null ? "this world's market" : "'" + mine.marketName() + "'";
+        showConfirm("Join " + label + "?",
+                "It is a different market from " + current + ", which this world is using now."
+                        + " Joining puts it in a new market slot of its own; " + current + " stays"
+                        + " exactly as it is, and you can switch back from Setup > Market.",
+                "Join", () -> {
+                    if (!MarketStateHolder.addMarketSlot()) return;
+                    MinecraftClient mc = MinecraftClient.getInstance();
+                    if (mc.player == null) return;
+                    try {
+                        MarketStateHolder.setMyHostPort(Integer.parseInt(hostPortField.getText().trim()));
+                    } catch (NumberFormatException ignored) { }
+                    UUID me = MinecraftIds.userIdOf(mc.player);
+                    String myName = mc.getSession().getUsername();
+                    status = "Joining " + label + " in a new market slot...";
+                    new Thread(() -> {
+                        MarketStateHolder.connect(host, port, me, myName);
+                        if (MarketStateHolder.isConnected()) status = "Connected to " + label;
+                    }, "market-connect").start();
+                });
     }
 
     private void onDisconnect() {
@@ -771,14 +1024,17 @@ public class MarketScreen extends Screen {
     private void refreshMarketButtons() {
         // The picker button says what is currently selected, so the selection is legible
         // without reading it back off the icon strip.
-        if (itemButton != null) {
-            Item selected = MinecraftIds.itemFromName(itemField.getText().trim());
-            // Trimmed to the button's own width rather than a fixed guess, since that
-            // width now varies with the window.
-            itemButton.setMessage(Text.literal(selected == Items.AIR
-                    ? "Choose item..."
-                    : this.textRenderer.trimToWidth(
-                    selected.getName().getString(), itemButton.getWidth() - 8)));
+        // Pinned to the footer, which the alert band does not move.
+        if (searchField != null) searchField.setY(footerTop() + 2);
+        if (placeButton != null) placeButton.setY(footerTop() - 6 - FIELD_HEIGHT);
+
+        if (placeButton != null && activeScreen == SCREEN_ITEM) {
+            placeButton.setMessage(Text.literal(itemMode == MODE_SELL ? "List for sale"
+                    : itemMode == MODE_WITHDRAW ? "Withdraw to inventory" : "Place buy order"));
+            // Withdrawing has no price. Hidden rather than greyed, so the form says only
+            // what the action needs.
+            priceField.visible = itemMode != MODE_WITHDRAW;
+            priceField.active = priceField.visible;
         }
 
         boolean has = MarketStateHolder.hasMarket();
@@ -1038,7 +1294,7 @@ public class MarketScreen extends Screen {
             MarketStateHolder.resetLog();
             MarketStateHolder.connect(host, port, me, myName);
             status = MarketStateHolder.isConnected()
-                    ? "Migrated — your balance is here. Old orders listed below to re-place."
+                    ? "Migrated — your balance is here. Your old orders are in Your orders to place again."
                     : "Migrated, but could not connect — press Connect";
         }, "market-migrate").start();
     }
@@ -1168,268 +1424,6 @@ public class MarketScreen extends Screen {
         return panelTop();
     }
 
-    // ─────────── INFO ───────────
-
-    /**
-     * The dashboard.
-     *
-     * Hosts is live because discovery already polls for it; the other three are drawn
-     * as empty panels rather than left out, so the layout is real and adding a panel
-     * later is filling one in rather than finding room for it.
-     */
-    /**
-     * Three widget slots around one fixture.
-     *
-     * Hosts is permanent and central because it is the only thing here that is always
-     * worth knowing — who is serving, and whether anyone is. The three slots either
-     * side are deliberately empty for now; what belongs in them is a question best
-     * answered by using the thing, not by guessing up front.
-     */
-
-
-
-    //change too render market info
-    private void renderInfo(DrawContext m) {
-        //int gap = COL_GAP;
-
-        int gap = 0;
-        // Same frame line the other screens use, so switching between them does not
-        // shift everything by a few pixels — via the helpers rather than repeating
-        // their arithmetic, which is what left Info's titles under the alert band.
-        int top = frameTop();
-        int height = frameH();
-        int total = contentW;
-
-        int sideW = (total - gap * 2) / 3;
-        int midW = total - gap * 2 - sideW * 2;
-        int midX = listX + sideW + gap;
-        int rightX = midX + midW + gap;
-
-        panel(m, listX, top, sideW, height, "Most traded");
-        renderMostTraded(m, listX + 8, top + 18, sideW - 16, height - 24);
-
-
-
-        //old code im keeping for switch backs
-        /*int hostsH = height / 2;
-        panel(m, midX, top, midW, hostsH, "Hosts");
-        renderHostsPanel(m, midX + 8, top + 18, midW - 16, hostsH - 24);
-
-        int priceY = top + hostsH + gap;
-        int priceH = height - hostsH - gap;
-        panel(m, midX, priceY, midW, priceH, "Price");
-        renderHomePrice(m, midX + 8, priceY + 18, midW - 16, priceH - 24);
-
-        panel(m, rightX, top, sideW, height, "Activity");
-        renderActivity(m, rightX + 8, top + 18, sideW - 16, height - 24);*/
-
-        // Activity moves into the full height middle column.
-        panel(m, midX, top, midW, height, "Activity");
-        renderActivity(m, midX + 8, top + 18, midW - 16, height - 24);
-
-        // Hosts and Price move into the right column.
-        int hostsH = height / 2;
-        panel(m, rightX, top, sideW, hostsH, "Hosts");
-        renderHostsPanel(m, rightX + 8, top + 18, sideW - 16, hostsH - 24);
-
-        int priceY = top + hostsH + gap;
-        int priceH = height - hostsH - gap;
-        panel(m, rightX, priceY, sideW, priceH, "Price");
-        renderInfoPrice(m, rightX + 8, priceY + 18, sideW - 16, priceH - 24);
-    }
-
-    /** An item that has traded, with how much of it and what it last went for. */
-    private static final class TradedItem {
-        final String itemId;
-        final long volume;
-        final long lastPrice;
-
-        TradedItem(String itemId, long volume, long lastPrice) {
-            this.itemId = itemId;
-            this.volume = volume;
-            this.lastPrice = lastPrice;
-        }
-    }
-
-    /**
-     * What the market is busiest with, by units traded.
-     *
-     * Ranked by volume rather than by number of trades: one player moving a stack is
-     * more of a market than six people swapping single items, and volume is the figure
-     * a price means anything next to.
-     */
-    private List<TradedItem> mostTraded(MarketState market, int limit) {
-        if (market == null) return Collections.emptyList();
-        TradeHistory trades = market.trades();
-        List<TradedItem> out = new ArrayList<>();
-        for (String id : trades.tradedItems()) {
-            out.add(new TradedItem(id, trades.volumeFor(id), trades.lastPrice(id)));
-        }
-        out.sort((a, b) -> Long.compare(b.volume, a.volume));
-        return out.size() > limit ? out.subList(0, limit) : out;
-    }
-
-    private void renderMostTraded(DrawContext m, int x, int y, int w, int h) {
-        MarketState market = MarketStateHolder.get();
-        List<TradedItem> top = mostTraded(market, Math.max(1, h / INV_ROW_H));
-
-        if (top.isEmpty()) {
-            label(m, "nothing has traded yet", x, y, 0x808080);
-            return;
-        }
-
-        int row = y;
-        for (TradedItem t : top) {
-            if (row + INV_ROW_H > y + h) break;
-            Item item = MinecraftIds.idToItem(t.itemId);
-            drawItemCell(m, new ItemStack(item), x, row, null, false);
-
-            String name = item == Items.AIR ? t.itemId : item.getName().getString();
-            label(m, trim(name, w - 66), x + 22, row + 1, 0xFFFFFF);
-            label(m, t.volume + " traded", x + 22, row + 11, 0x808080);
-
-            if (t.lastPrice >= 0) {
-                String price = String.valueOf(t.lastPrice);
-                label(m, price, x + w - this.textRenderer.getWidth(price), row + 6, 0xFFFF88);
-            }
-            row += INV_ROW_H;
-        }
-    }
-
-    /**
-     * The chart for whatever item is selected, falling back to the busiest one.
-     *
-     * The fallback matters more than it looks: on info, nothing has been picked yet the
-     * first time anyone arrives, and an empty panel on the landing screen says the
-     * feature is broken rather than that the player has not chosen anything.
-     */
-    private void renderInfoPrice(DrawContext m, int x, int y, int w, int h) {
-        MarketState market = MarketStateHolder.get();
-        if (market == null) {
-            label(m, "no market", x, y, 0x808080);
-            return;
-        }
-
-        Item chosen = MinecraftIds.itemFromName(itemField.getText().trim());
-        String itemId = chosen != Items.AIR ? MinecraftIds.itemToId(chosen) : null;
-        boolean fellBack = false;
-        if (itemId == null || market.trades().countFor(itemId) < 2) {
-            List<TradedItem> busiest = mostTraded(market, 1);
-            if (!busiest.isEmpty()) {
-                itemId = busiest.get(0).itemId;
-                fellBack = chosen != Items.AIR;
-            }
-        }
-
-        if (itemId == null) {
-            label(m, "nothing has traded yet", x, y, 0x808080);
-            return;
-        }
-
-        List<Trade> recent = market.trades().recentFor(itemId, 60);
-        Item item = MinecraftIds.idToItem(itemId);
-        String name = item == Items.AIR ? itemId : item.getName().getString();
-        label(m, trim(name, w) + (fellBack ? " (busiest)" : ""), x, y, 0x88CCFF);
-
-        int chartY = y + 12;
-        int chartH = h - 24;
-        if (recent.size() < 2 || chartH < 8) {
-            label(m, "not enough trades yet", x, chartY, 0x808080);
-            return;
-        }
-
-        long min = Long.MAX_VALUE, max = Long.MIN_VALUE;
-        for (Trade t : recent) {
-            min = Math.min(min, t.price);
-            max = Math.max(max, t.price);
-        }
-        long span = Math.max(1, max - min);
-
-        // Capped like the Trading view's chart, or three trades draw three bars the
-        // width of the panel and it reads as a rendering fault rather than sparse data.
-        int barW = Math.max(2, Math.min(12, w / recent.size()));
-        m.fill(x, chartY, x + w, chartY + chartH, 0x40000000);
-        for (int i = 0; i < recent.size(); i++) {
-            int barH = (int) ((recent.get(i).price - min) * (chartH - 2) / span) + 1;
-            int bx = x + i * barW;
-            if (bx + barW > x + w) break;
-            m.fill(bx, chartY + chartH - barH, bx + barW - 1, chartY + chartH, 0xFF55FFFF);
-        }
-
-        label(m, "low " + min + "  high " + max + "  last "
-                + recent.get(recent.size() - 1).price, x, chartY + chartH + 2, 0x909090);
-    }
-
-    /** The tail of the log in words. Newest first — the top of a feed is where you look. */
-    private void renderActivity(DrawContext m, int x, int y, int w, int h) {
-        List<SequencedEvent> recent = MarketStateHolder.recentActivity();
-        if (recent.isEmpty()) {
-            label(m, "nothing yet", x, y, 0x808080);
-            return;
-        }
-
-        int row = y;
-        for (int i = recent.size() - 1; i >= 0; i--) {
-            if (row + 10 > y + h) break;
-            label(m, trim(describeEvent(recent.get(i)), w), x, row, 0x9090A0);
-            row += 10;
-        }
-    }
-
-    /** One line for an event, in the terms a player thinks in rather than class names. */
-    private String describeEvent(SequencedEvent se) {
-        Event e = se.event;
-        if (e instanceof Event.PlaceOrder) {
-            Event.PlaceOrder p = (Event.PlaceOrder) e;
-            return (p.isBid ? "buy " : "sell ") + p.volume + " "
-                    + shortName(p.itemId) + " @ " + p.price;
-        }
-        if (e instanceof Event.DepositAndList) {
-            Event.DepositAndList d = (Event.DepositAndList) e;
-            return "listed " + d.quantity + " " + shortName(d.itemId) + " @ " + d.price;
-        }
-        if (e instanceof Event.Deposit) {
-            Event.Deposit d = (Event.Deposit) e;
-            return "deposited " + d.quantity + " " + shortName(d.itemId);
-        }
-        if (e instanceof Event.Withdraw) {
-            Event.Withdraw wd = (Event.Withdraw) e;
-            return "withdrew " + wd.quantity + " " + shortName(wd.itemId);
-        }
-        String bot = describeBotEvent(e);
-        if (bot != null) return bot;
-        if (e instanceof Event.CancelOrder) return "cancelled an order";
-        if (e instanceof Event.KeyRegistered) return "someone joined";
-        if (e instanceof Event.MarketCreated) return "market created";
-        return e.getClass().getSimpleName();
-    }
-
-    /** A bot's events in the feed, under the name the market gives it. Null for anything else. */
-    private String describeBotEvent(Event e) {
-        if (e instanceof Event.BotsEnabled) return "bots switched on";
-        MarketState market = MarketStateHolder.get();
-        if (!market.isBot(e.userId)) return null;
-        String name = market.botName(e.userId);
-        if (e instanceof Event.KeyRegistered) return name + " registered";
-        if (e instanceof Event.BotSpawned) return name + " joined";
-        if (e instanceof Event.BotPaused) return name + " paused";
-        if (e instanceof Event.BotResumed) return name + " resumed";
-        if (e instanceof Event.BotProduced) {
-            Event.BotProduced bp = (Event.BotProduced) e;
-            return name + " produced " + bp.amount + " " + shortName(bp.itemId);
-        }
-        if (e instanceof Event.BotActions) {
-            int placed = 0, cancelled = 0;
-            for (Event.BotAction a : ((Event.BotActions) e).actions) {
-                if (BotRules.ACTION_PLACE.equals(a.kind)) placed++;
-                else cancelled++;
-            }
-            String out = name + " placed " + placed + (placed == 1 ? " order" : " orders");
-            return cancelled == 0 ? out : out + ", cancelled " + cancelled;
-        }
-        return null;
-    }
-
     private String shortName(String itemId) {
         Item item = MinecraftIds.idToItem(itemId);
         return item == Items.AIR ? itemId : item.getName().getString();
@@ -1470,30 +1464,6 @@ public class MarketScreen extends Screen {
         label(m, title, x + 6, y + 5, 0xFFAA00);
     }
 
-    private void renderHostsPanel(DrawContext m, int x, int y, int w, int h) {
-        if (polling && discovered.isEmpty()) {
-            label(m, "searching...", x, y, 0x808080);
-            return;
-        }
-        if (discovered.isEmpty()) {
-            label(m, "nobody hosting" + otherVersionNote(), x, y, 0x808080);
-            return;
-        }
-        int row = y;
-        for (PeerPoll.HostInfo host : discovered) {
-            if (row + 10 > y + h) break;
-            // A player-chosen name in a third-width panel; nothing bounds its length
-            // but this.
-            String name = host.reply.hostName == null ? "?" : host.reply.hostName;
-            label(m, trim(name, w), x, row, 0x88CCFF);
-            row += 10;
-            if (row + 10 > y + h) break;
-            label(m, "  " + host.reply.lastSeq + " events, "
-                    + host.reply.clientCount + " online", x, row, 0x808080);
-            row += 12;
-        }
-    }
-
     private void renderSettingsPlaceholder(DrawContext m) {
         label(m, "Notifications", listX + 4, panelTop(), 0xFFAA00);
 
@@ -1507,9 +1477,28 @@ public class MarketScreen extends Screen {
         }
 
         y += 8;
-        label(m, "Saved for " + MinecraftClient.getInstance().getSession().getUsername(),
+        label(m, trim("Saved for " + MinecraftClient.getInstance().getSession().getUsername(), listW - 8),
                 listX + 4, y, 0x707070);
-        label(m, "The hosting port lives on Network.", listX + 4, y + 10, 0x707070);
+        label(m, trim("The hosting port lives on Network.", listW - 8), listX + 4, y + 10, 0x707070);
+
+        // Your identity is a file, and it doesn't follow you to a new computer. Moving
+        // machines without it makes you a stranger to every market you were part of —
+        // same username, same UUID, unrecognised key. Cheaper to say so than to debug.
+        // It used to run along the foot of every screen; it belongs with your settings.
+        // Under the controls on the right, which have room to spare; the left column is
+        // full with the notification text.
+        Path identity = MarketStateHolder.identityPath();
+        if (identity != null) {
+            int iy = rowY + ROW_STEP * 3 + 4 + alertBandH();
+            if (iy + 9 <= panelBottom()) label(m, "Your identity", rowX, iy, 0xFFAA00);
+            for (OrderedText line : this.textRenderer.wrapLines(Text.literal("config/"
+                    + identity.getFileName() + " is who you are in every market. Copy it to move"
+                    + " computers, and never share it."), controlsW)) {
+                iy += 10;
+                if (iy + 9 > panelBottom()) break;
+                Draw.text(m, this.textRenderer, line, rowX, iy, 0xC0C0C0);
+            }
+        }
     }
 
     // ─────────── the Market screen ───────────
@@ -2263,8 +2252,8 @@ public class MarketScreen extends Screen {
                 // so it says what is live and where to go next, and keeps export as the
                 // afterthought it is.
                 body = "Trading is live, and anything you buy or sell settles for"
-                        + " everybody at once. Your balance and resting orders are on the"
-                        + " Trading tab. You can also export a copy here, for somebody"
+                        + " everybody at once. What is on offer is under Browse, and your"
+                        + " open orders under Your orders. You can also export a copy here, for somebody"
                         + " who cannot be online while anyone is hosting.";
                 break;
             default:
@@ -2623,198 +2612,9 @@ public class MarketScreen extends Screen {
         return String.format("%.2f%%", bps / 100.0).replace(".00", "");
     }
 
-    /**
-     * Orders carried over from a migrated market, waiting to be re-placed.
-     *
-     * Shown with the destination's current price beside each one. The prices you set in
-     * a dead economy mean nothing here, and the difference is usually invisible until
-     * after you've clicked — so it goes on the row.
-     */
-    /**
-     * The carried-over orders, in a box of their own.
-     *
-     * Previously drawn as bare labels at the left panel's first row, which is where the
-     * active tab had already put its own content — on the Market tab, the one you are
-     * necessarily looking at right after a migration, it landed directly on top of the
-     * guidance text. The rows also ran their full untrimmed width, so a long item name
-     * plus a "best bid here" suffix spilled clear across the middle and right columns.
-     *
-     * A framed box fixes both: it owns its area rather than sharing it, and its width
-     * is what the rows are trimmed to. Icons because an item is quicker to recognise
-     * by its sprite than by the tail of a registry id.
-     */
-    private static final int REPLACE_ROW_H = 20;
-
-    /**
-     * The third column when there is one, the left panel when there is not.
-     *
-     * Deliberately not a function of the active tab. It used to fall back to the left
-     * panel on Trading, on the reasoning that Trading is the one screen whose third
-     * column is already occupied. What that produced was a box that jumped across the
-     * screen on every tab change while it existed, which reads as a rendering fault
-     * rather than as a considered layout — and the list outlives any one tab, so it is
-     * the thing that has to stay still.
-     *
-     * It draws after every panel, so on Trading it covers the inventory rather than
-     * fighting it. That is the right one to cover: re-placing an order needs its price
-     * and volume, both of which are on the row itself.
-     *
-     * Still switches on width, because a window too narrow for a third column has no
-     * third column to sit in — but that is a resize, where things are expected to move.
-     */
-    private boolean replaceInSideColumn() {
-        return invX >= 0;
-    }
-
-    /**
-     * Whether the re-place box is sitting on the left panel and hiding what is there.
-     *
-     * The one place that decides it, because rendering and hit-testing have to agree.
-     * They did not: discovery stopped drawing whenever any orders were waiting, while
-     * its click handler went on testing rows regardless, so the host list vanished and
-     * stayed clickable. Only ever true on a window too narrow for a third column.
-     */
-    private boolean replaceCoversLeftPanel() {
-        return !MarketStateHolder.pendingReplace().isEmpty() && !replaceInSideColumn();
-    }
-
-    private int replaceBoxX() { return replaceInSideColumn() ? invX : listX; }
-
-    private int replaceBoxW() { return replaceInSideColumn() ? invW : listW; }
-
-    /**
-     * Flush with the other columns, not inset and sized to its contents.
-     *
-     * It sat at panelTop with a height derived from the row count, which made it a
-     * short box floating inside the frame line the panels beside it share. Matching
-     * frameTop/frameH is what makes it read as the third column rather than as
-     * something dropped on top of one.
-     */
-    private int replaceBoxTop() { return frameTop(); }
-
-    private int replaceBoxH() { return frameH(); }
-
-    /** The first row's top, below the header that doubles as dismiss. */
-    private int replaceListTop() {
-        return replaceBoxTop() + 8 + DISCOVERY_ROW_HEIGHT + 4;
-    }
-
-    /** Where rows stop being drawn — the panel's own bottom, not the frame's. */
-    private int replaceListBottom() {
-        return Math.min(replaceBoxTop() + replaceBoxH() - 4, panelBottom());
-    }
-
-    /**
-     * Where row i sits, scroll included.
-     *
-     * The scroll is subtracted here rather than at each caller because the render and
-     * the hit test both come through this method, and that is the only reason they have
-     * never disagreed about where a row is. Nine orders after a reset was the first time
-     * the list outgrew its box: rows past the bottom were drawn nowhere and reachable by
-     * nothing, and the list is the only record of what to put back.
-     *
-     * Fourth time in this file — the Market column, the market switcher, the reset
-     * overlay, and now this. All four stacked content downwards with no bound and lost
-     * the far end of it. The session log's note after the second one said the next thing
-     * that stacks without a scroll would be next; it was.
-     */
-    private int replaceRowY(int index) {
-        return replaceListTop() + index * REPLACE_ROW_H - scrollOf("replace");
-    }
-
-    /**
-     * Whether a row at this y is on screen, asked by the drawing and the hit test both.
-     *
-     * A row that cannot be seen but still re-places an order when clicked is the defect
-     * this file keeps producing, and scrolling creates it at the top as well as the
-     * bottom — the earlier version only ever ran out of room downwards.
-     */
-    private boolean replaceRowVisible(int y) {
-        return y >= replaceListTop() && y + REPLACE_ROW_H <= replaceListBottom();
-    }
-
-    private void renderReplaceList(DrawContext matrices, int mouseX, int mouseY) {
-        List<MarketStateHolder.OldOrder> old = MarketStateHolder.pendingReplace();
-        if (old.isEmpty()) return;
-
-        int boxX = replaceBoxX();
-        int boxW = replaceBoxW();
-        vanillaPanel(matrices, boxX, replaceBoxTop(), boxW, replaceBoxH());
-
-        int textX = boxX + 26;
-        int textW = boxW - 32;
-
-        // The title row doubles as dismiss, so it carries a close mark rather than
-        // spelling that out — the column is too narrow for the sentence it replaced.
-        // Narrow enough that even the short form is cut, hence the hover: "click to
-        // re-…" does not tell you what clicking does.
-        String title = "Old orders — click to re-place, or this row to dismiss";
-        String titleShown = trim("Old orders — click to re-place", boxW - 24);
-        label(matrices, titleShown, boxX + 6, replaceBoxTop() + 8, 0xFFDD66);
-        label(matrices, "x", boxX + boxW - 12, replaceBoxTop() + 8, 0xFFDD66);
-        tipIfHovered(title, titleShown, boxX, replaceBoxTop() + 4, boxW,
-                DISCOVERY_ROW_HEIGHT + 4, mouseX, mouseY);
-
-        MarketState s = MarketStateHolder.get();
-        List<MarketOldRow> rows = replaceRows();
-
-        // The wheel is worth catching anywhere over the box; the rows are clipped to
-        // the narrower band between the header and the panel bottom. Those are two
-        // rectangles, which is the distinction noteScrollable was given a viewH for
-        // after measuring the Market column against the wrong one left its last row
-        // unreachable at every offset.
-        noteScrollable("replace", boxX, replaceBoxTop(), boxW, replaceBoxH(),
-                replaceListBottom() - replaceListTop(),
-                rows.size() * REPLACE_ROW_H, mouseX, mouseY);
-
-        for (int i = 0; i < rows.size(); i++) {
-            MarketStateHolder.OldOrder o = rows.get(i).order;
-            int y = replaceRowY(i);
-            if (!replaceRowVisible(y)) continue;
-
-            drawIcon(matrices, new ItemStack(MinecraftIds.idToItem(o.itemId)),
-                    boxX + 6, y, "");
-
-            // Trimmed with the rest on hover, like the host rows: an item name is as
-            // long as its name and the column is as wide as the column, and re-placing
-            // the wrong order because the name was cut is not a recoverable mistake.
-            String full = (o.isBid ? "Buy " : "Sell ") + o.volume + " "
-                    + shortItem(o.itemId) + " @ " + o.price;
-            String shown = trim(full, textW);
-            label(matrices, shown, textX, y + 1, 0x88CCFF);
-            tipIfHovered(full, shown, boxX, y, boxW, REPLACE_ROW_H, mouseX, mouseY);
-
-            // What the same order would meet here, so re-placing at the old price is a
-            // decision rather than a guess.
-            // peekBook, not bookFor. bookFor creates the book it fails to find, so
-            // asking it from render quietly filled the map with empty books for items
-            // nobody has traded — and did it from the render thread, writing to a map
-            // the applier thread was also writing to. Its own javadoc says as much.
-            String here = "";
-            OrderBook peeked = s == null ? null : s.peekBook(o.itemId);
-            if (peeked != null) {
-                List<Order> book = o.isBid
-                        ? peeked.restingAsks()
-                        : peeked.restingBids();
-                if (!book.isEmpty()) {
-                    here = (o.isBid ? "best ask " : "best bid ") + book.get(0).value();
-                }
-            }
-            if (!here.isEmpty()) {
-                label(matrices, trim(here, textW), textX, y + 11, 0x808080);
-            }
-        }
-    }
-
     private static String shortItem(String itemId) {
         int colon = itemId.indexOf(':');
         return colon < 0 ? itemId : itemId.substring(colon + 1);
-    }
-
-    /** Wrapper so the render and hit-test iterate the same thing. */
-    private static class MarketOldRow {
-        final MarketStateHolder.OldOrder order;
-        MarketOldRow(MarketStateHolder.OldOrder order) { this.order = order; }
     }
 
     /**
@@ -2842,14 +2642,6 @@ public class MarketScreen extends Screen {
                 "Re-placing...");
     }
 
-    private List<MarketOldRow> replaceRows() {
-        List<MarketOldRow> rows = new ArrayList<>();
-        for (MarketStateHolder.OldOrder o : MarketStateHolder.pendingReplace()) {
-            rows.add(new MarketOldRow(o));
-        }
-        return rows;
-    }
-
     /**
      * The y is taken from discoveryStartY rather than passed in, so it cannot drift
      * from the hit test that reads the same function — which is exactly how clicking a
@@ -2863,8 +2655,6 @@ public class MarketScreen extends Screen {
         // panel — but it sits in the third column wherever there is one, so the host
         // list was being hidden by something that was not covering it. The clicks kept
         // landing, which made the rows invisible and still joinable.
-        if (replaceCoversLeftPanel()) return;
-
         int x = px;
         int y = py;
 
@@ -2960,64 +2750,28 @@ public class MarketScreen extends Screen {
             return button != 0 || pickerClicked(mouseX, mouseY);
         }
 
-        // The nav sits above everything else, so it gets first refusal on a click.
-        if (button == 0 && tabsClicked(mouseX, mouseY)) return true;
+        // The menu sits above everything else, so it gets first refusal on a click.
+        if (button == 0 && menuClicked(mouseX, mouseY)) return true;
 
         // Drawn over the panels, so it claims clicks ahead of them too.
         if (button == 0 && alertClicked(mouseX, mouseY)) return true;
 
-        if (button == 0 && leftSwitcherClicked(mouseX, mouseY)) return true;
-
-        // Picking from what you're carrying is the fastest way to choose what to sell,
-        // and it never involves knowing an item's registry id.
-        if (button == 0) {
-            InventoryBridge.Holding held = inventoryRowAt(mouseX, mouseY);
-            if (held != null) {
-                selectItem(held.item);
-                return true;
-            }
-            String row = marketRowAt(mouseX, mouseY);
-            if (row != null) {
-                selectItem(MinecraftIds.idToItem(row));
-                return true;
-            }
-        }
-
         // Any click acknowledges the recovery note — it describes something already
         // done, so it does not need to keep occupying a line.
-        MarketStateHolder.clearRecoveryNote();
+        if (button == 0) MarketStateHolder.clearRecoveryNote();
 
-        // The re-place list occupies the discovery area while it exists, so it claims
-        // clicks there first.
-        if (button == 0 && !MarketStateHolder.pendingReplace().isEmpty()) {
-            int boxTop = replaceBoxTop();
-            int boxBottom = boxTop + replaceBoxH();
-            boolean inBox = mouseX >= replaceBoxX()
-                    && mouseX < replaceBoxX() + replaceBoxW()
-                    && mouseY >= boxTop && mouseY < boxBottom;
-
-            // Header doubles as dismiss — the list is a convenience, not an obligation.
-            if (inBox && mouseY < boxTop + 8 + DISCOVERY_ROW_HEIGHT) {
-                MarketStateHolder.clearPendingReplace();
-                status = "Dismissed — your balance is unaffected";
+        if (button == 0) {
+            // Picking from what you're carrying is the fastest way to choose what to sell,
+            // and it never involves knowing an item's registry id.
+            InventoryBridge.Holding held = sellRowAt(mouseX, mouseY);
+            if (held != null) {
+                openItem(held.item, MODE_SELL);
                 return true;
             }
-
-            List<MarketOldRow> rows = replaceRows();
-            for (int i = 0; i < rows.size(); i++) {
-                int y = replaceRowY(i);
-                if (!replaceRowVisible(y)) continue;
-                if (inBox && mouseY >= y && mouseY < y + REPLACE_ROW_H) {
-                    replaceOrder(rows.get(i).order);
-                    return true;
-                }
-            }
-
-            // Swallow only clicks that actually landed on the box. This used to
-            // return unconditionally, which meant that while any orders were waiting
-            // to be re-placed — i.e. immediately after every migration — no button or
-            // text field anywhere on the screen could be clicked at all.
-            if (inBox) return true;
+            if (browseClicked(mouseX, mouseY)) return true;
+            if (itemViewClicked(mouseX, mouseY)) return true;
+            if (ordersClicked(mouseX, mouseY)) return true;
+            if (historyClicked(mouseX, mouseY)) return true;
         }
 
         // Before the host list, and guarded to the Market tab: the two lists both live
@@ -3027,8 +2781,7 @@ public class MarketScreen extends Screen {
         // Only where the host list is actually drawn — same condition renderDiscovery
         // uses, including the re-place box covering it. Hit-testing a row nobody can
         // see joins a host by accident, which is what happened here.
-        if (button == 0 && !polling && activeScreen == SCREEN_NETWORK
-                && !replaceCoversLeftPanel()) {
+        if (button == 0 && !polling && activeScreen == SCREEN_NETWORK) {
             MinecraftClient mc = MinecraftClient.getInstance();
             String myUuid = mc.player != null
                     ? MinecraftIds.userIdOf(mc.player).toString() : null;
@@ -3053,6 +2806,17 @@ public class MarketScreen extends Screen {
     private void joinHost(PeerPoll.HostInfo h) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
+
+        // Joining a host that serves another market than the one this world is using
+        // would be refused. The way in that costs nothing is a new, empty market slot:
+        // offered here, rather than left for the refusal message to explain afterwards.
+        MarketState mine = MarketStateHolder.get();
+        if (mine != null && mine.marketId() != null && h.reply.marketId != null
+                && !mine.marketId().toString().equals(h.reply.marketId)) {
+            askToJoinInNewSlot(h.peer.address, h.peer.port,
+                    h.reply.marketName != null ? "'" + h.reply.marketName + "'" : h.reply.hostName);
+            return;
+        }
 
         try {
             MarketStateHolder.setMyHostPort(Integer.parseInt(hostPortField.getText().trim()));
@@ -3219,6 +2983,7 @@ public class MarketScreen extends Screen {
         w.timestamp = System.currentTimeMillis();
 
         MarketStateHolder.Submission s = MarketStateHolder.submit(w);
+        clearAmountIfSent(s);
         if (s.pending) {
             status = "Withdraw sent...";
         } else if (s.accepted) {
@@ -3228,44 +2993,42 @@ public class MarketScreen extends Screen {
         }
     }
 
-    private void onCancel() {
+    /**
+     * Cancels one of your orders, picked from its row rather than typed in by number.
+     *
+     * The old form wanted an order id and the item it belonged to, so cancelling meant
+     * reading a number off the book and copying it across. The row already knows both.
+     */
+    private void cancelOrder(Order o) {
         if (!requireConnected()) return;
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
 
-        long orderId;
-        try {
-            orderId = Long.parseLong(cancelField.getText().trim().replace("#", ""));
-        } catch (NumberFormatException e) {
-            status = "Order ID must be a number";
-            return;
-        }
-
-        Item item = MinecraftIds.itemFromName(itemField.getText().trim());
-        if (item == Items.AIR) { status = "Unknown item"; return; }
-
-        // The event needs the side; find the order to work out which book it's in.
-        // peekBook: an item with no book has no order to cancel, and creating one to
-        // discover that writes to the market from a keypress.
-        String itemId = MinecraftIds.itemToId(item);
-        OrderBook book = MarketStateHolder.get().peekBook(itemId);
-        if (book == null) { status = "No such order in this item's book"; return; }
-        Order o = book.find(orderId, true);
-        boolean isBid = o != null;
-        if (o == null) o = book.find(orderId, false);
-        if (o == null) { status = "No such order in this item's book"; return; }
-
         Event.CancelOrder c = new Event.CancelOrder();
         c.userId = MinecraftIds.userIdOf(mc.player);
-        c.itemId = itemId;
-        c.orderId = orderId;
-        c.isBid = isBid;
+        c.itemId = o.itemID();
+        c.orderId = o.orderId();
+        c.isBid = o.isBid();
         c.timestamp = System.currentTimeMillis();
 
-        report(MarketStateHolder.submit(c), "Cancelled #" + orderId, "Cancel sent...");
+        report(MarketStateHolder.submit(c),
+                "Cancelled " + (o.isBid() ? "buy" : "sell") + " of " + o.volume() + " "
+                        + shortName(o.itemID()) + " at " + o.value(),
+                "Cancel sent...");
+    }
+
+    /**
+     * After an order or a withdrawal is sent, the amount goes. Left in the box, the form went
+     * on judging it against the balance it had just changed: withdraw everything and it said
+     * "That is more than you have there" in red, sell everything you carry and it said "You
+     * are carrying 0". Neither was wrong about the numbers; both read as a failure.
+     */
+    private void clearAmountIfSent(MarketStateHolder.Submission s) {
+        if (s.pending || s.accepted) amountField.setText("");
     }
 
     private void report(MarketStateHolder.Submission s, String successMsg, String pendingMsg) {
+        clearAmountIfSent(s);
         if (s.pending) {
             status = pendingMsg;
         } else if (s.accepted) {
@@ -3318,13 +3081,34 @@ public class MarketScreen extends Screen {
 
     // ─────────── rendering ───────────
 
+    /**
+     * No blur and no darkening behind the market.
+     *
+     * The panel is translucent black so the world shows through it, the way it does behind
+     * chat. Vanilla's background blurs and dims the whole world first, which turned that
+     * into a grey smear and made the panel read as a box on a box.
+     */
+    @Override
+    public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
+        // Nothing: render draws its own light dim, first. See there.
+    }
+
+    /** A dialog's frame: the panel's black with a hairline edge, opaque enough to read on top of it. */
+    private void darkBox(DrawContext m, int x, int y, int w, int h) {
+        m.fill(x, y, x + w, y + h, 0xF0080808);
+        m.fill(x, y, x + w, y + 1, PANEL_LINE);
+        m.fill(x, y + h - 1, x + w, y + h, PANEL_LINE);
+        m.fill(x, y, x + 1, y + h, PANEL_LINE);
+        m.fill(x + w - 1, y, x + w, y + h, PANEL_LINE);
+    }
+
     @Override
     public void render(DrawContext matrices, int mouseX, int mouseY, float delta) {
-        // The background first, and only here. Screen.render draws it too in 1.21.1, but
-        // super.render runs at the end of this method — after every panel — so letting it
-        // draw the background there would blur the whole screen over what was just drawn.
-        // renderBackground is overridden to nothing below for exactly that call.
-        super.renderBackground(matrices, mouseX, mouseY, delta);
+        // The background first, and only here: a light dim, no blur, so the world shows
+        // through the panel. Screen.render asks for the background again, but super.render
+        // runs at the end of this method — after every panel — so renderBackground is
+        // overridden to nothing below for that call.
+        matrices.fill(0, 0, this.width, this.height, 0x48000000);
 
         // Whether you hold a market changes from the network thread — connecting adopts
         // one, disconnecting or resetting can drop it. Recompute here rather than only
@@ -3351,35 +3135,35 @@ public class MarketScreen extends Screen {
         // keeps eating the scroll wheel.
         hoveredScrollKey = null;
 
-        renderHeader(matrices);
+        String[] offer = offerNewSlot;
+        if (offer != null) {
+            offerNewSlot = null;
+            askToJoinInNewSlot(offer[0], Integer.parseInt(offer[1]), offer[2]);
+        }
+
+        renderFrame(matrices, mouseX, mouseY);
 
         int listX = this.listX;
 
-        // Frames around each column. Without them the controls float in the middle of
-        // an empty screen with nothing saying where one grouping ends and the next
-        // begins — the panels are most of what makes the layout read as a layout.
-        if (activeScreen != SCREEN_INFO) {
-            vanillaPanel(matrices, listX, frameTop(), listW, frameH());
-            vanillaPanel(matrices, rowX - PAD, frameTop(), controlsW + PAD * 2, frameH());
-            if (invX >= 0 && activeScreen == SCREEN_TRADING) {
-                vanillaPanel(matrices, invX, frameTop(), invW, frameH());
-            }
+        // The setup screens keep their two columns, divided by a line rather than boxed.
+        if (isSetupScreen(activeScreen)) {
+            divider(matrices, rowX - PAD - COL_GAP / 2);
         }
 
         // Only the current destination's left column, and everything in it placed from
         // panelTop rather than from the control rows beside it.
-        if (activeScreen == SCREEN_TRADING) {
-            renderSelectedItem(matrices, listX + 4, panelTop(), mouseX, mouseY);
-            renderLeftSwitcher(matrices, mouseX, mouseY);
-            int viewTop = panelTop() + 36;
-            if (leftView == LEFT_MARKETS) {
-                renderMarkets(matrices, listX + 4, viewTop, mouseX, mouseY);
-            } else if (leftView == LEFT_CHART) {
-                renderPriceChart(matrices, listX + 4, viewTop);
-            } else {
-                renderBook(matrices, listX + 4, viewTop, mouseX, mouseY);
-            }
-            if (invX >= 0) renderInventory(matrices, invX + 4, panelTop(), mouseX, mouseY);
+        if (activeScreen == SCREEN_BROWSE) {
+            renderBrowse(matrices, mouseX, mouseY);
+        } else if (activeScreen == SCREEN_SELL) {
+            renderSell(matrices, mouseX, mouseY);
+        } else if (activeScreen == SCREEN_ITEM) {
+            renderItemView(matrices, mouseX, mouseY);
+        } else if (activeScreen == SCREEN_ORDERS) {
+            renderYourOrders(matrices, mouseX, mouseY);
+        } else if (activeScreen == SCREEN_HISTORY) {
+            renderHistory(matrices, mouseX, mouseY);
+        } else if (activeScreen == SCREEN_LEADERBOARD) {
+            renderLeaderboard(matrices, mouseX, mouseY);
         } else if (activeScreen == SCREEN_NETWORK) {
             // In the left panel, not stacked under the buttons — that put it outside
             // the frame drawn around the controls.
@@ -3407,21 +3191,9 @@ public class MarketScreen extends Screen {
             noteScrollable("marketcol", rowX - PAD, frameTop(), controlsW + PAD * 2,
                     frameH(), panelBottom() - panelTop(), marketColumnHeight,
                     mouseX, mouseY);
-        } else if (activeScreen == SCREEN_INFO) {
-            renderInfo(matrices);
         } else {
             renderSettingsPlaceholder(matrices);
         }
-
-        // The re-place checklist belongs to whichever tab you are on: it appears right
-        // after a migration and is the only thing you should be doing next.
-        if (!MarketStateHolder.pendingReplace().isEmpty()) {
-            renderReplaceList(matrices, mouseX, mouseY);
-        }
-
-        // After every panel on every destination, including Info's, so the current tab
-        // can overlap the border below it and read as joined to the panel.
-        renderTabs(matrices, mouseX, mouseY);
 
         // After the panels rather than before them. These used to be drawn straight
         // after the header, which put them underneath a panel frame that starts as high
@@ -3434,25 +3206,20 @@ public class MarketScreen extends Screen {
         // seen once.
         // Both are sentences and both are bounded only by the window — a refusal reason
         // carries its remedy, which is the longest text this screen produces.
+        //
+        // Just under the panel rather than at the foot of the window. With the world no
+        // longer blurred behind the market, the bottom of the window is the hotbar.
         int footerW = this.width - listX - 8;
+        int below = panelOuterBottom() + 4;
+
+        if (!status.isEmpty()) {
+            label(matrices, trim(status, footerW), listX, below, 0xFFDD66);
+            below += 11;
+        }
 
         String note = MarketStateHolder.recoveryNote();
         if (!note.isEmpty()) {
-            label(matrices, trim(note, footerW), listX, this.height - 36, 0x88CCFF);
-        }
-
-        if (!status.isEmpty()) {
-            label(matrices, trim(status, footerW), listX, this.height - 24, 0xFFDD66);
-        }
-
-        // Your identity is a file, and it doesn't follow you to a new computer. Moving
-        // machines without it makes you a stranger to every market you were part of —
-        // same username, same UUID, unrecognised key. Cheaper to say so than to debug.
-        Path identity = MarketStateHolder.identityPath();
-        if (identity != null) {
-            label(matrices, trim("identity: config/" + identity.getFileName()
-                            + "  — copy this to move computers, never share it", footerW),
-                    listX, this.height - 12, 0x707070);
+            label(matrices, trim(note, footerW), listX, below, 0x88CCFF);
         }
 
         // The text fields are registered with addButton now, so super.render draws
@@ -3464,15 +3231,23 @@ public class MarketScreen extends Screen {
         // requested would be painted over by whatever came next, which is the whole
         // reason it is queued rather than drawn in place.
         if (hoverTip != null) {
-            matrices.drawTooltip(this.textRenderer, Text.literal(hoverTip), mouseX, mouseY);
+            // Wrapped to a width that reads comfortably. One unbroken line ran off the side of
+            // the screen on the longer explanations.
+            List<OrderedText> tipLines = new ArrayList<>();
+            for (String paragraph : hoverTip.split("\n")) {
+                tipLines.addAll(this.textRenderer.wrapLines(Text.literal(paragraph), 220));
+            }
+            matrices.drawOrderedTooltip(this.textRenderer, tipLines, mouseX, mouseY);
             hoverTip = null;
         }
 
-        // Modals are drawn above everything by depth rather than by order: 1.21.1 draws
-        // immediately with a depth test, and an item icon sits at z 150, so a dark panel
-        // drawn later at z 0 would have every icon behind it showing through.
+        // The menu, the picker and the overlays are drawn above everything by depth rather
+        // than by order: 1.21.1 draws immediately with a depth test, and an item icon sits
+        // at z 150, so a dark box drawn later at z 0 would have every icon behind it
+        // showing through.
         matrices.getMatrices().push();
         matrices.getMatrices().translate(0, 0, MODAL_Z);
+        renderMenu(matrices, mouseX, mouseY);
         renderPicker(matrices, mouseX, mouseY);
 
         Overlay overlay = overlays.peekFirst();
@@ -3482,16 +3257,6 @@ public class MarketScreen extends Screen {
 
     /** Above item icons (150, and 200 for their counts), below tooltips (400). */
     private static final float MODAL_Z = 300.0F;
-
-    /**
-     * Nothing — render draws the background itself, first.
-     *
-     * Screen.render asks for it again and render calls super.render last, so without this
-     * the background would be drawn on top of every panel. See the start of render.
-     */
-    @Override
-    public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
-    }
 
     // ─────────── alerts ───────────
     //
@@ -3512,7 +3277,7 @@ public class MarketScreen extends Screen {
      * width rather than one column — the messages are sentences, and the left panel was
      * too narrow to hold one without the text running across the trade controls.
      */
-    private int alertTop() { return rowY - 6 - TAB_H - 2; }
+    private int alertTop() { return rowY - 6 - HEADER_H; }
 
     /**
      * Height reserved at the top of every panel for the alerts, or 0 when there are
@@ -3643,6 +3408,15 @@ public class MarketScreen extends Screen {
             out.add(new Alert("FORKED: " + split.describe(), 0xFF8844, SCREEN_MARKET));
         }
 
+        // The orders from a market you left used to sit in a box over the screen, so they
+        // could not be missed. They live in Your orders now, and this is what keeps them
+        // from being missed there.
+        int waiting = MarketStateHolder.pendingReplace().size();
+        if (waiting > 0) {
+            out.add(new Alert(waiting + (waiting == 1 ? " order" : " orders")
+                    + " from the market you left to place again", 0xFFDD66, SCREEN_ORDERS));
+        }
+
         return out;
     }
 
@@ -3723,339 +3497,1010 @@ public class MarketScreen extends Screen {
         }
     }
 
-    // ─────────── the left panel ───────────
+    private static final int INV_ROW_H = 20;
+
+    // ─────────── worked-out figures, kept until the market changes ───────────
     //
-    // One column, several things worth looking at while trading. Which one is showing
-    // is its own choice, separate from where you are in the app — you stay on Trading
-    // either way, you are just looking at a different aspect of it.
+    // The screen redraws every frame, and everything it shows is worked out from the
+    // market: rows, the book by price, quotes, profit, the leaderboard. On a busy server
+    // that is hundreds of sums sixty times a second for a market that changes a few times
+    // a second at most. So each figure is kept until the market's version moves (an event
+    // was applied), a different market is loaded, or a minute passes — the last for the
+    // figures that read the clock, like "5 min ago" and a day's change.
 
-    private static final int LEFT_BOOK = 0;
-    private static final int LEFT_MARKETS = 1;
-    private static final int LEFT_CHART = 2;
-    private static final String[] LEFT_VIEW_NAMES = {"Order book", "Markets", "Price"};
+    private final java.util.Map<String, Object> viewCache = new java.util.HashMap<>();
+    private MarketState cachedFor;
+    private long cachedVersion = -1;
+    private long cachedMinute = -1;
 
-    /** Static, like the destination: the view you chose is a preference, not a mode. */
-    private static int leftView = LEFT_BOOK;
-
-    private int[] leftSwitcherRect() {
-        return new int[]{listX + 4, panelTop() + 22, listW - 8, 12};
-    }
-
-    private void renderLeftSwitcher(DrawContext m, int mouseX, int mouseY) {
-        int[] r = leftSwitcherRect();
-        boolean hot = within(mouseX, mouseY, r);
-
-        // The three-line glyph, as on the mockup — the same affordance as the main nav,
-        // meaning the same thing one level down.
-        for (int i = 0; i < 3; i++) {
-            int y = r[1] + 2 + i * 3;
-            m.fill(r[0], y, r[0] + 8, y + 1, hot ? 0xFFFFFFFF : 0xFFAAAAAA);
-        }
-        label(m, LEFT_VIEW_NAMES[leftView], r[0] + 12, r[1] + 2,
-                hot ? 0xFFFFFF : 0xFFDD66);
-    }
-
-    private boolean leftSwitcherClicked(double mouseX, double mouseY) {
-        if (activeScreen != SCREEN_TRADING) return false;
-        if (!within(mouseX, mouseY, leftSwitcherRect())) return false;
-        leftView = (leftView + 1) % LEFT_VIEW_NAMES.length;
-        return true;
-    }
-
-    /** Every item worth listing: traded here, currently on the book, or in your ledger. */
-    private List<String> marketItems() {
-        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+    @SuppressWarnings("unchecked")
+    private <T> T cached(String key, java.util.function.Supplier<T> compute) {
         MarketState market = MarketStateHolder.get();
-        if (market == null) return new ArrayList<>(ids);
+        long version = market == null ? -1 : market.version();
+        long minute = System.currentTimeMillis() / 60_000;
+        if (market != cachedFor || version != cachedVersion || minute != cachedMinute) {
+            viewCache.clear();
+            cachedFor = market;
+            cachedVersion = version;
+            cachedMinute = minute;
+        }
+        Object value = viewCache.get(key);
+        if (value == null) {
+            value = compute.get();
+            if (value != null) viewCache.put(key, value);
+        }
+        return (T) value;
+    }
 
-        ids.addAll(market.activeItems());
-        ids.addAll(market.trades().tradedItems());
+    /** An item's row as anyone sees it (no "yours" figures). */
+    private MarketView.ItemRow rowCached(String itemId) {
+        MarketState market = MarketStateHolder.get();
+        if (market == null || itemId == null) return null;
+        return cached("row|" + itemId, () -> MarketView.row(market, null, itemId, System.currentTimeMillis()));
+    }
 
+    private MarketView.Depth depthCached(String itemId, int levels) {
+        MarketState market = MarketStateHolder.get();
+        return cached("depth|" + itemId + "|" + levels, () -> MarketView.depth(market, myId(), itemId, levels));
+    }
+
+    private List<Order> yourOrdersCached() {
+        MarketState market = MarketStateHolder.get();
+        if (market == null) return Collections.emptyList();
+        return cached("orders", () -> MarketView.yourOrders(market, myId()));
+    }
+
+    // ─────────── Browse ───────────
+    //
+    // Every item at once, with what it costs to buy right now, what selling earns right
+    // now, and what it last went for — the question you have when you sit down. One row
+    // per item, the icon and its name with a grey line under it, and the prices on the
+    // right. Clicking one opens its view. The search box in the footer narrows the list,
+    // and offers to look through every item in the game when nothing here matches.
+
+    private static final int ROW_H = 20;
+    private static final int PRICE_COL_W = 52;
+    private static final int DAY_COL_W = 34;
+
+    private int browseX() { return listX + 6; }
+    private int browseRight() { return listX + contentW - 6; }
+    /** Below the column titles. */
+    private int browseListTop() { return panelTop() + 12; }
+
+    private String searchText() {
+        return searchField == null ? "" : searchField.getText().trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private List<MarketView.ItemRow> browseRows() {
+        MarketState market = MarketStateHolder.get();
+        if (market == null) return Collections.emptyList();
+        List<MarketView.ItemRow> rows = cached("browse",
+                () -> MarketView.browse(market, myId(), null, System.currentTimeMillis()));
+        String q = searchText();
+        if (q.isEmpty()) return rows;
+        List<MarketView.ItemRow> out = new ArrayList<>();
+        for (MarketView.ItemRow r : rows) {
+            if (shortName(r.itemId).toLowerCase(java.util.Locale.ROOT).contains(q)) out.add(r);
+        }
+        return out;
+    }
+
+    /** The extra row at the end of a search, offering every item in the game. */
+    private boolean browseOffersSearchAll() {
+        return !searchText().isEmpty();
+    }
+
+    private static UUID myId() {
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc.player != null) {
-            ids.addAll(market.itemBalances().heldBy(MinecraftIds.userIdOf(mc.player)).keySet());
-        }
-        return new ArrayList<>(ids);
+        return mc.player == null ? null : MinecraftIds.userIdOf(mc.player);
     }
 
-    private static final int MARKET_ROW_H = 20;
+    /** One list row's ground: a faint wash under the cursor, and a hairline between rows. */
+    private void rowGround(DrawContext m, int x, int y, int right, boolean hot) {
+        if (hot) m.fill(x - 4, y, right + 4, y + ROW_H, 0x28FFFFFF);
+        m.fill(x - 4, y + ROW_H - 1, right + 4, y + ROW_H, 0x14FFFFFF);
+    }
 
-    /**
-     * Every item at once, rather than one book at a time.
-     *
-     * The screen could only ever answer "what is happening with this one item I already
-     * thought to ask about". This answers "what is happening", which is the question you
-     * actually have when you sit down.
-     */
-    private void renderMarkets(DrawContext m, int x, int y, double mouseX, double mouseY) {
-        MarketState market = MarketStateHolder.get();
-        List<String> ids = marketItems();
-        if (market == null || ids.isEmpty()) {
-            label(m, "(nothing trading yet)", x, y, 0x808080);
+    /** An item's icon on its own, the way the list rows show it. */
+    private void rowIcon(DrawContext m, String itemId, int x, int y) {
+        Item item = MinecraftIds.idToItem(itemId);
+        if (item != Items.AIR) drawIcon(m, new ItemStack(item), x, y + 2, null);
+    }
+
+    private void renderBrowse(DrawContext m, int mouseX, int mouseY) {
+        int x = browseX();
+        int right = browseRight();
+        List<MarketView.ItemRow> rows = browseRows();
+        int top = browseListTop();
+        boolean searchAll = browseOffersSearchAll();
+
+        if (rows.isEmpty() && !searchAll) {
+            label(m, "Nothing is trading yet.", x, top, 0xC0C0C0);
+            label(m, trim("Search for an item below to make the first offer.", right - x), x, top + 12, 0x808080);
             return;
         }
 
-        int viewH = panelBottom() - y;
-        noteScrollable("markets", x, y, listW - 8, viewH,
-                ids.size() * MARKET_ROW_H, mouseX, mouseY);
-        int rowTop = y - scrollOf("markets");
+        int dayR = right, lastR = dayR - DAY_COL_W, sellR = lastR - PRICE_COL_W, buyR = sellR - PRICE_COL_W;
+        label(m, "Item", x, top - 11, 0x808080);
+        labelRight(m, "Buy now", buyR, top - 11, 0x808080);
+        labelRight(m, "Sell now", sellR, top - 11, 0x808080);
+        labelRight(m, "Last", lastR, top - 11, 0x808080);
+        labelRight(m, "Day", dayR, top - 11, 0x808080);
 
-        beginClip(m, x, y, listW - 8, viewH);
-        for (String id : ids) {
-            Item item = MinecraftIds.idToItem(id);
-            boolean hot = mouseX >= x && mouseX < x + listW - 8
-                    && mouseY >= rowTop && mouseY < rowTop + MARKET_ROW_H
-                    && mouseY >= y && mouseY < y + viewH;
+        int viewH = panelBottom() - top;
+        int count = rows.size() + (searchAll ? 1 : 0);
+        noteScrollable("browse", x, top, right - x, viewH, count * ROW_H, mouseX, mouseY);
+        scrollbar(m, "browse", right + 3, top, viewH, count * ROW_H);
+        int y = top - scrollOf("browse");
+        int nameW = buyR - PRICE_COL_W - x - 22;
 
-            drawItemCell(m, item == Items.AIR ? ItemStack.EMPTY : new ItemStack(item),
-                    x, rowTop, null, hot);
+        beginClip(m, x - 4, top, right - x + 8, viewH);
+        for (MarketView.ItemRow r : rows) {
+            boolean hot = mouseX >= x && mouseX < right && mouseY >= y && mouseY < y + ROW_H
+                    && mouseY >= top && mouseY < top + viewH;
+            rowGround(m, x, y, right, hot);
+            rowIcon(m, r.itemId, x, y);
 
-            String name = this.textRenderer.trimToWidth(
-                    item == Items.AIR ? id : item.getName().getString(), listW - 24);
-            label(m, name, x + 21, rowTop + 1, hot ? 0xFFFFFF : 0xC0C0C0);
+            label(m, trim(shortName(r.itemId), nameW), x + 20, y + 2, 0xFFFFFF);
+            String sub = r.youHold > 0 ? r.youHold + " in item-wallet"
+                    : r.recentVolume > 0 ? r.recentVolume + " traded" : "no trades yet";
+            if (r.yourOrders > 0) sub += " · " + r.yourOrders + (r.yourOrders == 1 ? " order" : " orders") + " yours";
+            label(m, trim(sub, nameW), x + 20, y + 11, 0x808080);
 
-            // peekBook: this runs per item per frame, and bookFor would create a book
-            // for every item anyone merely holds.
-            OrderBook book = market.peekBook(id);
-            List<Order> bids = book == null ? Collections.emptyList() : book.restingBids();
-            List<Order> asks = book == null ? Collections.emptyList() : book.restingAsks();
-            long last = market.trades().lastPrice(id);
-
-            StringBuilder line = new StringBuilder();
-            line.append("bid ").append(bids.isEmpty() ? "-" : bids.get(0).value());
-            line.append("  ask ").append(asks.isEmpty() ? "-" : asks.get(0).value());
-            // What it last actually changed hands for — the honest number, as opposed to
-            // what someone is currently hoping for.
-            if (last >= 0) line.append("  last ").append(last);
-            label(m, line.toString(), x + 21, rowTop + 11, 0x909090);
-
-            rowTop += MARKET_ROW_H;
+            labelRight(m, MarketView.price(r.buyNow), buyR, y + 6, 0xFF8888);
+            labelRight(m, MarketView.price(r.sellNow), sellR, y + 6, 0x88FF88);
+            labelRight(m, MarketView.price(r.last), lastR, y + 6, 0xFFFFFF);
+            String day = MarketView.change(r.dayChangePercent);
+            int dayColour = r.dayChangePercent == null || Math.round(r.dayChangePercent) == 0 ? 0x909090
+                    : r.dayChangePercent > 0 ? 0x55FF55 : 0xFF5555;
+            labelRight(m, day, dayR, y + 6, dayColour);
+            y += ROW_H;
+        }
+        if (searchAll) {
+            boolean hot = mouseX >= x && mouseX < right && mouseY >= y && mouseY < y + ROW_H
+                    && mouseY >= top && mouseY < top + viewH;
+            rowGround(m, x, y, right, hot);
+            label(m, trim("Look through every item for \"" + searchField.getText().trim() + "\"", right - x - 20),
+                    x + 20, y + 6, hot ? 0xFFFFFF : ACCENT);
         }
         endClip(m);
     }
 
-    private String marketRowAt(double mouseX, double mouseY) {
-        if (activeScreen != SCREEN_TRADING || leftView != LEFT_MARKETS) return null;
-        int y = panelTop() + 36;
-        int viewH = panelBottom() - y;
-        if (mouseX < listX + 4 || mouseX >= listX + listW
-                || mouseY < y || mouseY >= y + viewH) {
-            return null;
+    /** A click on Browse's list: a row opens that item, the last row searches every item. */
+    private boolean browseClicked(double mouseX, double mouseY) {
+        if (activeScreen != SCREEN_BROWSE) return false;
+        int top = browseListTop();
+        if (mouseX < browseX() || mouseX >= browseRight() || mouseY < top || mouseY >= panelBottom()) return false;
+        List<MarketView.ItemRow> rows = browseRows();
+        int index = (int) ((mouseY - top + scrollOf("browse")) / ROW_H);
+        if (index >= 0 && index < rows.size()) {
+            openItem(MinecraftIds.idToItem(rows.get(index).itemId), MODE_BUY);
+            return true;
         }
-        List<String> ids = marketItems();
-        int index = (int) ((mouseY - y + scrollOf("markets")) / MARKET_ROW_H);
-        return index >= 0 && index < ids.size() ? ids.get(index) : null;
+        if (index == rows.size() && browseOffersSearchAll()) {
+            openPicker();
+            pickerQuery = searchField.getText().trim();
+            return true;
+        }
+        return false;
     }
 
     /**
-     * Recent trade prices for the selected item.
-     *
-     * Deliberately a plain shape rather than a chart with axes — at this size the only
-     * questions it can honestly answer are "which way" and "how volatile", and gridlines
-     * would imply a precision the data does not have.
+     * A thin bar at a list's right edge when it holds more than shows. Rows past the bottom
+     * of a panel are simply not drawn, so without it a long list looked like a short one —
+     * the old order book said "scroll for more", and these lists had lost even that.
      */
-    private void renderPriceChart(DrawContext m, int x, int y) {
-        Item item = MinecraftIds.itemFromName(itemField.getText().trim());
-        if (item == Items.AIR) {
-            label(m, "(pick an item)", x, y, 0x808080);
-            return;
-        }
-
-        MarketState market = MarketStateHolder.get();
-        List<Trade> recent = market == null
-                ? Collections.emptyList()
-                : market.trades().recentFor(MinecraftIds.itemToId(item), 60);
-
-        if (recent.size() < 2) {
-            label(m, "(not enough trades yet)", x, y, 0x808080);
-            if (recent.size() == 1) {
-                label(m, "one trade, at " + recent.get(0).price, x, y + 12, 0x909090);
-            }
-            return;
-        }
-
-        long min = Long.MAX_VALUE, max = Long.MIN_VALUE;
-        for (Trade t : recent) {
-            min = Math.min(min, t.price);
-            max = Math.max(max, t.price);
-        }
-        long span = Math.max(1, max - min);
-
-        int h = contentH - 74;
-        int w = listW - 8;
-        // Capped, or a market with three trades draws three bars the width of the
-        // panel, which looks like a rendering fault rather than like sparse data.
-        int barW = Math.max(2, Math.min(12, w / recent.size()));
-
-        m.fill(x, y, x + w, y + h, 0x40000000);
-        for (int i = 0; i < recent.size(); i++) {
-            long p = recent.get(i).price;
-            int barH = (int) ((p - min) * (h - 2) / span) + 1;
-            int bx = x + i * barW;
-            if (bx + barW > x + w) break;
-            m.fill(bx, y + h - barH, bx + barW - 1, y + h, 0xFF55FFFF);
-        }
-
-        label(m, "high " + max, x, y + h + 2, 0x909090);
-        label(m, "low " + min + "   last " + recent.get(recent.size() - 1).price,
-                x, y + h + 12, 0x909090);
+    private void scrollbar(DrawContext m, String key, int x, int top, int viewH, int contentH) {
+        if (contentH <= viewH || viewH <= 0) return;
+        m.fill(x, top, x + 2, top + viewH, 0x30FFFFFF);
+        int thumbH = Math.max(8, viewH * viewH / contentH);
+        int travel = viewH - thumbH;
+        int maxScroll = contentH - viewH;
+        int thumbY = top + (maxScroll <= 0 ? 0 : (int) ((long) travel * scrollOf(key) / maxScroll));
+        m.fill(x, thumbY, x + 2, thumbY + thumbH, 0xA0000000 | ACCENT);
     }
 
-    private void renderBook(DrawContext matrices, int x, int startY,
-                            double mouseX, double mouseY) {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        UUID myUuid = mc.player != null ? MinecraftIds.userIdOf(mc.player) : null;
-
-        Item item = MinecraftIds.itemFromName(itemField.getText().trim());
-        if (item == Items.AIR) {
-            label(matrices, "(pick an item to see its book)", x, startY, 0x808080);
-            return;
-        }
-
-        String itemId = MinecraftIds.itemToId(item);
-        MarketState market = MarketStateHolder.get();
-
-        // peekBook, not bookFor: this runs every frame for whatever is in the field,
-        // and bookFor would create an empty book for every item anyone ever types.
-        OrderBook book = market.peekBook(itemId);
-        List<Order> asks = book == null ? Collections.emptyList() : book.restingAsks();
-        List<Order> bids = book == null ? Collections.emptyList() : book.restingBids();
-
-        if (asks.isEmpty() && bids.isEmpty()) {
-            label(matrices, "(no orders)", x, startY, 0x808080);
-            return;
-        }
-
-        int rowHeight = 11;
-        int viewH = panelBottom() - startY - 10;
-        int contentH = (asks.size() + bids.size()) * rowHeight + 4;
-
-        noteScrollable("book", x, startY, listW - 8, viewH, contentH, mouseX, mouseY);
-        int y = startY - scrollOf("book");
-
-        // Clipped rather than truncated. The book used to stop at six a side with no
-        // indication there was more, which on a busy item hid most of the market.
-        beginClip(matrices, x, startY, listW - 8, viewH);
-        for (Order o : asks) {
-            boolean mine = myUuid != null && o.userID().equals(myUuid);
-            label(matrices, (mine ? "* " : "  ") + "#" + BotRules.displayOrderId(o.orderId())
-                            + " SELL " + o.volume() + " @ " + o.value(),
-                    x, y, mine ? 0xFFCC66 : 0xFF8888);
-            y += rowHeight;
-        }
-        y += 4;
-        for (Order o : bids) {
-            boolean mine = myUuid != null && o.userID().equals(myUuid);
-            label(matrices, (mine ? "* " : "  ") + "#" + BotRules.displayOrderId(o.orderId())
-                            + " BUY  " + o.volume() + " @ " + o.value(),
-                    x, y, mine ? 0xFFCC66 : 0x88FF88);
-            y += rowHeight;
-        }
-        endClip(matrices);
-
-        if (contentH > viewH) {
-            label(matrices, "scroll for more", x, startY + viewH + 1, 0x606060);
-        }
+    private void labelRight(DrawContext m, String s, int right, int y, int colour) {
+        label(m, s, right - this.textRenderer.getWidth(s), y, colour);
     }
 
-    /**
-     * What you are actually carrying, as opposed to what the ledger holds for you.
-     *
-     * Those two are constantly confused — "I have 500 iron" is true of your pockets and
-     * false of the market, or the reverse, and until now the screen only ever showed
-     * the second. Clicking a row selects that item to trade.
-     */
-    private void renderInventory(DrawContext m, int x, int y, double mouseX, double mouseY) {
+    // ─────────── Sell ───────────
+    //
+    // What you are carrying, each with what it would sell for right now. Selling starts
+    // from what is in your pockets, so this is where it starts here too: click one and its
+    // view opens ready to list it, priced at the best buyer's offer.
+
+    private int sellListTop() { return panelTop() + 12; }
+
+    private void renderSell(DrawContext m, int mouseX, int mouseY) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return;
-
-        // Title inside the panel, not above it — placing it at y-11 was what left it
-        // hanging over the frame's top edge.
-        label(m, "You are carrying", x, y, 0xFFFFFF);
+        int x = browseX(), right = browseRight(), top = sellListTop();
 
         InventoryBridge.Holdings held = InventoryBridge.held(mc.player);
         if (held.items.isEmpty()) {
-            label(m, "(nothing)", x, y + 12, 0x808080);
+            label(m, "You are not carrying anything to sell.", x, top, 0x808080);
             return;
         }
+        MarketState market = MarketStateHolder.get();
+        int lastR = right, sellR = lastR - PRICE_COL_W;
+        label(m, "You are carrying", x, top - 11, 0x808080);
+        labelRight(m, "Sells now", sellR, top - 11, 0x808080);
+        labelRight(m, "Last", lastR, top - 11, 0x808080);
 
-        int w = invW - 8;
-        int listTop = y + 12;
-        // Reserve the footer's line only when there is a footer, so the list uses the
-        // whole panel when there is nothing to say.
         int footer = held.skipped > 0 ? 11 : 0;
-        int viewH = panelBottom() - listTop - footer;
+        int viewH = panelBottom() - top - footer;
+        noteScrollable("sell", x, top, right - x, viewH, held.items.size() * ROW_H, mouseX, mouseY);
+        scrollbar(m, "sell", right + 3, top, viewH, held.items.size() * ROW_H);
+        int y = top - scrollOf("sell");
+        int nameW = sellR - PRICE_COL_W - x - 22;
+        long now = System.currentTimeMillis();
 
-        noteScrollable("inv", x, listTop, w, viewH,
-                held.items.size() * INV_ROW_H, mouseX, mouseY);
-        int rowTop = listTop - scrollOf("inv");
-
-        beginClip(m, x, listTop, w, viewH);
+        beginClip(m, x - 4, top, right - x + 8, viewH);
         for (InventoryBridge.Holding h : held.items) {
-            boolean hot = mouseY >= rowTop && mouseY < rowTop + INV_ROW_H
-                    && mouseX >= x && mouseX < x + w
-                    && mouseY >= listTop && mouseY < listTop + viewH;
-            drawItemCell(m, new ItemStack(h.item), x, rowTop, null, hot);
-            label(m, String.valueOf(h.count), x + 21, rowTop + 1, 0xFFFFFF);
-            String name = this.textRenderer.trimToWidth(
-                    h.item.getName().getString(), w - 24);
-            label(m, name, x + 21, rowTop + 11, 0xA0A0A0);
-            rowTop += INV_ROW_H;
+            boolean hot = mouseX >= x && mouseX < right && mouseY >= y && mouseY < y + ROW_H
+                    && mouseY >= top && mouseY < top + viewH;
+            rowGround(m, x, y, right, hot);
+            drawIcon(m, new ItemStack(h.item), x, y + 2, null);
+            label(m, trim(h.item.getName().getString(), nameW), x + 20, y + 2, 0xFFFFFF);
+            label(m, trim(h.count + " carried", nameW), x + 20, y + 11, 0x808080);
+            if (market != null) {
+                MarketView.ItemRow r = rowCached(MinecraftIds.itemToId(h.item));
+                labelRight(m, MarketView.price(r.sellNow), sellR, y + 6, 0x88FF88);
+                labelRight(m, MarketView.price(r.last), lastR, y + 6, 0xFFFFFF);
+            }
+            y += ROW_H;
         }
         endClip(m);
 
         if (held.skipped > 0) {
-            label(m, held.skipped + " with NBT hidden", x, listTop + viewH + 1, 0x606060);
+            label(m, held.skipped + " with NBT hidden", x, top + viewH + 1, 0x606060);
         }
     }
 
-    private static final int INV_ROW_H = 20;
-
-    /** Which carried item a click landed on, or null. */
-    private InventoryBridge.Holding inventoryRowAt(double mouseX, double mouseY) {
-        if (invX < 0 || activeScreen != SCREEN_TRADING) return null;
+    /** Which carried item a click on the Sell list landed on, or null. */
+    private InventoryBridge.Holding sellRowAt(double mouseX, double mouseY) {
+        if (activeScreen != SCREEN_SELL) return null;
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null) return null;
-
-        int y = panelTop() + 12;
-        int viewH = panelBottom() - y - 12;
-        if (mouseX < invX + 4 || mouseX >= invX + invW || mouseY < y || mouseY >= y + viewH) {
-            return null;
-        }
-
+        int top = sellListTop();
+        if (mouseX < browseX() || mouseX >= browseRight() || mouseY < top || mouseY >= panelBottom()) return null;
         List<InventoryBridge.Holding> items = InventoryBridge.held(mc.player).items;
-        int index = (int) ((mouseY - y + scrollOf("inv")) / INV_ROW_H);
+        int index = (int) ((mouseY - top + scrollOf("sell")) / ROW_H);
         return index >= 0 && index < items.size() ? items.get(index) : null;
     }
 
-    /**
-     * The selected item, as an icon rather than a string of text.
-     *
-     * A first use of the item cell, and the beginning of the slot that will replace the
-     * typed item field entirely — seeing what you have selected should not require
-     * reading a registry id back to yourself.
-     */
-    private void renderSelectedItem(DrawContext m, int x, int y, double mouseX, double mouseY) {
+    // ─────────── one item ───────────
+    //
+    // Simple first: the market price, what buying costs right now and how many are for
+    // sale at that, and what selling earns right now and how many are wanted. Two columns
+    // of "price · amount" made a player work out which side was which before they could
+    // read it. The book in full, a chart and the figures behind the market price are one
+    // click away under Advanced, for whoever wants them.
+
+    private int itemX() { return listX + 6; }
+    private int itemRight() { return listX + itemLeftW - 6; }
+    private int itemTop() { return panelTop() + 1; }
+    /** The back arrow at the top left. */
+    private int[] backRect() { return new int[]{itemX(), itemTop(), 12, 18}; }
+    private static final int LEVEL_H = 10;
+
+    /** Static like the screen: whoever wants the detail keeps getting it. */
+    private static boolean itemAdvanced = false;
+
+    private int[] advancedToggleRect() {
+        String text = itemAdvanced ? "Simple" : "Advanced";
+        int w = this.textRenderer.getWidth(text);
+        return new int[]{itemRight() - w, itemTop() + 1, w, 10};
+    }
+
+    /** Simple view: the "buy now" row (0) and the "sell now" row (1). */
+    private int[] quickRowRect(int which) {
+        return new int[]{itemX() - 2, itemTop() + 46 + which * 24, itemRight() - itemX() + 4, 22};
+    }
+
+    // Advanced view: chart, then a line of figures, then the book.
+    private int chartTop() { return itemTop() + 24; }
+    private int chartHeight() { return Math.max(18, (panelBottom() - chartTop()) * 2 / 5); }
+    private int figuresY() { return chartTop() + chartHeight() + 3; }
+    /** Top of the grouped book's rows. */
+    private int depthTop() { return figuresY() + 12 + 11; }
+
+    private String selectedItemId() {
         Item item = MinecraftIds.itemFromName(itemField.getText().trim());
-        boolean hovered = mouseX >= x && mouseX < x + 18 && mouseY >= y && mouseY < y + 18;
+        return item == Items.AIR ? null : MinecraftIds.itemToId(item);
+    }
 
-        MinecraftClient mc = MinecraftClient.getInstance();
-        long held = 0;
+    /** How many price levels fit on each side. */
+    private int levelsThatFit() {
+        return Math.max(1, (panelBottom() - depthTop()) / LEVEL_H);
+    }
+
+    private void renderItemView(DrawContext m, int mouseX, int mouseY) {
+        divider(m, formX - PAD - COL_GAP / 2);
+
         MarketState market = MarketStateHolder.get();
-        if (item != Items.AIR && mc.player != null && market != null) {
-            held = market.itemBalances().getBalance(
-                    MinecraftIds.userIdOf(mc.player), MinecraftIds.itemToId(item));
+        String itemId = selectedItemId();
+        int x = itemX(), right = itemRight(), y = itemTop();
+
+        int[] back = backRect();
+        boolean backHot = within(mouseX, mouseY, back);
+        label(m, "<", back[0] + 3, back[1] + 5, backHot ? 0xFFFFFF : ACCENT);
+        if (backHot) hoverTip = "Back to " + SCREEN_NAMES[itemOpenedFrom];
+
+        if (market == null || itemId == null) {
+            label(m, "Pick an item from Browse.", x + 16, y + 5, 0x808080);
+            renderOrderForm(m, null, null, mouseX, mouseY);
+            return;
         }
 
-        drawItemCell(m, item == Items.AIR ? ItemStack.EMPTY : new ItemStack(item),
-                x, y, null, hovered);
+        UUID me = myId();
+        Item item = MinecraftIds.idToItem(itemId);
+        int[] toggle = advancedToggleRect();
+        boolean toggleHot = within(mouseX, mouseY, toggle);
+        label(m, itemAdvanced ? "Simple" : "Advanced", toggle[0], toggle[1], toggleHot ? 0xFFFFFF : ACCENT);
 
-        if (item == Items.AIR) {
-            label(m, "no item selected", x + 22, y + 5, 0x808080);
+        int nameW = toggle[0] - x - 40;
+        if (item != Items.AIR) drawIcon(m, new ItemStack(item), x + 15, y + 1, null);
+        label(m, trim(shortName(itemId), nameW), x + 36, y + 1, 0xFFFFFF);
+        long inMarket = me == null ? 0 : market.itemBalances().getBalance(me, itemId);
+        // "Item-wallet", not "in the market": these are yours, held by the market for you,
+        // and "in the market" read as though they were up for sale.
+        label(m, trim(inMarket + " in item-wallet · " + carried(item) + " carried", right - x - 36),
+                x + 36, y + 11, 0x909090);
+
+        long now = System.currentTimeMillis();
+        MarketView.ItemRow row = cached("myrow|" + itemId, () -> MarketView.row(market, me, itemId, now));
+        if (itemAdvanced) {
+            renderItemAdvanced(m, market, me, itemId, row, mouseX, mouseY);
         } else {
-            label(m, item.getName().getString(), x + 22, y + 1, 0xFFFFFF);
-            label(m, held + " in market", x + 22, y + 11, 0xFFFF88);
+            renderItemSimple(m, market, me, itemId, row, mouseX, mouseY);
         }
+        renderOrderForm(m, market, itemId, mouseX, mouseY);
+    }
+
+    private void renderItemSimple(DrawContext m, MarketState market, UUID me, String itemId,
+                                  MarketView.ItemRow row, int mouseX, int mouseY) {
+        int x = itemX(), right = itemRight(), y = itemTop() + 24;
+
+        // The market price, with the day's change beside it when there is one, and how much
+        // has been changing hands — a price on three trades means less than one on three hundred.
+        label(m, "Market price", x, y, 0x909090);
+        MarketView.Stats st = cached("stats|" + itemId,
+                () -> MarketView.stats(market, itemId, System.currentTimeMillis()));
+        String volume = st.trades.isEmpty() ? "" : "Volume: " + st.volume + (st.lastDay ? " today" : " lately");
+        if (!volume.isEmpty()) labelRight(m, trim(volume, (right - x) / 2), right, y, 0x909090);
+        String price = row.marketPrice == MarketView.NONE ? "not traded yet" : row.marketPrice + " credits";
+        label(m, price, x, y + 10, 0xFFFFFF);
+        String day = MarketView.change(row.dayChangePercent);
+        if (!day.isEmpty()) {
+            label(m, day + " today", x + this.textRenderer.getWidth(price) + 8, y + 10,
+                    row.dayChangePercent > 0 ? 0x55FF55 : row.dayChangePercent < 0 ? 0xFF5555 : 0x909090);
+        }
+        if (mouseX >= x && mouseX < right && mouseY >= y && mouseY < y + 20) {
+            hoverTip = "The average of the last " + MarketView.MARKET_PRICE_TRADES
+                    + " trades, weighted by how much each moved. Volume is how many changed hands "
+                    + (st.lastDay ? "in the last day" : "in the trades this market remembers") + ".";
+        }
+
+        // The two things a player can do right now, said in words.
+        MarketView.Depth depth = depthCached(itemId, 1);
+        quickRow(m, 0, "Buy now", row.buyNow,
+                depth.asks.isEmpty() ? "nobody is selling yet" : depth.asks.get(0).volume + " for sale at that price",
+                0xFF8888, mouseX, mouseY);
+        quickRow(m, 1, "Sell now", row.sellNow,
+                depth.bids.isEmpty() ? "nobody is buying yet" : depth.bids.get(0).volume + " wanted at that price",
+                0x88FF88, mouseX, mouseY);
+
+        // In place of the old live feed: just this item's last few prices, newest first.
+        List<Trade> recent = market.trades().recentFor(itemId, 8);
+        StringBuilder line = new StringBuilder(recent.isEmpty() ? "No trades yet" : "Recent trades:");
+        for (int i = recent.size() - 1; i >= 0; i--) line.append(' ').append(recent.get(i).price);
+        label(m, trim(line.toString(), right - x), x, panelBottom() - 9, 0x808080);
+    }
+
+    private void quickRow(DrawContext m, int which, String what, long price, String sub, int colour,
+                          int mouseX, int mouseY) {
+        int[] r = quickRowRect(which);
+        boolean live = price != MarketView.NONE;
+        boolean hot = live && within(mouseX, mouseY, r);
+        if (hot) m.fill(r[0], r[1], r[0] + r[2], r[1] + r[3], 0x28FFFFFF);
+        int x = itemX(), right = itemRight();
+        label(m, what, x, r[1] + 2, live ? colour : 0x808080);
+        if (live) labelRight(m, price + " each", right, r[1] + 2, colour);
+        label(m, trim(sub, right - x), x, r[1] + 12, 0x808080);
+        if (hot) hoverTip = which == 0 ? "Buy at this price" : "Sell at this price";
+    }
+
+    private void renderItemAdvanced(DrawContext m, MarketState market, UUID me, String itemId,
+                                    MarketView.ItemRow row, int mouseX, int mouseY) {
+        int x = itemX(), right = itemRight();
+        MarketView.Stats st = cached("stats|" + itemId,
+                () -> MarketView.stats(market, itemId, System.currentTimeMillis()));
+
+        // The chart: every trade the figures cover, oldest on the left.
+        int cy = chartTop(), ch = chartHeight(), cw = right - x;
+        m.fill(x, cy, right, cy + ch, 0x30000000);
+        List<Trade> trades = st.trades.size() > 80 ? st.trades.subList(st.trades.size() - 80, st.trades.size()) : st.trades;
+        if (trades.isEmpty()) {
+            label(m, "No trades yet", x + 4, cy + ch / 2 - 4, 0x808080);
+        } else {
+            drawPriceLine(m, trades, x + 1, cy + 2, cw - 2, ch - 4, st.low, st.high);
+            label(m, String.valueOf(st.high), x + 2, cy + 1, 0x707070);
+            label(m, String.valueOf(st.low), x + 2, cy + ch - 9, 0x707070);
+        }
+
+        // The figures behind the market price.
+        String figures = trades.isEmpty() ? "" : "low " + st.low + " · high " + st.high
+                + " · " + st.volume + " traded " + (st.lastDay ? "today" : "lately")
+                + (st.spread == MarketView.NONE ? "" : " · gap " + st.spread);
+        label(m, trim(figures, cw), x, figuresY(), 0x909090);
+        if (!figures.isEmpty() && mouseX >= x && mouseX < right && mouseY >= figuresY() && mouseY < figuresY() + 10) {
+            hoverTip = "Over " + (st.lastDay ? "the last day" : "the trades this market remembers")
+                    + ". The gap is between the cheapest seller and the best buyer.";
+        }
+
+        // The book in full, grouped by price.
+        MarketView.Depth depth = depthCached(itemId, levelsThatFit());
+        int half = cw / 2;
+        int top = depthTop();
+        label(m, "For sale", x, top - 11, 0xFF8888);
+        label(m, "Wanted", x + half, top - 11, 0x88FF88);
+        if (depth.asks.isEmpty() && depth.bids.isEmpty()) {
+            label(m, trim("No orders yet. Be the first.", cw), x, top, 0x808080);
+        } else {
+            drawLevels(m, depth.asks, x, top, half - 4, 0xFF8888, mouseX, mouseY);
+            drawLevels(m, depth.bids, x + half, top, half - 4, 0x88FF88, mouseX, mouseY);
+        }
+    }
+
+    /** A line through the trade prices, drawn as steps since the font-sized grid has no diagonals. */
+    private void drawPriceLine(DrawContext m, List<Trade> trades, int x, int y, int w, int h, long low, long high) {
+        double span = Math.max(1.0, (double) high - low);
+        int n = trades.size();
+        int prevX = -1, prevY = -1;
+        for (int i = 0; i < n; i++) {
+            int px = n == 1 ? x + w / 2 : x + (int) ((long) i * (w - 1) / (n - 1));
+            int py = y + h - 1 - (int) Math.round((trades.get(i).price - low) / span * (h - 1));
+            if (prevX < 0) {
+                m.fill(px, py, px + 1, py + 1, 0xFF55CCFF);
+            } else {
+                m.fill(prevX, prevY, px + 1, prevY + 1, 0xFF55CCFF);
+                m.fill(px, Math.min(prevY, py), px + 1, Math.max(prevY, py) + 1, 0xFF55CCFF);
+            }
+            prevX = px;
+            prevY = py;
+        }
+    }
+
+    private void drawLevels(DrawContext m, List<MarketView.Level> levels, int x, int top, int w,
+                            int colour, int mouseX, int mouseY) {
+        int y = top;
+        for (MarketView.Level l : levels) {
+            boolean hot = mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + LEVEL_H;
+            if (hot) m.fill(x - 2, y - 1, x + w, y + LEVEL_H - 1, 0x30FFFFFF);
+            label(m, trim(l.volume + " at " + l.price + (l.yours ? " *" : ""), w), x, y, colour);
+            if (hot) {
+                hoverTip = l.volume + " at " + l.price + " from " + l.orders
+                        + (l.orders == 1 ? " order" : " orders") + (l.yours ? ", one of them yours" : "")
+                        + ". Click to use this price.";
+            }
+            y += LEVEL_H;
+        }
+    }
+
+    /** The price level a click landed on: {price, 1 if it is a seller's level, 0 for a buyer's}, or null. */
+    private long[] levelAt(double mouseX, double mouseY) {
+        if (activeScreen != SCREEN_ITEM || !itemAdvanced) return null;
+        MarketState market = MarketStateHolder.get();
+        String itemId = selectedItemId();
+        if (market == null || itemId == null) return null;
+        int x = itemX(), half = (itemRight() - x) / 2, top = depthTop();
+        if (mouseY < top) return null;
+        int index = (int) ((mouseY - top) / LEVEL_H);
+        MarketView.Depth depth = depthCached(itemId, levelsThatFit());
+        if (mouseX >= x && mouseX < x + half - 4 && index < depth.asks.size()) {
+            return new long[]{depth.asks.get(index).price, 1};
+        }
+        if (mouseX >= x + half && mouseX < x + half * 2 - 4 && index < depth.bids.size()) {
+            return new long[]{depth.bids.get(index).price, 0};
+        }
+        return null;
+    }
+
+    /** How many of an item the player is carrying, counted the way the carrying list counts it. */
+    private static long carried(Item item) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null || item == null) return 0;
+        long n = 0;
+        for (InventoryBridge.Holding h : InventoryBridge.held(mc.player).items) {
+            if (h.item == item) n += h.count;
+        }
+        return n;
+    }
+
+    // ─── the order form ───
+
+    private int[] modeRect(int mode) {
+        int w = formW / MODE_NAMES.length;
+        return new int[]{formX + mode * w, amountField.getY() - 18, w - 2, 14};
+    }
+
+    private void renderOrderForm(DrawContext m, MarketState market, String itemId, int mouseX, int mouseY) {
+        for (int i = 0; i < MODE_NAMES.length; i++) {
+            int[] r = modeRect(i);
+            boolean here = i == itemMode;
+            boolean hot = !here && within(mouseX, mouseY, r);
+            // The chosen one a lighter black than the others; nothing else needed.
+            m.fill(r[0], r[1], r[0] + r[2], r[1] + r[3], here ? 0xFF2C2C2C : hot ? 0xFF1A1A1A : 0xFF0E0E0E);
+            Draw.centered(m, this.textRenderer, Text.literal(MODE_NAMES[i]), r[0] + r[2] / 2, r[1] + 3,
+                    here ? 0xFFFFFF : hot ? 0xD0D0D0 : 0x808080);
+        }
+
+        label(m, "Amount", formX, amountField.getY() + 6, 0xC0C0C0);
+        if (itemMode != MODE_WITHDRAW) label(m, "Price each", formX, priceField.getY() + 6, 0xC0C0C0);
+
+        int y = priceField.getY() + 24;
+        for (Object[] line : quoteLines(market, itemId)) {
+            if (y + 9 > placeButton.getY() - 2) break;
+            label(m, trim((String) line[0], formW), formX, y, (Integer) line[1]);
+            y += 10;
+        }
+    }
+
+    /**
+     * What the order on the form would do, as up to three lines of {text, colour}.
+     *
+     * Worked out before it is sent, from this copy of the market: what it costs, what is
+     * charged for it, and whether it trades now or waits. The host still decides; this is
+     * so pressing the button is never a guess.
+     */
+    private List<Object[]> quoteLines(MarketState market, String itemId) {
+        List<Object[]> out = new ArrayList<>();
+        if (market == null || itemId == null) return out;
+        UUID me = myId();
+        long amount = parsePositive(amountField.getText());
+
+        if (itemMode == MODE_WITHDRAW) {
+            long inMarket = me == null ? 0 : market.itemBalances().getBalance(me, itemId);
+            out.add(new Object[]{"You have " + inMarket + " in your item-wallet", 0xC0C0C0});
+            out.add(amount > inMarket
+                    ? new Object[]{"That is more than you have there", 0xFF6666}
+                    : new Object[]{"Moves them to your inventory", 0x808080});
+            return out;
+        }
+
+        long price = parsePositive(priceField.getText());
+        if (amount <= 0 || price <= 0) {
+            out.add(new Object[]{"Type an amount and a price", 0x808080});
+            return out;
+        }
+        boolean buying = itemMode == MODE_BUY;
+        MarketView.Quote q = cached("quote|" + itemId + "|" + buying + "|" + price + "|" + amount,
+                () -> MarketView.quote(market, me, itemId, buying, price, amount));
+        if (!q.sensible) {
+            out.add(new Object[]{"Those numbers are too large", 0xFF6666});
+            return out;
+        }
+
+        if (buying) {
+            out.add(new Object[]{"Costs " + q.total + " credits"
+                    + (q.listingFee > 0 ? " + " + q.listingFee + " to list" : ""),
+                    q.affordable ? 0xC0C0C0 : 0xFF6666});
+            if (!q.affordable) {
+                out.add(new Object[]{"You have " + market.wallets().getBalance(me) + " credits", 0xFF6666});
+            }
+        } else {
+            long fees = q.tradingFee + q.listingFee;
+            out.add(new Object[]{"Earns " + (q.total - q.tradingFee) + " credits"
+                    + (fees > 0 ? " after " + fees + " in fees" : ""), 0xC0C0C0});
+            long carrying = carried(MinecraftIds.idToItem(itemId));
+            if (carrying < amount) {
+                out.add(new Object[]{"You are carrying " + carrying, 0xFF6666});
+            } else if (!q.affordable) {
+                out.add(new Object[]{"Listing costs " + q.listingFee + ", you have "
+                        + market.wallets().getBalance(me), 0xFF6666});
+            }
+        }
+
+        String fills = q.fillsNow <= 0 ? "Waits on the book until it matches"
+                : q.fillsNow >= amount ? "Trades straight away"
+                : q.fillsNow + " trade now, " + (amount - q.fillsNow) + " wait";
+        out.add(new Object[]{fills, q.fillsNow > 0 ? 0x88FF88 : 0x808080});
+        return out.size() > 3 ? out.subList(0, 3) : out;
+    }
+
+    private static long parsePositive(String text) {
+        try {
+            long v = Long.parseLong(text.trim());
+            return v > 0 ? v : 0;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private boolean itemViewClicked(double mouseX, double mouseY) {
+        if (activeScreen != SCREEN_ITEM) return false;
+        if (within(mouseX, mouseY, backRect())) {
+            selectScreen(itemOpenedFrom);
+            return true;
+        }
+        if (selectedItemId() != null && within(mouseX, mouseY, advancedToggleRect())) {
+            itemAdvanced = !itemAdvanced;
+            return true;
+        }
+        if (!itemAdvanced && MarketStateHolder.get() != null && selectedItemId() != null) {
+            MarketView.ItemRow row = rowCached(selectedItemId());
+            for (int which = 0; which < 2; which++) {
+                long price = which == 0 ? row.buyNow : row.sellNow;
+                if (price != MarketView.NONE && within(mouseX, mouseY, quickRowRect(which))) {
+                    itemMode = which == 0 ? MODE_BUY : MODE_SELL;
+                    priceField.setText(String.valueOf(price));
+                    return true;
+                }
+            }
+        }
+        for (int i = 0; i < MODE_NAMES.length; i++) {
+            if (within(mouseX, mouseY, modeRect(i))) {
+                setMode(i);
+                return true;
+            }
+        }
+        long[] level = levelAt(mouseX, mouseY);
+        if (level != null) {
+            // A seller's price is one you can buy at, and a buyer's one you can sell at.
+            itemMode = level[1] == 1 ? MODE_BUY : MODE_SELL;
+            priceField.setText(String.valueOf(level[0]));
+            return true;
+        }
+        return false;
+    }
+
+    // ─────────── Your orders ───────────
+    //
+    // Everything you have open, each with its own cancel, and — straight after moving
+    // markets — the orders from the market you left, ready to place again. Those used to
+    // sit in a box laid over whichever column was third on the screen; they are a list of
+    // your orders, so this is where they live now, with an alert pointing here.
+
+    private static final int OE_REPLACE_HEADER = 0;
+    private static final int OE_REPLACE = 1;
+    private static final int OE_HEADER = 2;
+    private static final int OE_ORDER = 3;
+    private static final int OE_NOTE = 4;
+
+    /** One line of the orders list, where it sits, and what it is about. */
+    private static final class OrdersEntry {
+        final int kind;
+        final int y;
+        final int h;
+        final Object about;
+
+        OrdersEntry(int kind, int y, int h, Object about) {
+            this.kind = kind;
+            this.y = y;
+            this.h = h;
+            this.about = about;
+        }
+    }
+
+    private int ordersX() { return listX + 6; }
+    private int ordersRight() { return listX + contentW - 6; }
+    private int ordersTop() { return panelTop() + 1; }
+
+    /**
+     * The orders list laid out, scroll included.
+     *
+     * Both the drawing and the click test walk this, which is the only reason they cannot
+     * disagree about where a row is — every drifted hit test this file has had came from
+     * the two keeping their own copies of the walk.
+     */
+    private List<OrdersEntry> ordersLayout() {
+        List<OrdersEntry> out = new ArrayList<>();
+        int y = ordersTop() - scrollOf("orders");
+        List<MarketStateHolder.OldOrder> old = MarketStateHolder.pendingReplace();
+        if (!old.isEmpty()) {
+            out.add(new OrdersEntry(OE_REPLACE_HEADER, y, 12, null));
+            y += 12;
+            for (MarketStateHolder.OldOrder o : old) {
+                out.add(new OrdersEntry(OE_REPLACE, y, ROW_H, o));
+                y += ROW_H;
+            }
+            y += 6;
+        }
+        out.add(new OrdersEntry(OE_HEADER, y, 12, null));
+        y += 12;
+        MarketState market = MarketStateHolder.get();
+        List<Order> mine = yourOrdersCached();
+        if (mine.isEmpty()) {
+            out.add(new OrdersEntry(OE_NOTE, y, 12, "You have no open orders. Place one from an item in Browse."));
+        }
+        for (Order o : mine) {
+            out.add(new OrdersEntry(OE_ORDER, y, ROW_H, o));
+            y += ROW_H;
+        }
+        return out;
+    }
+
+    private int ordersContentHeight(List<OrdersEntry> entries) {
+        if (entries.isEmpty()) return 0;
+        OrdersEntry last = entries.get(entries.size() - 1);
+        return last.y + last.h + scrollOf("orders") - ordersTop();
+    }
+
+    private boolean ordersVisible(OrdersEntry e) {
+        return e.y >= ordersTop() && e.y + e.h <= panelBottom();
+    }
+
+    /** The cancel box at the right end of an order's row. */
+    private int[] cancelRect(OrdersEntry e) {
+        return new int[]{ordersRight() - 12, e.y + 4, 12, 12};
+    }
+
+    private void renderYourOrders(DrawContext m, int mouseX, int mouseY) {
+        MarketState market = MarketStateHolder.get();
+        List<OrdersEntry> entries = ordersLayout();
+        int x = ordersX(), right = ordersRight(), w = right - x;
+        noteScrollable("orders", listX, frameTop(), contentW, frameH(), panelBottom() - ordersTop(),
+                ordersContentHeight(entries), mouseX, mouseY);
+        scrollbar(m, "orders", right + 3, ordersTop(), panelBottom() - ordersTop(), ordersContentHeight(entries));
+
+        for (OrdersEntry e : entries) {
+            if (!ordersVisible(e)) continue;
+            boolean hot = mouseX >= x && mouseX < right && mouseY >= e.y && mouseY < e.y + e.h;
+            switch (e.kind) {
+                case OE_REPLACE_HEADER: {
+                    label(m, trim("From the market you left: click one to place it again", w - 50), x, e.y, 0xFFDD66);
+                    labelRight(m, "dismiss", right, e.y, hot ? 0xFFFFFF : 0xFFDD66);
+                    break;
+                }
+                case OE_REPLACE: {
+                    MarketStateHolder.OldOrder o = (MarketStateHolder.OldOrder) e.about;
+                    rowGround(m, x, e.y, right, hot);
+                    rowIcon(m, o.itemId, x, e.y);
+                    label(m, trim((o.isBid ? "Buy " : "Sell ") + o.volume + " " + shortName(o.itemId)
+                            + " at " + o.price, w - 26), x + 20, e.y + 2, 0x88CCFF);
+                    // What the same order would meet here, so placing it again at the old
+                    // price is a decision rather than a guess.
+                    String here = "";
+                    OrderBook book = market == null ? null : market.peekBook(o.itemId);
+                    if (book != null) {
+                        List<Order> other = o.isBid ? book.restingAsks() : book.restingBids();
+                        if (!other.isEmpty()) here = (o.isBid ? "best ask here " : "best bid here ") + other.get(0).value();
+                    }
+                    if (!here.isEmpty()) label(m, trim(here, w - 26), x + 20, e.y + 11, 0x808080);
+                    break;
+                }
+                case OE_HEADER: {
+                    int count = yourOrdersCached().size();
+                    label(m, "Your open orders (" + count + ")", x, e.y, ACCENT);
+                    if (market != null && market.listingFee() > 0) {
+                        labelRight(m, trim("cancelling keeps the listing fee", w / 2), right, e.y, 0x707070);
+                    }
+                    break;
+                }
+                case OE_NOTE: {
+                    label(m, trim((String) e.about, w), x, e.y, 0x808080);
+                    break;
+                }
+                default: {
+                    Order o = (Order) e.about;
+                    int[] c = cancelRect(e);
+                    boolean cancelHot = within(mouseX, mouseY, c);
+                    rowGround(m, x, e.y, right, hot && !cancelHot);
+                    rowIcon(m, o.itemID(), x, e.y);
+                    label(m, trim((o.isBid() ? "Buy " : "Sell ") + o.volume() + " " + shortName(o.itemID())
+                            + " at " + o.value(), w - 44), x + 20, e.y + 2, o.isBid() ? 0x88FF88 : 0xFF8888);
+                    MarketView.ItemRow row = market == null ? null : rowCached(o.itemID());
+                    String sub = row == null ? "" : o.isBid()
+                            ? "lowest seller " + MarketView.price(row.buyNow)
+                            : "highest buyer " + MarketView.price(row.sellNow);
+                    label(m, trim(sub, w - 44), x + 20, e.y + 11, 0x808080);
+                    m.fill(c[0], c[1], c[0] + c[2], c[1] + c[3], cancelHot ? 0xC0AA2222 : 0x60000000);
+                    Draw.centered(m, this.textRenderer, Text.literal("x"), c[0] + c[2] / 2, c[1] + 2,
+                            cancelHot ? 0xFFFFFF : 0xFF8888);
+                    if (cancelHot) hoverTip = "Cancel this order";
+                    break;
+                }
+            }
+        }
+    }
+
+    private boolean ordersClicked(double mouseX, double mouseY) {
+        if (activeScreen != SCREEN_ORDERS) return false;
+        int x = ordersX(), right = ordersRight();
+        if (mouseX < x || mouseX >= right) return false;
+        for (OrdersEntry e : ordersLayout()) {
+            if (!ordersVisible(e) || mouseY < e.y || mouseY >= e.y + e.h) continue;
+            switch (e.kind) {
+                case OE_REPLACE_HEADER:
+                    if (mouseX >= right - this.textRenderer.getWidth("dismiss") - 4) {
+                        MarketStateHolder.clearPendingReplace();
+                        status = "Dismissed — your balance is unaffected";
+                    }
+                    return true;
+                case OE_REPLACE:
+                    replaceOrder((MarketStateHolder.OldOrder) e.about);
+                    return true;
+                case OE_ORDER: {
+                    Order o = (Order) e.about;
+                    if (within(mouseX, mouseY, cancelRect(e))) {
+                        cancelOrder(o);
+                    } else {
+                        openItem(MinecraftIds.idToItem(o.itemID()), o.isBid() ? MODE_BUY : MODE_SELL);
+                    }
+                    return true;
+                }
+                default:
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    // ─────────── History ───────────
+    //
+    // Your own trades only, newest first. The rest of the market's activity is in each
+    // item's prices; a feed of everybody's orders was what made the old screen a blur.
+
+    private static final int HISTORY_LIMIT = 200;
+
+    /** Below the profit line. */
+    private int historyTop() { return panelTop() + 1 + 14; }
+
+    private List<MarketView.YourTrade> historyRows() {
+        MarketState market = MarketStateHolder.get();
+        return market == null ? Collections.<MarketView.YourTrade>emptyList()
+                : cached("trades", () -> MarketView.yourTrades(market, myId(), HISTORY_LIMIT));
+    }
+
+    private void renderHistory(DrawContext m, int mouseX, int mouseY) {
+        MarketState market = MarketStateHolder.get();
+        int x = listX + 6, right = listX + contentW - 6, w = right - x;
+
+        // Your profit: what selling has locked in, and what you hold is worth over its cost.
+        if (market != null) {
+            MarketView.Pnl pnl = cached("pnl", () -> MarketView.pnl(market, myId(), System.currentTimeMillis()));
+            int py = panelTop() + 1;
+            String locked = "Profit " + MarketView.signed(pnl.realized);
+            label(m, locked, x, py, pnlColour(pnl.realized));
+            String open = "· " + MarketView.signed(pnl.open) + " on what you hold";
+            label(m, trim(open, w - this.textRenderer.getWidth(locked) - 6),
+                    x + this.textRenderer.getWidth(locked) + 6, py, 0x909090);
+            if (mouseX >= x && mouseX < right && mouseY >= py && mouseY < py + 10) {
+                hoverTip = "Profit: what you have made by selling, after fees and after what those"
+                        + " goods cost you. Things you deposited yourself count as costing nothing."
+                        + "\nOn what you hold: what your unsold goods are worth now, minus what you"
+                        + " paid for them.";
+            }
+        }
+
+        List<MarketView.YourTrade> rows = historyRows();
+        int top = historyTop();
+        if (rows.isEmpty()) {
+            label(m, "You have not traded here yet.", x, top, 0x808080);
+            return;
+        }
+
+        int viewH = panelBottom() - top;
+        noteScrollable("history", x, top, w, viewH, rows.size() * ROW_H, mouseX, mouseY);
+        scrollbar(m, "history", right + 3, top, viewH, rows.size() * ROW_H);
+        int y = top - scrollOf("history");
+        long now = System.currentTimeMillis();
+        beginClip(m, x - 2, top, w + 4, viewH);
+        for (MarketView.YourTrade t : rows) {
+            boolean hot = mouseX >= x && mouseX < right && mouseY >= y && mouseY < y + ROW_H
+                    && mouseY >= top && mouseY < top + viewH;
+            rowGround(m, x, y, right, hot);
+            rowIcon(m, t.trade.itemId, x, y);
+            label(m, trim((t.bought ? "Bought " : "Sold ") + t.trade.quantity + " "
+                    + shortName(t.trade.itemId) + " at " + t.trade.price, w - 26),
+                    x + 20, y + 2, t.bought ? 0x88FF88 : 0xFF8888);
+
+            String value;
+            try {
+                value = Math.multiplyExact(t.trade.price, t.trade.quantity) + " credits";
+            } catch (ArithmeticException tooBig) {
+                value = "a vast sum";
+            }
+            UUID other = t.bought ? t.trade.sellerId : t.trade.buyerId;
+            String who = market != null && market.isBot(other)
+                    ? (t.bought ? " · from " : " · to ") + market.botName(other) : "";
+            label(m, trim(value + " · " + MarketView.ago(t.trade.timestamp, now) + who, w - 26),
+                    x + 20, y + 11, 0x808080);
+            y += ROW_H;
+        }
+        endClip(m);
+    }
+
+    // ─────────── Leaderboard ───────────
+    //
+    // Everyone in this market, best profit first. Profit here is what selling has locked in,
+    // less listing fees; the grey figure beside it is what they still hold, over its cost.
+    // Every copy of the market works these out from the same log, so this list is the same
+    // for everybody who looks.
+
+    private int leaderTop() { return panelTop() + 12; }
+
+    /**
+     * A name for an identity: you, a bot by the name the market gives it, a player in this
+     * world, a host this game has met, or the start of their id. The log records keys, not
+     * names, so somebody nobody here has seen can only be shown by their id.
+     */
+    private String nameOf(UUID id) {
+        if (id == null) return "?";
+        if (id.equals(myId())) return "You";
+        MarketState market = MarketStateHolder.get();
+        if (market != null && market.isBot(id)) return market.botName(id);
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world != null) {
+            for (net.minecraft.entity.player.PlayerEntity p : mc.world.getPlayers()) {
+                if (id.equals(MinecraftIds.userIdOf(p))) return p.getName().getString();
+            }
+        }
+        PeerCache peers = MarketStateHolder.peers();
+        if (peers != null) {
+            for (PeerCache.Peer peer : peers.all()) {
+                if (id.toString().equals(peer.userId) && peer.displayName != null && !peer.displayName.isEmpty()) {
+                    return peer.displayName;
+                }
+            }
+        }
+        return "Player " + id.toString().substring(0, 6);
+    }
+
+    private void renderLeaderboard(DrawContext m, int mouseX, int mouseY) {
+        MarketState market = MarketStateHolder.get();
+        int x = listX + 6, right = listX + contentW - 6, top = leaderTop();
+        if (market == null) return;
+        List<MarketView.Pnl> board = cached("leaders",
+                () -> MarketView.leaderboard(market, System.currentTimeMillis()));
+        if (board.isEmpty()) {
+            label(m, "Nobody has traded here yet.", x, top, 0x808080);
+            return;
+        }
+
+        int openR = right, profitR = openR - 64;
+        label(m, "Trader", x + 22, top - 11, 0x808080);
+        labelRight(m, "Profit", profitR, top - 11, 0x808080);
+        labelRight(m, "Holding", openR, top - 11, 0x808080);
+        if (mouseY >= top - 11 && mouseY < top - 1 && mouseX >= profitR - 60 && mouseX < right) {
+            hoverTip = "Profit: what they have made by selling, after fees and after what those"
+                    + " goods cost them."
+                    + "\nHolding: what their unsold goods are worth now, minus what they paid for them.";
+        }
+
+        int viewH = panelBottom() - top;
+        noteScrollable("leaders", x, top, right - x, viewH, board.size() * 12, mouseX, mouseY);
+        scrollbar(m, "leaders", right + 3, top, viewH, board.size() * 12);
+        int y = top - scrollOf("leaders");
+        UUID me = myId();
+        beginClip(m, x - 4, top, right - x + 8, viewH);
+        for (int i = 0; i < board.size(); i++) {
+            MarketView.Pnl p = board.get(i);
+            boolean mine = p.who.equals(me);
+            if (mine) m.fill(x - 4, y - 1, right + 4, y + 11, 0x284CD07A);
+            labelRight(m, "#" + (i + 1), x + 18, y + 1, 0x707070);
+            label(m, trim(nameOf(p.who), profitR - 60 - x - 22), x + 22, y + 1, mine ? 0xFFFFFF : 0xC0C0C0);
+            labelRight(m, MarketView.signed(p.realized), profitR, y + 1, pnlColour(p.realized));
+            labelRight(m, MarketView.signed(p.open), openR, y + 1, 0x909090);
+            y += 12;
+        }
+        endClip(m);
+    }
+
+    private boolean historyClicked(double mouseX, double mouseY) {
+        if (activeScreen != SCREEN_HISTORY) return false;
+        int top = historyTop();
+        if (mouseX < listX + 6 || mouseX >= listX + contentW - 6 || mouseY < top || mouseY >= panelBottom()) {
+            return false;
+        }
+        List<MarketView.YourTrade> rows = historyRows();
+        int index = (int) ((mouseY - top + scrollOf("history")) / ROW_H);
+        if (index < 0 || index >= rows.size()) return false;
+        MarketView.YourTrade t = rows.get(index);
+        openItem(MinecraftIds.idToItem(t.trade.itemId), t.bought ? MODE_SELL : MODE_BUY);
+        return true;
     }
 
     private void label(DrawContext m, String s, int x, int y, int colour) {
@@ -4085,6 +4530,51 @@ public class MarketScreen extends Screen {
         if (item == null || item == Items.AIR) return;
         itemField.setText(MinecraftIds.itemToId(item));
         scrollOffsets.put("book", 0);   // a different item, a different book
+    }
+
+    // ─────────── the item view ───────────
+
+    private static final int MODE_BUY = 0;
+    private static final int MODE_SELL = 1;
+    private static final int MODE_WITHDRAW = 2;
+    private static final String[] MODE_NAMES = {"Buy", "Sell", "Withdraw"};
+
+    /** Static like the screen: coming back to an item finds the form as you left it. */
+    private static int itemMode = MODE_BUY;
+
+    /**
+     * Opens an item's view, ready to buy or to sell it.
+     *
+     * The price is filled in with what would trade straight away — the lowest ask to buy,
+     * the highest bid to sell — or the last price when that side is empty, so the common
+     * case is typing an amount and pressing the button. An existing amount is left alone.
+     */
+    private void openItem(Item item, int mode) {
+        if (item == null || item == Items.AIR) return;
+        selectItem(item);
+        setMode(mode);
+        selectScreen(SCREEN_ITEM);
+    }
+
+    private void setMode(int mode) {
+        itemMode = mode;
+        if (mode == MODE_WITHDRAW) return;
+        MarketState market = MarketStateHolder.get();
+        Item item = MinecraftIds.itemFromName(itemField.getText().trim());
+        if (market == null || item == Items.AIR) return;
+        MarketView.ItemRow row = rowCached(MinecraftIds.itemToId(item));
+        long suggested = mode == MODE_BUY ? row.buyNow : row.sellNow;
+        if (suggested == MarketView.NONE) suggested = row.last;
+        if (suggested != MarketView.NONE && suggested > 0) {
+            priceField.setText(String.valueOf(suggested));
+        }
+    }
+
+    /** The one button on the order form, doing whatever the switch above it says. */
+    private void onPlace() {
+        if (itemMode == MODE_SELL) onSell();
+        else if (itemMode == MODE_WITHDRAW) onWithdraw();
+        else onBuy();
     }
 
     // ─────────── settings widgets ───────────
@@ -4380,7 +4870,7 @@ public class MarketScreen extends Screen {
         m.fill(0, 0, this.width, this.height, 0xE0101010);
 
         int[] box = pickerBox();
-        vanillaPanel(m, box[0], box[1], box[2], box[3]);
+        darkBox(m, box[0], box[1], box[2], box[3]);
 
         label(m, "Pick an item", box[0] + 8, box[1] + 8, 0xFFAA00);
 
@@ -4450,8 +4940,8 @@ public class MarketScreen extends Screen {
     private boolean pickerClicked(double mouseX, double mouseY) {
         Item chosen = pickerItemAt(mouseX, mouseY);
         if (chosen != null) {
-            selectItem(chosen);
             pickerOpen = false;
+            openItem(chosen, MODE_BUY);
         } else if (!within(mouseX, mouseY, pickerBox())) {
             pickerOpen = false;   // clicking away cancels
         }
@@ -4459,85 +4949,6 @@ public class MarketScreen extends Screen {
     }
 
     // ─────────── chrome ───────────
-
-    /**
-     * The one strip that is the same wherever you are: what this client is doing, what
-     * you're worth, and the way out to everything else.
-     */
-    private void renderHeader(DrawContext m) {
-        Draw.centered(m, this.textRenderer, this.title, this.width / 2, 8, 0xFFFFFF);
-
-        renderConnectionStatus(m, 8, 8);
-
-        MinecraftClient mc = MinecraftClient.getInstance();
-        MarketState market = MarketStateHolder.get();
-        if (mc.player != null && market != null) {
-            UUID me = MinecraftIds.userIdOf(mc.player);
-
-            // An emerald marks the money, and only the money. Putting the item's own
-            // icon beside the second line made two icons compete when only one of them
-            // was saying anything the words did not already say.
-            drawIcon(m, new ItemStack(Items.EMERALD), 8, 16, null);
-            label(m, "Credits: " + market.wallets().getBalance(me), 28, 20, 0xFFFF88);
-
-            // Only where an item is selected and the number means something.
-            if (activeScreen == SCREEN_TRADING) {
-                Item item = MinecraftIds.itemFromName(itemField.getText().trim());
-                if (item != Items.AIR) {
-                    long held = market.itemBalances()
-                            .getBalance(me, MinecraftIds.itemToId(item));
-                    label(m, item.getName().getString() + " market credit: " + held,
-                            28, 32, 0xFFFF88);
-                }
-            }
-        }
-    }
-
-    /**
-     * The tab row.
-     *
-     * Vanilla's tabs bleed into the panel below to read as joined to it, which works
-     * because there is one panel under them. There are three here with gaps between, so
-     * a bleeding tab would as often as not run into empty space — the current tab is
-     * raised and lit instead, which says the same thing without depending on what
-     * happens to be underneath it.
-     */
-    private void renderTabs(DrawContext m, int mouseX, int mouseY) {
-        for (int i = 0; i < SCREEN_NAMES.length; i++) {
-            int[] r = tabRect(i);
-            boolean here = i == activeScreen;
-            boolean hot = !here && within(mouseX, mouseY, r);
-
-            // The inactive ones sit lower, so the current one reads as standing forward
-            // of the row rather than merely being a different colour in it.
-            int top = here ? r[1] : r[1] + 2;
-            int bottom = r[1] + r[3];
-            int right = r[0] + r[2];
-
-            m.fill(r[0], top, right, bottom, here ? PANEL_BG : 0xC0080008);
-
-            m.fillGradient(r[0], top, r[0] + 1, bottom, PANEL_EDGE_TOP, PANEL_EDGE_BOTTOM);
-            m.fillGradient(right - 1, top, right, bottom, PANEL_EDGE_TOP, PANEL_EDGE_BOTTOM);
-            m.fillGradient(r[0], top, right, top + 1, PANEL_EDGE_TOP, PANEL_EDGE_TOP);
-            m.fillGradient(r[0], bottom - 1, right, bottom,
-                    PANEL_EDGE_BOTTOM, PANEL_EDGE_BOTTOM);
-
-            Draw.centered(m, this.textRenderer, Text.literal(SCREEN_NAMES[i]),
-                    r[0] + r[2] / 2, top + (bottom - top - 8) / 2,
-                    here ? 0xFFAA00 : (hot ? 0xFFFFFF : 0x909090));
-        }
-    }
-
-    /** Returns true if the click landed on a tab. */
-    private boolean tabsClicked(double mouseX, double mouseY) {
-        for (int i = 0; i < SCREEN_NAMES.length; i++) {
-            if (within(mouseX, mouseY, tabRect(i))) {
-                selectScreen(i);
-                return true;
-            }
-        }
-        return false;
-    }
 
     // ─────────── overlays ───────────
 
@@ -4692,7 +5103,7 @@ public class MarketScreen extends Screen {
         // Vanilla's own severity colours: red for destructive, yellow for a choice.
         int accent = o.kind == Overlay.DANGER ? 0xFFFF5555 : 0xFFFFAA00;
 
-        vanillaPanel(m, box[0], box[1], box[2], box[3]);
+        darkBox(m, box[0], box[1], box[2], box[3]);
 
         int y = box[1] + OVERLAY_PAD;
         label(m, o.title, box[0] + OVERLAY_PAD, y, accent);
@@ -4817,6 +5228,18 @@ public class MarketScreen extends Screen {
                 pickerQuery = pickerQuery.substring(0, pickerQuery.length() - 1);
                 scrollOffsets.put("picker", 0);
             }
+            return true;
+        }
+
+        if (menuOpen && keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
+            menuOpen = false;
+            return true;
+        }
+
+        // Out of an item's view, Escape steps back to the list it came from rather than
+        // closing the market — the same way out of a nested view the rest of the game uses.
+        if (activeScreen == SCREEN_ITEM && keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
+            selectScreen(itemOpenedFrom);
             return true;
         }
 
