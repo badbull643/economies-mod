@@ -25,7 +25,10 @@ import java.util.UUID;
 @SuppressWarnings("UnstableApiUsage")
 public class MarketScreensGameTest implements FabricClientGameTest {
 
-    private static final String[] TABS = {"info", "trading", "network", "market", "settings"};
+    // In MarketScreen's SCREEN_ order. "item" is one item's view, reached from Browse.
+    private static final String[] TABS = {"browse", "sell", "orders", "history", "leaderboard",
+            "network", "market", "settings", "item"};
+    private static final int BROWSE = 0, MARKET = 6, ITEM = 8;
 
     @Override
     public void runTest(ClientGameTestContext context) {
@@ -40,23 +43,30 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             context.getInput().pressKey(InputConstants.KEY_ESCAPE);
             context.waitTicks(5);
 
-            // A tab chosen by clicking it, as a player does. Every other step here picks the tab
-            // through a field, and that never once exercised the click — which is how 26.x
-            // numbering mouse buttons from 1 left every tab dead without this test noticing.
-            openTab(context, 0);
-            int[] tradingTab = context.computeOnClient(client -> tabRect(client.gui.screen(), 1));
-            clickAt(context, tradingTab[0] + tradingTab[2] / 2.0, tradingTab[1] + tradingTab[3] / 2.0);
-            int shown = context.computeOnClient(client -> activeTab());
-            if (shown != 1) throw new AssertionError("clicking the Trading tab left tab " + shown + " showing");
-
             // Every tab of the market screen, before any market exists.
             for (int i = 0; i < TABS.length; i++) {
                 openTab(context, i);
                 context.takeScreenshot("02-no-market-" + TABS[i]);
             }
 
+            // A view chosen by clicking the menu, as a player does. Every other step here picks
+            // the view through a field, and that never once exercised the click — which is how
+            // 26.x numbering mouse buttons from 1 left every tab dead without this test noticing.
+            openTab(context, BROWSE);
+            int[] menuButton = context.computeOnClient(client -> rect(client.gui.screen(), "menuButtonRect"));
+            clickAt(context, menuButton[0] + menuButton[2] / 2.0, menuButton[1] + menuButton[3] / 2.0);
+            boolean menuShown = context.computeOnClient(client -> (Boolean) field(client.gui.screen(), "menuOpen"));
+            if (!menuShown) throw new AssertionError("clicking the menu button did not open the menu");
+            int[] historyEntry = context.computeOnClient(client -> {
+                int[] menu = rect(client.gui.screen(), "menuRect");
+                return new int[]{menu[0], entryY(client.gui.screen(), 3), menu[2], 12};
+            });
+            clickAt(context, historyEntry[0] + historyEntry[2] / 2.0, historyEntry[1] + historyEntry[3] / 2.0);
+            int shown = context.computeOnClient(client -> activeView());
+            if (shown != 3) throw new AssertionError("clicking History in the menu left view " + shown + " showing");
+
             // The create-a-market confirmation: a modal over a screen full of text.
-            openTab(context, 3);
+            openTab(context, MARKET);
             context.runOnClient(client -> setText(client.gui.screen(), "marketNameField", "Test Market"));
             context.clickScreenButton("Create a new market");
             context.waitTicks(3);
@@ -64,8 +74,7 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             // Answered by clicking Cancel with the mouse, not by Escape: the overlay's buttons
             // are hit-tested by hand, and that is the code a left click has to reach.
             int[] cancel = context.computeOnClient(client -> {
-                net.minecraft.client.gui.components.Button b =
-                        (net.minecraft.client.gui.components.Button) field(client.gui.screen(), "overlayDismissButton");
+                Button b = (Button) field(client.gui.screen(), "overlayDismissButton");
                 return new int[]{b.getX(), b.getY(), b.getWidth(), b.getHeight()};
             });
             clickAt(context, cancel[0] + cancel[2] / 2.0, cancel[1] + cancel[3] / 2.0);
@@ -107,15 +116,63 @@ public class MarketScreensGameTest implements FabricClientGameTest {
                         903, 3, "minecraft:iron_ingot", 30, true, other));
             });
 
+            // Some trading of our own, so Your orders and History have rows to draw: a buy
+            // and a sale that fill, through the applier so they are recorded as trades, and
+            // two orders that rest.
+            context.runOnClient(client -> {
+                io.github.badbull643.economiesmod.core.MarketState state = MarketStateHolder.get();
+                UUID me = client.player.getUUID();
+                state.wallets().adjust(me, 2000);
+                state.deposit(me, "minecraft:iron_ingot", 40);
+                apply(state, me, 9001, "minecraft:diamond", 40, 2, true);      // buys from the ask at 40
+                apply(state, me, 9002, "minecraft:iron_ingot", 3, 10, false);  // sells into the bid at 3
+                // A run of iron trades at drifting prices, so the chart has a line to draw.
+                UUID other = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+                long[] prices = {4, 5, 5, 6, 5, 7, 6, 8, 7, 6, 7, 8};
+                for (int i = 0; i < prices.length; i++) {
+                    state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                            920 + i, prices[i], "minecraft:iron_ingot", 2, false, other));
+                    apply(state, me, 9100 + i, "minecraft:iron_ingot", prices[i], 2, true);
+                }
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        910, 30, "minecraft:diamond", 4, true, me));
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        911, 9, "minecraft:iron_ingot", 16, false, me));
+                // More open orders than the panel shows, so the list has to scroll.
+                for (int i = 0; i < 12; i++) {
+                    state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                            940 + i, 1 + i, "minecraft:cobblestone", 2, true, me));
+                }
+            });
+            selectItem("minecraft:diamond");
+
             // Every tab again, now that there is a market and a creator.
             for (int i = 0; i < TABS.length; i++) {
                 openTab(context, i);
                 context.takeScreenshot("04-market-" + TABS[i]);
             }
 
+            // An item's advanced side: the chart, the figures and the book in full.
+            setStatic("itemAdvanced", true);
+            openTab(context, ITEM);
+            context.takeScreenshot("04-market-item-advanced");
+            setStatic("itemAdvanced", false);
+
+            // The view menu, open over Browse.
+            openTab(context, BROWSE);
+            context.runOnClient(client -> setField(client.gui.screen(), "menuOpen", true));
+            context.waitTicks(2);
+            context.takeScreenshot("04-market-menu");
+
+            // A search that matches nothing here, which offers every item in the game instead.
+            openTab(context, BROWSE);
+            context.runOnClient(client -> setText(client.gui.screen(), "searchField", "gold"));
+            context.waitTicks(2);
+            context.takeScreenshot("04-market-search");
+
             // The item picker, which clips a scrolling grid and layers over the screen.
-            openTab(context, 1);
-            context.runOnClient(client -> click(client.gui.screen(), "itemButton"));
+            openTab(context, BROWSE);
+            context.runOnClient(client -> call(client.gui.screen(), "openPicker"));
             context.waitTicks(3);
             context.takeScreenshot("05-picker");
             context.getInput().pressKey(InputConstants.KEY_ESCAPE);
@@ -209,29 +266,58 @@ public class MarketScreensGameTest implements FabricClientGameTest {
         context.waitTicks(5);
     }
 
-    /** A real left click at a GUI-scaled point: the cursor is placed in window pixels. */
-    private static void clickAt(ClientGameTestContext context, double guiX, double guiY) {
-        int scale = context.computeOnClient(client -> client.getWindow().getGuiScale());
-        context.getInput().setCursorPos(guiX * scale, guiY * scale);
-        context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
-        context.waitTicks(3);
+    /** Which item the item view shows: the selection is saved in settings, which init reads. */
+    private static void selectItem(String id) {
+        io.github.badbull643.economiesmod.core.Settings s = MarketStateHolder.settings();
+        if (s != null) s.setLastItem(id);
     }
 
-    private static int[] tabRect(Screen screen, int tab) {
+    /** An order put through the applier, so a fill is recorded as a trade the way a real one is. */
+    private static void apply(io.github.badbull643.economiesmod.core.MarketState state, UUID who, long seq,
+                              String item, long price, long volume, boolean bid) {
+        io.github.badbull643.economiesmod.core.Event.PlaceOrder p =
+                new io.github.badbull643.economiesmod.core.Event.PlaceOrder();
+        p.userId = who;
+        p.marketId = state.marketId();
+        p.itemId = item;
+        p.price = price;
+        p.volume = volume;
+        p.isBid = bid;
+        p.timestamp = System.currentTimeMillis() - 5 * 60_000;
+        io.github.badbull643.economiesmod.core.SequencedEvent se =
+                new io.github.badbull643.economiesmod.core.SequencedEvent();
+        se.seq = seq;
+        se.event = p;
+        io.github.badbull643.economiesmod.core.EventApplier.Result r =
+                io.github.badbull643.economiesmod.core.EventApplier.apply(state, se);
+        if (!r.accepted) System.out.println("[gametest] order not applied: " + r.reason);
+    }
+
+    private static void setField(Screen screen, String name, boolean value) {
         try {
-            java.lang.reflect.Method m = MarketScreen.class.getDeclaredMethod("tabRect", int.class);
-            m.setAccessible(true);
-            return (int[]) m.invoke(screen, tab);
+            Field f = MarketScreen.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.setBoolean(screen, value);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
     }
 
-    private static int activeTab() {
+    private static void setStatic(String name, boolean value) {
         try {
-            Field f = MarketScreen.class.getDeclaredField("activeScreen");
+            Field f = MarketScreen.class.getDeclaredField(name);
             f.setAccessible(true);
-            return f.getInt(null);
+            f.setBoolean(null, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void call(Screen screen, String method) {
+        try {
+            java.lang.reflect.Method m = MarketScreen.class.getDeclaredMethod(method);
+            m.setAccessible(true);
+            m.invoke(screen);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
@@ -243,6 +329,44 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             Field f = MarketScreen.class.getDeclaredField("activeScreen");
             f.setAccessible(true);
             f.setInt(null, tab);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** A real left click at a GUI-scaled point: the cursor is placed in window pixels. */
+    private static void clickAt(ClientGameTestContext context, double guiX, double guiY) {
+        int scale = context.computeOnClient(client -> client.getWindow().getGuiScale());
+        context.getInput().setCursorPos(guiX * scale, guiY * scale);
+        context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+        context.waitTicks(3);
+    }
+
+    private static int[] rect(Screen screen, String method) {
+        try {
+            java.lang.reflect.Method m = MarketScreen.class.getDeclaredMethod(method);
+            m.setAccessible(true);
+            return (int[]) m.invoke(screen);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static int entryY(Screen screen, int index) {
+        try {
+            java.lang.reflect.Method m = MarketScreen.class.getDeclaredMethod("menuEntryY", int.class);
+            m.setAccessible(true);
+            return (int) m.invoke(screen, index);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static int activeView() {
+        try {
+            Field f = MarketScreen.class.getDeclaredField("activeScreen");
+            f.setAccessible(true);
+            return f.getInt(null);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
