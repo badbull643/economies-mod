@@ -19,6 +19,13 @@ import java.util.Map;
 import java.util.Set;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 /**
  * Append-only, hash-chained event log stored as JSON Lines (one entry per line).
@@ -48,10 +55,53 @@ public class EventLog {
     private static final Gson gson = new Gson();
 
     private long lastSeq = 0;
+
+    /**
+     * The seq and full line of the newest entry this instance wrote, as one pair so no
+     * reader sees one without the other.
+     *
+     * A host broadcasts every event it accepts as its full line, straight after writing it.
+     * Reading that back from disk meant walking the whole log each time — and once a
+     * dedicated server has sealed history, decompressing all of it first. Kept here
+     * instead, since it was just in hand.
+     */
+    private volatile java.util.AbstractMap.SimpleImmutableEntry<Long, String> head;
     private String lastHash = GENESIS_HASH;
+
+    /**
+     * The sealed older part of this log, compressed, beside it: see {@link #trySealHistory}.
+     *
+     * Only a dedicated server ever writes one. Every reader in this class reads it first and
+     * the live file after it, so to anything outside this class the two are one log.
+     */
+    private final Path history;
+
+    /**
+     * Held for reading by every walk of the stored lines, and for writing while history is
+     * sealed. Sealing moves lines from the live file into the history file; a walk that had
+     * already passed the end of the old history and then opened the new live file would skip
+     * every line that moved in between, and a gap in a chain is the one thing nothing
+     * downstream recovers from. Appends do not take it: they only ever add to the end.
+     */
+    private final ReentrantReadWriteLock storage = new ReentrantReadWriteLock();
+
+    /**
+     * The market every compact line was written against, from the genesis line. Null until
+     * looked up, and null for a log with no genesis (or one older than market identity), in
+     * which case no line is ever written without its marketId.
+     */
+    private volatile UUID genesisMarketId;
+    private volatile boolean genesisMarketIdKnown;
+
+    /** Sealing settings, off unless a dedicated server turns them on. */
+    private int sealThreshold = 0;
+    private int sealKeepRecent = 0;
+    /** Lines in the live file, counted once sealing is on; -1 until then. */
+    private long liveLines = -1;
 
     public EventLog(Path file) throws IOException {
         this.file = file;
+        this.history = historyPathFor(file);
         if (file.getParent() != null) {
             Files.createDirectories(file.getParent());
         }
@@ -263,41 +313,61 @@ public class EventLog {
             forEach(afterSeq + 1, visitor);
             return;
         }
-        if (!Files.exists(file)) return;
 
-        try (java.io.BufferedReader reader =
-                     Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            long line = 0;
-            String text;
-            boolean checked = false;
-            while ((text = reader.readLine()) != null) {
-                if (text.trim().isEmpty()) continue;
-                if (++line <= afterSeq) continue;       // skipped without parsing
+        // Compact lines leave out prevHash and (usually) marketId, so the first entry this
+        // parses needs both from somewhere it skipped: the genesis line names the market,
+        // and the line just before it carries the hash that is its prevHash. Those two lines
+        // are looked at; everything else below afterSeq is still only counted.
+        final long[] line = { 0 };
+        final UUID[] genesisId = { null };
+        final String[] lastSkipped = { null };
+        final String[] prev = { null };
+        final boolean[] checked = { false };
+        final boolean[] recount = { false };
 
-                SequencedEvent se;
+        walkStoredLines(text -> {
+            line[0]++;
+            if (line[0] == 1) {
                 try {
-                    se = parseLine(text);
-                } catch (Exception e) {
-                    if (unreadableAt == -1) {
-                        unreadableAt = line;
-                        System.err.println("[economiesmod] cannot read event " + line
-                                + " in " + file.getFileName() + ": " + e.getMessage());
-                    }
-                    return;
+                    SequencedEvent g = parseStoredLine(text, GENESIS_HASH, null);
+                    if (g.event instanceof Event.MarketCreated) genesisId[0] = g.event.marketId;
+                } catch (Exception ignored) {
+                    // Not this walk's question: an unreadable prefix is the documented blind
+                    // spot of the fast path, and a full walk will report it.
                 }
-
-                if (!checked) {
-                    checked = true;
-                    if (se == null || se.seq != afterSeq + 1) {
-                        // Line numbers and sequence numbers have parted company, so the
-                        // counting was wrong. Start again and read every entry.
-                        forEach(afterSeq + 1, visitor);
-                        return;
-                    }
-                }
-                if (se != null && !visitor.visit(se)) return;
             }
-        }
+            if (line[0] <= afterSeq) {          // skipped without parsing
+                lastSkipped[0] = text;
+                return true;
+            }
+
+            SequencedEvent se;
+            try {
+                if (prev[0] == null) prev[0] = hashOfStoredLine(lastSkipped[0]);
+                se = parseStoredLine(text, prev[0], genesisId[0]);
+            } catch (Exception e) {
+                if (unreadableAt == -1) {
+                    unreadableAt = line[0];
+                    System.err.println("[economiesmod] cannot read event " + line[0]
+                            + " in " + file.getFileName() + ": " + e.getMessage());
+                }
+                return false;
+            }
+
+            if (!checked[0]) {
+                checked[0] = true;
+                if (se == null || se.seq != afterSeq + 1) {
+                    // Line numbers and sequence numbers have parted company, so the
+                    // counting was wrong. Start again and read every entry.
+                    recount[0] = true;
+                    return false;
+                }
+            }
+            prev[0] = se.hash;
+            return visitor.visit(se);
+        });
+
+        if (recount[0]) forEach(afterSeq + 1, visitor);
     }
 
     /**
@@ -320,7 +390,7 @@ public class EventLog {
         se.hash = recomputeHash(se);
 
         assertSoleWriter();
-        String line = gson.toJson(se);
+        String line = compactLine(se, genesisMarketIdForWriting(se));
         try (BufferedWriter w = Files.newBufferedWriter(file,
                 StandardCharsets.UTF_8, StandardOpenOption.APPEND)) {
             w.write(line);
@@ -330,7 +400,37 @@ public class EventLog {
 
         lastSeq = se.seq;
         lastHash = se.hash;
+        head = new java.util.AbstractMap.SimpleImmutableEntry<>(se.seq, fullLine(se));
+        afterWrite();
         return se;
+    }
+
+    /**
+     * The market a line is compacted against.
+     *
+     * For the genesis entry itself that is the market it creates; for anything after it, the
+     * one the genesis line names, looked up once and kept.
+     */
+    private UUID genesisMarketIdForWriting(SequencedEvent se) throws IOException {
+        if (se.seq == 1) {
+            UUID id = se.event instanceof Event.MarketCreated ? se.event.marketId : null;
+            genesisMarketId = id;
+            genesisMarketIdKnown = true;
+            return id;
+        }
+        if (!genesisMarketIdKnown) {
+            genesisMarketId = marketId();
+            genesisMarketIdKnown = true;
+        }
+        return genesisMarketId;
+    }
+
+    /** After every append: count the line, and seal old history if this log does that. */
+    private void afterWrite() throws IOException {
+        if (sealThreshold <= 0) return;
+        if (liveLines < 0) liveLines = countLiveLines();
+        else liveLines++;
+        if (liveLines >= sealThreshold) trySealHistory();
     }
 
     /**
@@ -390,34 +490,192 @@ public class EventLog {
 
     //so a single line is loaded into memeory at a time bascially
     public void forEach(long fromSeq, Visitor visitor) throws IOException {
-        if (!Files.exists(file)) return;
+        // The context a compact line is read in: the hash before it, which is its prevHash,
+        // and the market the genesis line names, which is its marketId when it has none.
+        final long[] position = { 0 };
+        final String[] prev = { GENESIS_HASH };
+        final UUID[] genesisId = { null };
 
-        long position = 0;
-        try (java.io.BufferedReader reader =
-                     Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.trim().isEmpty()) continue;
-                position++;
+        walkStoredLines(line -> {
+            position[0]++;
 
-                SequencedEvent se;
-                try {
-                    se = parseLine(line);
-                } catch (Exception e) {
-                    // Everything past an unreadable line is unusable too the chain can't
-                    // be carried across a gap so stop rather than skip.
-                    if (unreadableAt == -1) {
-                        unreadableAt = position;
-                        System.err.println("[economiesmod] cannot read event " + position
-                                + " in " + file.getFileName() + ": " + e.getMessage());
-                    }
-                    return;
+            SequencedEvent se;
+            try {
+                se = parseStoredLine(line, prev[0], genesisId[0]);
+            } catch (Exception e) {
+                // Everything past an unreadable line is unusable too the chain can't
+                // be carried across a gap so stop rather than skip.
+                if (unreadableAt == -1) {
+                    unreadableAt = position[0];
+                    System.err.println("[economiesmod] cannot read event " + position[0]
+                            + " in " + file.getFileName() + ": " + e.getMessage());
                 }
+                return false;
+            }
+            if (position[0] == 1 && se.event instanceof Event.MarketCreated) {
+                genesisId[0] = se.event.marketId;
+            }
+            prev[0] = se.hash;
 
-                if (se != null && se.seq >= fromSeq && !visitor.visit(se)) {
-                    return;
+            return !(se.seq >= fromSeq && !visitor.visit(se));
+        });
+    }
+
+    // ─────────── how a line is stored ───────────
+    //
+    // On disk a line is "compact": no prevHash, and no marketId when it is the genesis
+    // market's. Both are exactly recoverable from where the line sits — prevHash is the
+    // hash of the line before, and every event in a log belongs to that log's market — and
+    // together they are 128 bytes of a ~800-byte line. On the wire, and in exports, a line
+    // is always "full", the form every build has ever read.
+    //
+    // The hash is computed from an event's fields, not from the stored text (see
+    // recomputeHash), so a compact line read back with its two fields restored hashes to
+    // exactly what it did before. That is checked for every line as it is written, not
+    // assumed: one that would not survive the round trip is written full.
+    //
+    // A missing prevHash is what marks a line compact. Every full line has always carried
+    // one; the one historical exception is a genesis line, whose prevHash is "0", and a
+    // compact first line is given "0" — so the two readings agree.
+
+    /**
+     * Parses a line as it is stored here: full, or compact and completed from its context.
+     *
+     * @param prevHash        the hash of the line before this one (GENESIS_HASH for the first)
+     * @param genesisMarketId the market the log's genesis line names, or null if none
+     */
+    public static SequencedEvent parseStoredLine(String line, String prevHash, UUID genesisMarketId) {
+        JsonObject obj = new JsonParser().parse(line).getAsJsonObject();
+
+        SequencedEvent se = new SequencedEvent();
+        se.seq = obj.get("seq").getAsLong();
+        boolean compact = !obj.has("prevHash");
+        se.prevHash = compact
+                ? (prevHash != null ? prevHash : GENESIS_HASH)
+                : obj.get("prevHash").getAsString();
+        se.hash = obj.get("hash").getAsString();
+        se.eventType = obj.get("eventType").getAsString();
+        se.signature = obj.has("signature") && !obj.get("signature").isJsonNull()
+                ? obj.get("signature").getAsString() : null;
+
+        JsonObject eventJson = obj.getAsJsonObject("event");
+        se.event = gson.fromJson(eventJson, classFor(se.eventType));
+        if (compact && se.event.marketId == null && genesisMarketId != null
+                && !(se.event instanceof Event.MarketCreated)) {
+            se.event.marketId = genesisMarketId;
+        }
+        return se;
+    }
+
+    /**
+     * The compact form of an entry, or its full form if the compact one would not read back
+     * to the same hash.
+     *
+     * The fallback is for events whose marketId is not the genesis market's — a legacy event
+     * written before markets had identity carries none, and leaving it out would make the
+     * reader fill one in. Rather than reason about which events those are, every line is
+     * read back the way the reader will read it and kept compact only if it hashes the same.
+     */
+    static String compactLine(SequencedEvent se, UUID genesisMarketId) {
+        JsonObject obj = new JsonObject();
+        obj.addProperty("seq", se.seq);
+        obj.addProperty("hash", se.hash);
+        obj.addProperty("eventType", se.eventType);
+        JsonObject ev = gson.toJsonTree(se.event).getAsJsonObject();
+        if (genesisMarketId != null && !(se.event instanceof Event.MarketCreated)
+                && genesisMarketId.equals(se.event.marketId)) {
+            ev.remove("marketId");
+        }
+        obj.add("event", ev);
+        if (se.signature != null) obj.addProperty("signature", se.signature);
+        String compact = gson.toJson(obj);
+
+        SequencedEvent back = parseStoredLine(compact, se.prevHash, genesisMarketId);
+        if (!recomputeHash(back).equals(se.hash)) {
+            return gson.toJson(se);
+        }
+        return compact;
+    }
+
+    /** The full, self-contained form of an entry — what the wire and exports carry. */
+    static String fullLine(SequencedEvent se) {
+        return gson.toJson(se);
+    }
+
+    /** The hash a stored line records, without parsing its event. */
+    private static String hashOfStoredLine(String line) {
+        if (line == null) return GENESIS_HASH;
+        return new JsonParser().parse(line).getAsJsonObject().get("hash").getAsString();
+    }
+
+    /**
+     * A stored line's sequence number, read off the front where every line written by
+     * this project puts it, with a full parse as the fallback for anything that does not.
+     */
+    private static long seqOfStoredLine(String line) {
+        final String prefix = "{\"seq\":";
+        if (line.startsWith(prefix)) {
+            long v = 0;
+            int i = prefix.length(), digits = 0;
+            while (i < line.length() && Character.isDigit(line.charAt(i))) {
+                v = v * 10 + (line.charAt(i) - '0');
+                i++;
+                digits++;
+            }
+            if (digits > 0 && i < line.length() && line.charAt(i) == ',') return v;
+        }
+        return new JsonParser().parse(line).getAsJsonObject().get("seq").getAsLong();
+    }
+
+    // ─────────── where the lines live ───────────
+
+    /** One stored line of a walk. Return false to stop early. */
+    @FunctionalInterface
+    private interface StoredLineVisitor {
+        boolean visit(String line) throws IOException;
+    }
+
+    /**
+     * Every stored line in order: the sealed history, if there is any, then the live file.
+     *
+     * The only place this class opens its files for reading, so the history file cannot be
+     * forgotten by one reader and remembered by another.
+     *
+     * A seal that was interrupted between writing the new history and rewriting the live
+     * file leaves the same lines in both. The history copy is the complete one, so lines of
+     * the live file at or below the last sealed sequence number are skipped.
+     */
+    private void walkStoredLines(StoredLineVisitor visitor) throws IOException {
+        storage.readLock().lock();
+        try {
+            long sealedThrough = 0;
+            if (Files.exists(history)) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        new GZIPInputStream(Files.newInputStream(history)),
+                        StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (line.trim().isEmpty()) continue;
+                        sealedThrough = seqOfStoredLine(line);
+                        if (!visitor.visit(line)) return;
+                    }
                 }
             }
+            if (!Files.exists(file)) return;
+            try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                String line;
+                boolean pastSealed = sealedThrough == 0;
+                while ((line = reader.readLine()) != null) {
+                    if (line.trim().isEmpty()) continue;
+                    if (!pastSealed) {
+                        if (seqOfStoredLine(line) <= sealedThrough) continue;
+                        pastSealed = true;
+                    }
+                    if (!visitor.visit(line)) return;
+                }
+            }
+        } finally {
+            storage.readLock().unlock();
         }
     }
 
@@ -522,6 +780,12 @@ public class EventLog {
             case "MarketPolicy":  return Event.MarketPolicy.class;
             case "Stipend":       return Event.Stipend.class;
             case "HostDefaults":  return Event.HostDefaults.class;
+            case "BotsEnabled":   return Event.BotsEnabled.class;
+            case "BotSpawned":    return Event.BotSpawned.class;
+            case "BotProduced":   return Event.BotProduced.class;
+            case "BotPaused":     return Event.BotPaused.class;
+            case "BotResumed":    return Event.BotResumed.class;
+            case "BotActions":    return Event.BotActions.class;
             default:
                 throw new IllegalStateException("Unknown event type in log: " + typeName);
         }
@@ -675,16 +939,29 @@ public class EventLog {
      * only the piling-up was the problem.
      */
     public void forEachRawLine(long fromSeq, RawVisitor visitor) throws IOException {
-        if (!Files.exists(file)) return;
-        try (java.io.BufferedReader reader =
-                     Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.trim().isEmpty()) continue;
-                long seq = new JsonParser().parse(line).getAsJsonObject().get("seq").getAsLong();
-                if (seq >= fromSeq && !visitor.visit(line)) return;
+        // What goes out is always the full line — the wire format every build reads —
+        // whatever form it is stored in, so lines are completed from their context and
+        // written back out rather than passed along as stored.
+        final String[] prev = { GENESIS_HASH };
+        final UUID[] genesisId = { null };
+        final boolean[] first = { true };
+        walkStoredLines(line -> {
+            SequencedEvent se;
+            try {
+                se = parseStoredLine(line, prev[0], genesisId[0]);
+            } catch (RuntimeException e) {
+                // A line this build cannot read cannot be expanded either. An I/O failure is
+                // what every caller here already handles — a history that stops partway.
+                throw new IOException("cannot read event after " + prev[0] + " in "
+                        + file.getFileName() + ": " + e.getMessage(), e);
             }
-        }
+            if (first[0]) {
+                first[0] = false;
+                if (se.event instanceof Event.MarketCreated) genesisId[0] = se.event.marketId;
+            }
+            prev[0] = se.hash;
+            return !(se.seq >= fromSeq && !visitor.visit(fullLine(se)));
+        });
     }
 
     public List<String> rawLinesFrom(long fromSeq) throws IOException {
@@ -703,17 +980,14 @@ public class EventLog {
      * of the log and then look through them for the one it already knew the number of.
      */
     public String rawLineFor(long seq) throws IOException {
-        try (java.io.BufferedReader reader =
-                     Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.trim().isEmpty()) continue;
-                long s = new JsonParser().parse(line).getAsJsonObject().get("seq").getAsLong();
-                if (s == seq) return line;
-                if (s > seq) return null;
-            }
-        }
-        return null;
+        java.util.AbstractMap.SimpleImmutableEntry<Long, String> newest = head;
+        if (newest != null && newest.getKey() == seq) return newest.getValue();
+        final String[] found = { null };
+        forEachRawLine(seq, line -> {
+            if (seqOfStoredLine(line) == seq) found[0] = line;
+            return false;
+        });
+        return found[0];
     }
 
     /**
@@ -733,15 +1007,158 @@ public class EventLog {
         }
 
         assertSoleWriter();
+        // Stored compact like anything appended here; what arrived was the full wire form.
+        String stored = compactLine(se, genesisMarketIdForWriting(se));
         try (BufferedWriter w = Files.newBufferedWriter(file,
                 StandardCharsets.UTF_8, StandardOpenOption.APPEND)) {
-            w.write(line);
+            w.write(stored);
             w.newLine();
         }
         knownSize = Files.size(file);
 
         lastSeq = se.seq;
         lastHash = se.hash;
+        head = new java.util.AbstractMap.SimpleImmutableEntry<>(se.seq, fullLine(se));
+        afterWrite();
+    }
+
+    // ─────────── sealed history (dedicated servers) ───────────
+
+    /** Where a log's sealed history lives: beside it, with ".history.gz" on the end. */
+    public static Path historyPathFor(Path log) {
+        return log.resolveSibling(log.getFileName() + ".history.gz");
+    }
+
+    /**
+     * Every file that holds part of a log — for anything that deletes or moves one.
+     *
+     * A log with sealed history is two files, and removing only the live one would leave the
+     * old history to be read back in front of whatever market is created there next.
+     */
+    public static List<Path> filesFor(Path log) {
+        List<Path> out = new ArrayList<>();
+        out.add(log);
+        out.add(historyPathFor(log));
+        return out;
+    }
+
+    /**
+     * Turns on sealing: once the live file holds threshold lines, all but the most recent
+     * keepRecent move into the compressed history file.
+     *
+     * For a dedicated server, whose log is the one that grows without end. A player's own
+     * world never turns this on, so its log stays one plain file.
+     */
+    public synchronized void enableHistorySealing(int threshold, int keepRecent) {
+        if (threshold <= keepRecent || keepRecent < 0) {
+            throw new IllegalArgumentException("threshold must exceed keepRecent");
+        }
+        this.sealThreshold = threshold;
+        this.sealKeepRecent = keepRecent;
+        this.liveLines = -1;
+    }
+
+    private long countLiveLines() throws IOException {
+        if (!Files.exists(file)) return 0;
+        long n = 0;
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.trim().isEmpty()) n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Moves the older part of the live file into the compressed history, if nothing is
+     * reading the log right now. Returns whether it sealed anything.
+     *
+     * Two files are rewritten, each through a temporary file and an atomic rename: first
+     * the history with the new lines added, then the live file without them. Interrupted
+     * after the first, the same lines are in both; readers skip the live copies (see
+     * walkStoredLines) and the next seal leaves them out. Nothing is ever in neither.
+     *
+     * Only tries the lock: a walk can take a while (a joiner being sent a long history),
+     * and an append that waited for it would stall every trade. If it is busy, the next
+     * append past the threshold tries again.
+     */
+    public synchronized boolean trySealHistory() throws IOException {
+        if (!storage.writeLock().tryLock()) return false;
+        try {
+            assertSoleWriter();
+
+            long sealedThrough = 0;
+            if (Files.exists(history)) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        new GZIPInputStream(Files.newInputStream(history)),
+                        StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (!line.trim().isEmpty()) sealedThrough = seqOfStoredLine(line);
+                    }
+                }
+            }
+
+            List<String> live = new ArrayList<>();
+            try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.trim().isEmpty()) continue;
+                    if (seqOfStoredLine(line) <= sealedThrough) continue;   // an interrupted seal's leftovers
+                    live.add(line);
+                }
+            }
+            liveLines = live.size();
+            if (live.size() <= sealKeepRecent) return false;
+
+            List<String> seal = live.subList(0, live.size() - sealKeepRecent);
+            List<String> keep = live.subList(live.size() - sealKeepRecent, live.size());
+
+            // One more gzip member on the end of the history. GZIPInputStream reads
+            // concatenated members as one stream, so the history never has to be inflated
+            // and recompressed: its existing bytes are copied as they are.
+            ByteArrayOutputStream member = new ByteArrayOutputStream();
+            try (OutputStream gz = new GZIPOutputStream(member)) {
+                for (String line : seal) {
+                    gz.write(line.getBytes(StandardCharsets.UTF_8));
+                    gz.write('\n');
+                }
+            }
+            Path historyTmp = history.resolveSibling(history.getFileName() + ".tmp");
+            try (OutputStream out = Files.newOutputStream(historyTmp)) {
+                if (Files.exists(history)) Files.copy(history, out);
+                member.writeTo(out);
+            }
+            replace(historyTmp, history);
+
+            Path liveTmp = file.resolveSibling(file.getFileName() + ".tmp");
+            try (BufferedWriter w = Files.newBufferedWriter(liveTmp, StandardCharsets.UTF_8)) {
+                for (String line : keep) {
+                    w.write(line);
+                    w.newLine();
+                }
+            }
+            replace(liveTmp, file);
+            knownSize = Files.size(file);
+            liveLines = keep.size();
+
+            System.out.println("[log] sealed " + seal.size() + " older events into "
+                    + history.getFileName() + "; " + keep.size() + " stay in "
+                    + file.getFileName());
+            return true;
+        } finally {
+            storage.writeLock().unlock();
+        }
+    }
+
+    private static void replace(Path tmp, Path target) throws IOException {
+        try {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
 }

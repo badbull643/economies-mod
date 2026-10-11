@@ -100,6 +100,132 @@ public class MarketState {
         if (participants != null) accountedElsewhere.addAll(participants);
     }
 
+    // ─────────── bots ───────────
+    //
+    // Derived from the log like everything else: BotsEnabled sets the key, BotSpawned adds
+    // a record, BotPaused/BotResumed flip it, BotProduced moves its production clock. See
+    // BotRules for the fixed numbers and EventApplier for the rules.
+
+    /** The key bot events must be signed with; null in a market without bots. Set once. */
+    private volatile String botAuthorityKey;
+
+    /** Every bot in this market, by identity. Concurrent: the render thread reads it. */
+    private final Map<UUID, BotRecord> bots = new ConcurrentHashMap<>();
+
+    /** One bot: what it is, which one of its type, and whether it is running. */
+    public static final class BotRecord {
+        public final String type;
+        /** 1-based within its type, in spawn order: "Producer #2". */
+        public final int number;
+        public final int algorithmVersion;
+        private volatile boolean paused;
+        /** Per produced item, the timestamp production was last counted from. */
+        private final Map<String, Long> lastProducedAt = new ConcurrentHashMap<>();
+
+        BotRecord(String type, int number, int algorithmVersion) {
+            this.type = type;
+            this.number = number;
+            this.algorithmVersion = algorithmVersion;
+        }
+
+        public boolean paused() { return paused; }
+
+        /** When production of this item was last counted from, or 0 if it never was. */
+        public long lastProducedAt(String itemId) {
+            Long at = lastProducedAt.get(itemId);
+            return at == null ? 0 : at;
+        }
+
+        public Map<String, Long> lastProducedAtAll() { return new TreeMap<>(lastProducedAt); }
+
+        void setPaused(boolean paused) { this.paused = paused; }
+        void setLastProducedAt(String itemId, long at) { lastProducedAt.put(itemId, at); }
+    }
+
+    public boolean botsEnabled() { return botAuthorityKey != null; }
+    public String botAuthorityKey() { return botAuthorityKey; }
+    public boolean isBot(UUID userId) { return userId != null && bots.containsKey(userId); }
+    public BotRecord bot(UUID userId) { return userId == null ? null : bots.get(userId); }
+
+    /** A copy: every bot, by identity, in no particular order. */
+    public Map<UUID, BotRecord> bots() { return new HashMap<>(bots); }
+
+    public int botCount(String type) {
+        int n = 0;
+        for (BotRecord b : bots.values()) if (b.type.equals(type)) n++;
+        return n;
+    }
+
+    /** A bot's name for people: "Producer #2", "Market maker #1". Null for a player. */
+    public String botName(UUID userId) {
+        BotRecord b = bot(userId);
+        if (b == null) return null;
+        return (BotRules.PRODUCER.equals(b.type) ? "Producer" : "Market maker") + " #" + b.number;
+    }
+
+    /**
+     * Who the stipend is paid to: every registered identity except bots, which can never
+     * claim one. Counting bots would let spawning them quietly shrink the largest stipend a
+     * market can offer its players.
+     */
+    public int stipendClaimants() {
+        return Math.max(0, keyDirectory.size() - bots.size());
+    }
+
+    /**
+     * Whether an identity has done or been given anything in this market — the test a new
+     * bot must pass, so a bot's whole starting position is its fixed grant and nothing else.
+     */
+    public boolean hasHistory(UUID userId) {
+        if (granted.contains(userId) || migratedIn.contains(userId)
+                || accountedElsewhere.contains(userId)) return true;
+        if (wallets.getBalance(userId) != 0) return true;
+        if (!itemBalances.heldBy(userId).isEmpty()) {
+            for (Long v : itemBalances.heldBy(userId).values()) if (v != null && v != 0) return true;
+        }
+        return openOrderCount(userId) > 0;
+    }
+
+    /** How much of an item someone has resting on one side of its book. */
+    public long restingVolume(UUID userId, String itemId, boolean bids) {
+        OrderBook book = peekBook(itemId);
+        if (book == null) return 0;
+        long total = 0;
+        for (Order o : bids ? book.restingBids() : book.restingAsks()) {
+            if (o.userID().equals(userId)) total += o.volume();
+        }
+        return total;
+    }
+
+    /** Every order someone has resting, across every book. */
+    public List<Order> restingOrdersOf(UUID userId) {
+        List<Order> out = new ArrayList<>();
+        for (String itemId : activeItems()) {
+            OrderBook book = peekBook(itemId);
+            if (book == null) continue;
+            for (Order o : book.restingBids()) if (o.userID().equals(userId)) out.add(o);
+            for (Order o : book.restingAsks()) if (o.userID().equals(userId)) out.add(o);
+        }
+        return out;
+    }
+
+    void setBotAuthorityKey(String key) { this.botAuthorityKey = key; }
+
+    void addBot(UUID userId, BotRecord record) { bots.put(userId, record); }
+
+    /** Snapshot restore only: a bot record as it was saved. */
+    void restoreBot(UUID userId, String type, int number, int algorithmVersion, boolean paused,
+                    Map<String, Long> lastProducedAt) {
+        BotRecord r = new BotRecord(type, number, algorithmVersion);
+        r.setPaused(paused);
+        if (lastProducedAt != null) {
+            for (Map.Entry<String, Long> e : lastProducedAt.entrySet()) {
+                r.setLastProducedAt(e.getKey(), e.getValue());
+            }
+        }
+        bots.put(userId, r);
+    }
+
     /**
      * One lock over the whole state, above the per-class monitors.
      *
@@ -297,6 +423,11 @@ public class MarketState {
      */
     public long listingFeeFor(UUID userId) {
         if (listingFee <= 0) return 0;
+        // Bots pay the trading fee but not this one. It exists to stop order spam, which
+        // bots are held to an action budget for already; and it escalates with open orders,
+        // which a market maker holds by design, so it would drain one until it stopped.
+        // Only ever true in a market whose creator switched bots on.
+        if (bots.containsKey(userId)) return 0;
         // Zero means off, as it does for every other policy field here — so a market
         // that never sets an allowance keeps the flat fee it had before this existed,
         // and escalation is something somebody turns on.

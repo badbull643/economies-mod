@@ -100,6 +100,224 @@ public class EventApplier {
     }
 
     /**
+     * The bot rules, or null when the event passes them. Asked by validate and by apply.
+     *
+     * Both ask, because they guard different doors: validate is what a host, a client
+     * receiving a line, and an archive check run before accepting an event; apply is what a
+     * replay of a player's own log runs, alone. A bot rule that lived in only one of them
+     * would hold on one path and not the other.
+     *
+     * Everything here is about events that only exist in a market with bots, or about
+     * identities that are bots — so for every market without bots this returns null for
+     * every event, and replays exactly as it did before bots existed.
+     */
+    private static Result checkBotRules(MarketState state, SequencedEvent se) {
+        Event e = se.event;
+
+        // A bot only ever acts through BotActions, and only the bot key acts on a bot. It
+        // never deposits or withdraws, so its goods come from its grant, its production and
+        // trading, and nothing else.
+        if (state.isBot(e.userId)
+                && !(e instanceof Event.BotActions) && !EventVerifier.isBotAuthorityEvent(e)) {
+            return Result.reject("a bot can only act through BotActions");
+        }
+        if (e instanceof Event.WelcomeGrant && state.isBot(((Event.WelcomeGrant) e).targetUserId)) {
+            return Result.reject("bots are not given welcome grants");
+        }
+        if (e instanceof Event.MigrateBalance && state.isBot(((Event.MigrateBalance) e).beneficiary)) {
+            return Result.reject("a bot cannot receive a migrated balance");
+        }
+
+        if (e instanceof Event.BotsEnabled) {
+            Event.BotsEnabled be = (Event.BotsEnabled) e;
+            if (!e.userId.equals(state.creator())) {
+                return Result.reject("only the market's creator can switch bots on");
+            }
+            if (state.botsEnabled()) return Result.reject("bots are already switched on here");
+            // "Straight after creation": nobody but the creator has joined yet. Bots are a
+            // property of the market people choose to join, never something switched on
+            // underneath them.
+            if (state.registeredCount() > 1) {
+                return Result.reject("bots can only be switched on when a market is created");
+            }
+            if (be.botAuthorityPublicKey == null || be.botAuthorityPublicKey.isEmpty()) {
+                return Result.reject("missing bot key");
+            }
+            try {
+                PlayerKeys.decodePublic(be.botAuthorityPublicKey);
+            } catch (Exception bad) {
+                return Result.reject("malformed bot key");
+            }
+            return null;
+        }
+
+        boolean botEvent = EventVerifier.isBotAuthorityEvent(e) || e instanceof Event.BotActions;
+        if (!botEvent) return null;
+        if (!state.botsEnabled()) return Result.reject("this market has no bots");
+
+        if (e instanceof Event.BotSpawned) {
+            Event.BotSpawned bs = (Event.BotSpawned) e;
+            if (!BotRules.isType(bs.botType)) return Result.reject("unknown bot type " + bs.botType);
+            if (bs.algorithmVersion < 1) return Result.reject("missing algorithm version");
+            if (state.isBot(e.userId)) return Result.reject("already a bot");
+            if (e.userId.equals(state.creator())) return Result.reject("the creator cannot be a bot");
+            // Its starting position has to be its fixed grant and nothing else.
+            if (state.hasHistory(e.userId)) {
+                return Result.reject("a bot must be a new identity with no history here");
+            }
+            if (state.botCount(bs.botType) >= BotRules.MAX_PER_TYPE) {
+                return Result.reject("this market already has " + BotRules.MAX_PER_TYPE + " "
+                        + bs.botType + " bots, the most it can have");
+            }
+            return null;
+        }
+
+        MarketState.BotRecord bot = state.bot(e.userId);
+        if (bot == null) return Result.reject("not a bot");
+
+        if (e instanceof Event.BotPaused) {
+            return bot.paused() ? Result.reject("already paused") : null;
+        }
+        if (e instanceof Event.BotResumed) {
+            return bot.paused() ? null : Result.reject("not paused");
+        }
+        if (bot.paused()) return Result.reject("this bot is paused");
+
+        if (e instanceof Event.BotProduced) {
+            Event.BotProduced bp = (Event.BotProduced) e;
+            if (!BotRules.produces(bot.type, bp.itemId)) {
+                return Result.reject(bot.type + " bots do not produce " + bp.itemId);
+            }
+            if (bp.amount <= 0) return Result.reject("amount must be positive");
+            long allowance = BotRules.productionAllowance(e.timestamp - bot.lastProducedAt(bp.itemId));
+            if (bp.amount > allowance) {
+                return Result.reject("produced " + bp.amount + " " + bp.itemId
+                        + ", faster than the fixed rate allows (" + allowance + ")");
+            }
+            long holding;
+            try {
+                holding = Math.addExact(state.itemBalances().getBalance(e.userId, bp.itemId),
+                        state.restingVolume(e.userId, bp.itemId, false));
+                holding = Math.addExact(holding, bp.amount);
+            } catch (ArithmeticException overflow) {
+                return Result.reject("past the production ceiling");
+            }
+            if (holding > BotRules.PRODUCTION_CEILING) {
+                return Result.reject("would hold " + holding + " " + bp.itemId
+                        + ", past the production ceiling of " + BotRules.PRODUCTION_CEILING);
+            }
+            return null;
+        }
+
+        if (e instanceof Event.BotActions) {
+            List<Event.BotAction> actions = ((Event.BotActions) e).actions;
+            if (actions == null || actions.isEmpty()) return Result.reject("an empty batch");
+            if (actions.size() > BotRules.MAX_ACTIONS_PER_BATCH) {
+                return Result.reject("a batch holds at most " + BotRules.MAX_ACTIONS_PER_BATCH
+                        + " actions");
+            }
+            // Only the shape is checked here. Whether each action can be carried out — the
+            // credits, the stock, the order still being there — is decided when its turn
+            // comes in apply, and one that cannot is skipped rather than sinking the batch.
+            for (Event.BotAction a : actions) {
+                if (a == null || a.itemId == null || a.itemId.isEmpty()) {
+                    return Result.reject("an action with no item");
+                }
+                if (BotRules.ACTION_PLACE.equals(a.kind)) {
+                    if (a.price <= 0 || a.volume <= 0) {
+                        return Result.reject("an order needs a positive price and volume");
+                    }
+                } else if (!BotRules.ACTION_CANCEL.equals(a.kind)) {
+                    return Result.reject("unknown action " + a.kind);
+                }
+            }
+            return null;
+        }
+        return null;
+    }
+
+    /**
+     * Applies a bot event, or returns null if this is not one. Rules already checked.
+     */
+    private static Result applyBotEvent(MarketState state, SequencedEvent se) {
+        Event e = se.event;
+
+        if (e instanceof Event.BotsEnabled) {
+            state.setBotAuthorityKey(((Event.BotsEnabled) e).botAuthorityPublicKey);
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.BotSpawned) {
+            Event.BotSpawned bs = (Event.BotSpawned) e;
+            MarketState.BotRecord record = new MarketState.BotRecord(
+                    bs.botType, state.botCount(bs.botType) + 1, bs.algorithmVersion);
+            // A producer's production clock starts when it does: no output owed for the
+            // time before it existed.
+            for (String item : BotRules.ITEMS) {
+                if (BotRules.produces(bs.botType, item)) record.setLastProducedAt(item, e.timestamp);
+            }
+            state.addBot(e.userId, record);
+            state.wallets().adjust(e.userId, BotRules.startingCredits(bs.botType));
+            for (String item : BotRules.ITEMS) {
+                state.deposit(e.userId, item, BotRules.startingItemsEach(bs.botType));
+            }
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.BotProduced) {
+            Event.BotProduced bp = (Event.BotProduced) e;
+            state.deposit(e.userId, bp.itemId, bp.amount);
+            state.bot(e.userId).setLastProducedAt(bp.itemId, e.timestamp);
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.BotPaused) {
+            // Nobody trades with a bot that is switched off: its resting orders come off the
+            // book, and what they reserved goes back to its balance.
+            for (Order o : state.restingOrdersOf(e.userId)) {
+                state.cancelOrder(o.orderId(), o.itemID(), o.isBid(), e.userId);
+            }
+            state.bot(e.userId).setPaused(true);
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.BotResumed) {
+            // Switched off is switched off: the production clock restarts here, so the time
+            // it spent paused earns nothing.
+            MarketState.BotRecord record = state.bot(e.userId);
+            for (String item : BotRules.ITEMS) {
+                if (BotRules.produces(record.type, item)) record.setLastProducedAt(item, e.timestamp);
+            }
+            record.setPaused(false);
+            return Result.ok(Collections.emptyList());
+        }
+
+        if (e instanceof Event.BotActions) {
+            // In order, all in this one step, and an action that cannot be carried out when
+            // its turn comes is skipped. Every replica reaches the same verdict on every
+            // action from the same state, so they all skip the same ones.
+            List<Fill> fills = new java.util.ArrayList<>();
+            List<Event.BotAction> actions = ((Event.BotActions) e).actions;
+            for (int i = 0; i < actions.size(); i++) {
+                Event.BotAction a = actions.get(i);
+                if (BotRules.ACTION_PLACE.equals(a.kind)) {
+                    Order order = new Order(BotRules.batchOrderId(se.seq, i), a.price, a.itemId,
+                            a.volume, a.isBid, e.userId);
+                    MarketState.SubmitResult sr = state.submitOrder(order);
+                    if (sr.accepted) {
+                        state.recordTrades(se.seq, e.timestamp, sr.fills);
+                        fills.addAll(sr.fills);
+                    }
+                } else {
+                    state.cancelOrder(a.orderId, a.itemId, a.isBid, e.userId);
+                }
+            }
+            return Result.ok(fills);
+        }
+        return null;
+    }
+
+    /**
      * Why this stipend would pay out more than the fills to earn it cost, or null.
      *
      * The rule the stipend's safety rests on, and it was wrong twice over.
@@ -180,6 +398,12 @@ public class EventApplier {
 
         Result genesisCheck = checkGenesis(state, se);
         if (genesisCheck != null) return genesisCheck;
+
+        Result botCheck = checkBotRules(state, se);
+        if (botCheck != null) return botCheck;
+
+        Result botApplied = applyBotEvent(state, se);
+        if (botApplied != null) return botApplied;
 
         if (e instanceof Event.MarketCreated) {
             Event.MarketCreated mc = (Event.MarketCreated) e;
@@ -616,6 +840,13 @@ public class EventApplier {
         Result genesisCheck = checkGenesis(state, se);
         if (genesisCheck != null) return genesisCheck;
 
+        Result botCheck = checkBotRules(state, se);
+        if (botCheck != null) return botCheck;
+        if (e instanceof Event.BotsEnabled || e instanceof Event.BotActions
+                || EventVerifier.isBotAuthorityEvent(e)) {
+            return Result.ok(Collections.emptyList());
+        }
+
         if (e instanceof Event.MarketCreated || e instanceof Event.KeyRegistered) {
             return Result.ok(Collections.emptyList());
         }
@@ -693,7 +924,7 @@ public class EventApplier {
             // that cannot cover it, which is the thing the whole rule exists to stop.
             String unsafe = stipendOutpacesItsFees(state.stipendAmount(),
                     state.stipendEveryFills(), state.listingFee(),
-                    state.registeredCount());
+                    state.stipendClaimants());
             if (unsafe != null) {
                 return Result.reject("this market has outgrown its stipend — " + unsafe);
             }
@@ -750,7 +981,7 @@ public class EventApplier {
             // from the log alone.
             if (mp.stipendAmount > 0) {
                 String unsafe = stipendOutpacesItsFees(mp.stipendAmount,
-                        mp.stipendEveryFills, mp.listingFee, state.registeredCount());
+                        mp.stipendEveryFills, mp.listingFee, state.stipendClaimants());
                 if (unsafe != null) return Result.reject(unsafe);
             }
             if (mp.listingFee > MarketState.MAX_LISTING_FEE) {

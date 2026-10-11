@@ -23,7 +23,10 @@ public class HostServer {
     // 8: MarketPolicy event (transaction tax); Sync.dedicated. Batched deliberately —
     //    each wire change costs a version and a window where mixed clients cannot talk,
     //    so the two that were ready went together.
-    public static final String PROTOCOL_VERSION = "8";
+    // 9: bot events (BotsEnabled, BotSpawned, BotProduced, BotPaused, BotResumed,
+    //    BotActions), compact stored lines, packed log lines on the wire (logLinesGz),
+    //    and Ed25519 keys. A client on 8 could not read any of these.
+    public static final String PROTOCOL_VERSION = "9";
     /** Only the fallback for the deprecated constructors now — see ServerConfig. */
     private static final int MAX_CONNECTIONS = 64;
 
@@ -227,6 +230,17 @@ public class HostServer {
 
     private final PlayerKeys hostKeys;
 
+    /** Where the log lives; the bots keep their keys in a folder beside it. */
+    private final Path logFile;
+
+    /** Runs this market's bots. Null unless this is a dedicated server whose market has them. */
+    private volatile BotRunner botRunner;
+
+    /** The bots' clocks and rates. Null means the real ones; only a test sets this. */
+    private BotRunner.Timing botTiming;
+
+    void useBotTiming(BotRunner.Timing timing) { this.botTiming = timing; }
+
 
 
     //change too about 50
@@ -284,8 +298,15 @@ public class HostServer {
         this.hostName = config.hostName;
         this.hostUserId = config.hostUserId;
         this.hostKeys = hostKeys;
+        this.logFile = logFile;
         this.peerCache = peerCache;
         this.log = new EventLog(logFile);
+        // A dedicated server's log is the one that grows without end, so its older part is
+        // sealed into a compressed history file once the live file passes SEAL_AFTER lines,
+        // keeping the newest SEAL_KEEP plain. A world hosting its own market never does this:
+        // that log is small, and is the one every client-side Reset and slot operation
+        // expects to be a single file.
+        if (config.dedicated) log.enableHistorySealing(SEAL_AFTER, SEAL_KEEP);
         this.keyRegistry = new KeyRegistry(logFile.resolveSibling("known-keys.json"), true);
 
         // Verified and replayed in one pass. A broken chain still refuses to start; the
@@ -588,6 +609,21 @@ public class HostServer {
         sequencerThread.setDaemon(true);
         sequencerThread.start();
 
+        // After the sequencer, because everything the bots do goes through it. Only on a
+        // dedicated server: a market hosted from inside a game moves between players, and a
+        // bot that ran wherever hosting happened to be would stop and start with them.
+        if (config.dedicated && state.botsEnabled()) {
+            try {
+                Path botDir = logFile.resolveSibling("bots");
+                BotRunner runner = botTiming == null ? new BotRunner(this, botDir)
+                        : new BotRunner(this, botDir, botTiming);
+                runner.start();
+                botRunner = runner;
+            } catch (Exception e) {
+                System.err.println("[bots] could not start: " + e.getMessage());
+            }
+        }
+
         try {
             while (running) {
                 Socket socket = serverSocket.accept();
@@ -643,6 +679,15 @@ public class HostServer {
     private static final int MAX_BULK_LINES = 200_000;
 
     /**
+     * When a dedicated server seals history: past this many lines in the live file, all but
+     * the newest SEAL_KEEP move into the compressed history. About 15 MB of compact lines at
+     * the threshold; the newest few thousand stay plain because they are what a catching-up
+     * client asks for and what an operator reads when something looks wrong.
+     */
+    static final int SEAL_AFTER = 20_000;
+    static final int SEAL_KEEP = 2_000;
+
+    /**
      * Reads the rest of a chunked bulk transfer, bounded. Returns null and sends the
      * caller's reply if the sender breaks the protocol or overruns the ceiling.
      */
@@ -668,11 +713,11 @@ public class HostServer {
             }
             if (next instanceof Message.MigrateRequest) {
                 Message.MigrateRequest r = (Message.MigrateRequest) next;
-                if (r.logLines != null) lines.addAll(r.logLines);
+                lines.addAll(r.lines());
                 complete = r.complete;
             } else {
                 Message.CatchUp r = (Message.CatchUp) next;
-                if (r.logLines != null) lines.addAll(r.logLines);
+                lines.addAll(r.lines());
                 complete = r.complete;
             }
             frames++;
@@ -891,12 +936,35 @@ public class HostServer {
         }
     }
 
+    /**
+     * What a client on another protocol is told. Says which side needs updating, because
+     * "mismatch" alone leaves a player guessing whether the fault is theirs. The words are
+     * all a client from before this existed will show, so they have to stand on their own.
+     */
+    static String protocolRefusal(String theirs) {
+        int t, ours = Integer.parseInt(PROTOCOL_VERSION);
+        try {
+            t = Integer.parseInt(theirs == null ? "" : theirs.trim());
+        } catch (NumberFormatException e) {
+            t = -1;
+        }
+        if (t >= 0 && t < ours) {
+            return "this market needs a newer version of EconomiesMod — update the mod to join"
+                    + " (protocol " + ours + ", yours is " + t + ")";
+        }
+        if (t > ours) {
+            return "this server runs an older version of EconomiesMod than yours — ask its"
+                    + " operator to update (protocol " + ours + ", yours is " + t + ")";
+        }
+        return "protocol version mismatch — server is " + PROTOCOL_VERSION;
+    }
+
     /** Returns true if the client is caught up and should join the live set. */
     private boolean handshake(MessageChannel channel, Message.Hello hello) throws IOException {
         if (!PROTOCOL_VERSION.equals(hello.protocolVersion)) {
             System.out.println("[host] refused " + hello.displayName + " — their protocol "
                     + hello.protocolVersion + ", ours " + PROTOCOL_VERSION);
-            sendError(channel, "protocol version mismatch — server is " + PROTOCOL_VERSION);
+            sendError(channel, protocolRefusal(hello.protocolVersion));
             return false;
         }
 
@@ -1145,7 +1213,7 @@ public class HostServer {
                                boolean first, String ourMarket,
                                List<PeerCache.Peer> shareable) throws IOException {
         Message.Sync sync = new Message.Sync();
-        sync.logLines = new ArrayList<>(lines);
+        sync.packLines(lines);
         sync.complete = complete;
         if (first) {
             sync.hostUserId = hostUserId;
@@ -1293,7 +1361,7 @@ public class HostServer {
             // A whole history can arrive as several chunks — see MessageChannel's
             // CHUNK_BUDGET_BYTES — so keep reading until the sender marks the last one,
             // accumulating before the expensive verify runs once over all of it.
-            List<String> lines = accumulateChunks(channel, first.logLines, first.complete,
+            List<String> lines = accumulateChunks(channel, first.lines(), first.complete,
                     Message.MigrateRequest.class, reply, "migration request");
             if (lines == null) return;
 
@@ -1416,6 +1484,56 @@ public class HostServer {
         return null;
     }
 
+    // ─────────── what the bot runner is given ───────────
+    //
+    // Narrow on purpose: the runner can read the market, queue work for the sequencer and
+    // append events it has signed. It never touches the log or the state any other way.
+
+    MarketState state() { return state; }
+
+    PlayerKeys hostKeys() { return hostKeys; }
+
+    BotRunner botRunner() { return botRunner; }
+
+    /** Runs some work on the sequencer thread, after whatever is already queued. False if the queue is full. */
+    boolean enqueueHostWork(Runnable work) {
+        return queue.offer(new Proposal(work));
+    }
+
+    /**
+     * Appends an event signed with a key other than the host's own: a bot's, for its
+     * registration and its batches, or the host key acting as bot authority. Returns null on
+     * success, or why it was refused. Sequencer thread only.
+     *
+     * Unlike appendHostEvent this checks the signature first. Every replica will, and the
+     * signing key here comes from a file on disk — a bot key that no longer matches what the
+     * market recorded would otherwise put a line in the log that every player's game refuses.
+     */
+    String appendSignedEvent(Event event, String signature) throws IOException {
+        String bad = EventVerifier.verify(state, event, signature);
+        if (bad != null) return bad;
+
+        SequencedEvent probe = new SequencedEvent();
+        probe.seq = log.lastSeq() + 1;
+        probe.event = event;
+        EventApplier.Result check = EventApplier.validate(state, probe);
+        if (!check.accepted) return check.reason;
+
+        SequencedEvent se = log.append(event, signature);
+        EventApplier.Result result = EventApplier.apply(state, se);
+        if (!result.accepted) return result.reason;
+
+        // Batches and production are the bulk of a busy bot market's log; one console line
+        // each would drown everything else the server says.
+        if (!(event instanceof Event.BotActions) && !(event instanceof Event.BotProduced)) {
+            System.out.println("[host] seq " + se.seq + " " + event.getClass().getSimpleName());
+        }
+        Message.Accepted acc = new Message.Accepted();
+        acc.logLine = log.rawLineFor(se.seq);
+        broadcast(acc);
+        return null;
+    }
+
     /**
      * Fast-forwards this host onto a longer branch of the market it already serves.
      *
@@ -1443,7 +1561,7 @@ public class HostServer {
 
             // Chunked like a migration, and for the same reason: there is no bound on
             // how far a host can have fallen behind its own market.
-            final List<String> offered = accumulateChunks(channel, req.logLines, req.complete,
+            final List<String> offered = accumulateChunks(channel, req.lines(), req.complete,
                     Message.CatchUp.class, reply, "catch-up offer");
             if (offered == null) return;
 
@@ -1562,7 +1680,13 @@ public class HostServer {
     private void sequencerLoop() {
         while (running) {
             try {
-                Proposal p = queue.take();
+                // Polled rather than taken, so stop() can end this loop by clearing running
+                // instead of interrupting it. An interrupt that lands during a log write
+                // closes the file channel mid-line, which is a torn last entry on disk; on a
+                // server with bots the sequencer is nearly always writing, so that stopped
+                // being a rare case.
+                Proposal p = queue.poll(250, TimeUnit.MILLISECONDS);
+                if (p == null || !running) continue;
                 if (p.hostAction != null) {
                     p.hostAction.run();
                 } else {
@@ -2056,9 +2180,24 @@ public class HostServer {
     public void stop() {
         running = false;
 
-        if (sequencerThread != null) {
-            sequencerThread.interrupt();
-            sequencerThread = null;
+        BotRunner runner = botRunner;
+        if (runner != null) {
+            runner.stop();
+            botRunner = null;
+        }
+
+        // Not interrupted: it sees running go false within a poll, after finishing whatever
+        // event it is in the middle of (see sequencerLoop). Waited for, because "stopped"
+        // has to mean nothing more gets written — a second server on the same log, as a
+        // restart starts, would otherwise race the last event of this one.
+        Thread sequencer = sequencerThread;
+        sequencerThread = null;
+        if (sequencer != null && sequencer != Thread.currentThread()) {
+            try {
+                sequencer.join(5_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         if (serverSocket != null) {
@@ -2072,7 +2211,7 @@ public class HostServer {
             "usage: HostServer [--config <file>] [--write-config] [--creator-key <file>]\n"
             + "                  [--port N] [--log <file>] [--name <host name>]\n"
             + "                  [--market <market name>] [--bind <address>]\n"
-            + "                  [--game-version <e.g. 1.21.11>]\n"
+            + "                  [--game-version <e.g. 1.21.11>] [--bots]\n"
             + "\n"
             + "  --config        config file to read (default server-config.json)\n"
             + "  --write-config  write the effective config back out and exit\n"
@@ -2083,6 +2222,11 @@ public class HostServer {
             + "  --game-version  the Minecraft version this server's players are on. Required\n"
             + "                  when the server creates its market; anyone on another\n"
             + "                  version is refused.\n"
+            + "\n"
+            + "  --bots          give the market bots. Only when the server creates it: bots\n"
+            + "                  are part of what players join, so they cannot be switched\n"
+            + "                  on later. Spawn, list, pause and resume them by typing\n"
+            + "                  bot commands into this console (try: bot help).\n"
             + "\n"
             + "Flags override the config file. Everything has a default except that.";
 
@@ -2130,6 +2274,7 @@ public class HostServer {
                     case "--market":       cfg.marketName = args[++i]; break;
                     case "--bind":         cfg.bindAddress = args[++i]; break;
                     case "--game-version": cfg.gameVersion = args[++i]; break;
+                    case "--bots":         cfg.bots = true; break;
                     case "--help":
                     case "-h":
                         System.out.println(USAGE);
@@ -2250,12 +2395,21 @@ public class HostServer {
                 System.err.println("[host] " + e.getMessage());
                 System.exit(2);
             }
-        } else if (creatorKeyFile != null) {
-            System.out.println("[host] --creator-key ignored: this log already holds a market");
+        } else {
+            if (creatorKeyFile != null) {
+                System.out.println("[host] --creator-key ignored: this log already holds a market");
+            }
+            if (cfg.bots) {
+                System.out.println("[host] --bots ignored: this log already holds a market, and"
+                        + " bots can only be switched on when a market is created");
+            }
         }
 
         try {
-            new HostServer(cfg, logFile, keys, peers).start();
+            HostServer server = new HostServer(cfg, logFile, keys, peers);
+            // Before start(), which does not return until the server stops.
+            BotConsole.start(server);
+            server.start();
         } catch (java.net.BindException e) {
             // The in-game path has named this fix since the two-client dev setup made it
             // routine; the launcher was still dumping a stack trace at an operator who
@@ -2298,6 +2452,9 @@ public class HostServer {
             MarketBootstrap.createMarket(log, creatorId, name, serverKeys,
                     cfg.welcomeGrant, cfg.listingFee, cfg.stipendAmount);
             System.out.println("[host] created '" + name + "' owned by this server");
+            if (cfg.bots) {
+                MarketBootstrap.enableBots(log, creatorId, serverKeys, serverKeys.publicKeyString());
+            }
             return;
         }
 
@@ -2314,6 +2471,11 @@ public class HostServer {
         UUID creatorId = UUID.fromString(cfg.creatorUserId.trim());
         MarketBootstrap.createMarket(log, creatorId, name, creator, cfg.welcomeGrant,
                 cfg.listingFee, cfg.stipendAmount);
+        // Signed by the creator, who is the one deciding this market has bots. The key it
+        // names is this server's, the one that will spawn and run them.
+        if (cfg.bots) {
+            MarketBootstrap.enableBots(log, creatorId, creator, serverKeys.publicKeyString());
+        }
         System.out.println("[host] created '" + name + "' owned by " + cfg.creatorUserId
                 + " — that key is not needed on this machine again");
     }

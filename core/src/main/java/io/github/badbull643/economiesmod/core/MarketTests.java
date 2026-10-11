@@ -1247,7 +1247,10 @@ public class MarketTests {
             seedMarket(log, live);
             apply(log, live, deposit(ALICE, IRON, 100));
 
-            List<String> lines = Files.readAllLines(src);
+            // Edited in full form — every line complete in itself — since stored lines are
+            // compact and leave out the prevHash a re-hash needs. Full lines are a valid way
+            // to store a log too, so they are written straight back.
+            List<String> lines = new ArrayList<>(log.rawLinesFrom(1));
             int at = lineOf(lines, "Deposit");
             String tampered = lines.get(at).replace("\"quantity\":100", "\"quantity\":999999");
             SequencedEvent se = EventLog.parseLine(tampered);
@@ -4988,7 +4991,19 @@ public class MarketTests {
             // what the first draft of this helper did.
             List<Object> out = new ArrayList<>();
             boolean ofUuids = field.getGenericType().toString().contains("UUID");
-            if (ofUuids) {
+            boolean ofBotActions = field.getGenericType().toString().contains("BotAction");
+            if (ofBotActions) {
+                // A batch: two actions that differ in every field, so a payload that left
+                // any of them out would come out the same for both and be caught here.
+                Event.BotAction a = new Event.BotAction();
+                a.kind = first ? "place" : "cancel";
+                a.itemId = first ? IRON : DIAMOND;
+                a.isBid = first;
+                a.price = first ? 7 : 8;
+                a.volume = first ? 9 : 10;
+                a.orderId = first ? 101 : 202;
+                out.add(a);
+            } else if (ofUuids) {
                 out.add(UUID.fromString(first
                         ? "00000000-0000-0000-0000-0000000000d1"
                         : "00000000-0000-0000-0000-0000000000d2"));

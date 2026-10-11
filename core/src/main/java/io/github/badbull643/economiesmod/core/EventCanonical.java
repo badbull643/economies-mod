@@ -128,6 +128,39 @@ public class EventCanonical {
                     .append('|').append(hd.banOnWorldChange)
                     .append('|').append(hd.maxDepositUnitsPerPlayHour)
                     .append('|').append(hd.maxDepositMultipleOfHandled);
+        } else if (e instanceof Event.BotsEnabled) {
+            sb.append('|').append(((Event.BotsEnabled) e).botAuthorityPublicKey);
+        } else if (e instanceof Event.BotSpawned) {
+            Event.BotSpawned bs = (Event.BotSpawned) e;
+            sb.append('|').append(bs.botType).append('|').append(bs.algorithmVersion);
+        } else if (e instanceof Event.BotProduced) {
+            Event.BotProduced bp = (Event.BotProduced) e;
+            sb.append('|').append(bp.itemId).append('|').append(bp.amount);
+        } else if (e instanceof Event.BotPaused || e instanceof Event.BotResumed) {
+            // Nothing beyond the base fields: which bot (userId), when, in which market.
+        } else if (e instanceof Event.BotActions) {
+            // In the order given, not sorted: the order is the meaning — a cancel then a
+            // re-place is a price change, the other way round is two orders. Every field of
+            // every action, whichever kind, so nothing in a batch travels unsigned.
+            Event.BotActions ba = (Event.BotActions) e;
+            sb.append('|');
+            if (ba.actions != null) {
+                sb.append(ba.actions.size());
+                for (Event.BotAction a : ba.actions) {
+                    if (a == null) {
+                        sb.append(";null");
+                        continue;
+                    }
+                    sb.append(';').append(a.kind)
+                            .append(',').append(a.itemId)
+                            .append(',').append(a.isBid)
+                            .append(',').append(a.price)
+                            .append(',').append(a.volume)
+                            .append(',').append(a.orderId);
+                }
+            } else {
+                sb.append("null");
+            }
         } else {
             // Not a guess about the future: every Event subclass is declared in one file
             // and this chain is the only place they are signed, so a type reaching here

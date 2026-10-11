@@ -1398,10 +1398,43 @@ public class MarketScreen extends Screen {
             Event.Withdraw wd = (Event.Withdraw) e;
             return "withdrew " + wd.quantity + " " + shortName(wd.itemId);
         }
+        String bot = describeBotEvent(e);
+        if (bot != null) return bot;
         if (e instanceof Event.CancelOrder) return "cancelled an order";
         if (e instanceof Event.KeyRegistered) return "someone joined";
         if (e instanceof Event.MarketCreated) return "market created";
         return e.getClass().getSimpleName();
+    }
+
+    /** " (Producer #1)" after a bot's order, nothing after a player's. */
+    private static String botTag(MarketState market, Order o) {
+        return market.isBot(o.userID()) ? " (" + market.botName(o.userID()) + ")" : "";
+    }
+
+    /** A bot's events in the feed, under the name the market gives it. Null for anything else. */
+    private String describeBotEvent(Event e) {
+        if (e instanceof Event.BotsEnabled) return "bots switched on";
+        MarketState market = MarketStateHolder.get();
+        if (!market.isBot(e.userId)) return null;
+        String name = market.botName(e.userId);
+        if (e instanceof Event.KeyRegistered) return name + " registered";
+        if (e instanceof Event.BotSpawned) return name + " joined";
+        if (e instanceof Event.BotPaused) return name + " paused";
+        if (e instanceof Event.BotResumed) return name + " resumed";
+        if (e instanceof Event.BotProduced) {
+            Event.BotProduced bp = (Event.BotProduced) e;
+            return name + " produced " + bp.amount + " " + shortName(bp.itemId);
+        }
+        if (e instanceof Event.BotActions) {
+            int placed = 0, cancelled = 0;
+            for (Event.BotAction a : ((Event.BotActions) e).actions) {
+                if (BotRules.ACTION_PLACE.equals(a.kind)) placed++;
+                else cancelled++;
+            }
+            String out = name + " placed " + placed + (placed == 1 ? " order" : " orders");
+            return cancelled == 0 ? out : out + ", cancelled " + cancelled;
+        }
+        return null;
     }
 
     private String shortName(String itemId) {
@@ -2070,7 +2103,7 @@ public class MarketScreen extends Screen {
         // count is what a second copy can never keep up with — it moves every time
         // somebody joins.
         String unsafe = EventApplier.stipendOutpacesItsFees(
-                amount, every, market.listingFee(), market.registeredCount());
+                amount, every, market.listingFee(), market.stipendClaimants());
         if (unsafe != null) {
             status = unsafe;
             return;
@@ -3898,7 +3931,7 @@ public class MarketScreen extends Screen {
         for (Order o : asks) {
             boolean mine = myUuid != null && o.userID().equals(myUuid);
             label(matrices, (mine ? "* " : "  ") + "#" + o.orderId()
-                            + " SELL " + o.volume() + " @ " + o.value(),
+                            + " SELL " + o.volume() + " @ " + o.value() + botTag(market, o),
                     x, y, mine ? 0xFFCC66 : 0xFF8888);
             y += rowHeight;
         }
@@ -3906,7 +3939,7 @@ public class MarketScreen extends Screen {
         for (Order o : bids) {
             boolean mine = myUuid != null && o.userID().equals(myUuid);
             label(matrices, (mine ? "* " : "  ") + "#" + o.orderId()
-                            + " BUY  " + o.volume() + " @ " + o.value(),
+                            + " BUY  " + o.volume() + " @ " + o.value() + botTag(market, o),
                     x, y, mine ? 0xFFCC66 : 0x88FF88);
             y += rowHeight;
         }

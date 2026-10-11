@@ -78,6 +78,8 @@ jar {
     from("../LICENSE.txt") {
         rename { "${it}_${project.archives_base_name}" }
     }
+    // core's vendored Bouncy Castle Ed25519 is compiled into this jar, so its MIT notice is too.
+    from("../licenses/bouncycastle-LICENSE.txt")
 }
 
 // configure the maven publication

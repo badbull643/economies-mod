@@ -190,6 +190,13 @@ public final class MarketSnapshot {
          * anywhere.
          */
         Event.HostDefaults hostDefaults;
+
+        /** The bot key, when this market has bots. Absent (null) in every other market. */
+        String botAuthorityKey;
+        /** Every bot, by identity. A snapshot without these would load a bot market as if
+         *  its bots were players — free to deposit, paying listing fees, counted for the
+         *  stipend — and that replica would then disagree with every other. */
+        Map<String, BotBody> bots = new LinkedHashMap<>();
     }
 
     /**
@@ -198,6 +205,14 @@ public final class MarketSnapshot {
      * the queue that decides who fills first. A JSON object would hand both to whatever
      * the reader felt like doing.
      */
+    static final class BotBody {
+        String type;
+        int number;
+        int algorithmVersion;
+        boolean paused;
+        Map<String, Long> lastProducedAt = new LinkedHashMap<>();
+    }
+
     static final class BookBody {
         List<LevelBody> asks = new ArrayList<>();
         List<LevelBody> bids = new ArrayList<>();
@@ -283,6 +298,16 @@ public final class MarketSnapshot {
         b.stipendEveryFills = state.stipendEveryFills();
         b.fillsEver = state.fillsEver();
         b.hostDefaults = state.hostDefaults();
+        b.botAuthorityKey = state.botAuthorityKey();
+        for (Map.Entry<UUID, MarketState.BotRecord> e : state.bots().entrySet()) {
+            BotBody bb = new BotBody();
+            bb.type = e.getValue().type;
+            bb.number = e.getValue().number;
+            bb.algorithmVersion = e.getValue().algorithmVersion;
+            bb.paused = e.getValue().paused();
+            bb.lastProducedAt.putAll(e.getValue().lastProducedAtAll());
+            b.bots.put(str(e.getKey()), bb);
+        }
 
         for (Map.Entry<UUID, String> e : state.keyDirectory().entrySet()) {
             b.keyDirectory.put(str(e.getKey()), e.getValue());
@@ -533,6 +558,14 @@ public final class MarketSnapshot {
         s.setStipend(b.stipendAmount, b.stipendEveryFills);
         s.setFillsEver(b.fillsEver);
         s.setHostDefaults(b.hostDefaults);
+        if (b.botAuthorityKey != null) s.setBotAuthorityKey(b.botAuthorityKey);
+        if (b.bots != null) {
+            for (Map.Entry<String, BotBody> e : b.bots.entrySet()) {
+                BotBody bb = e.getValue();
+                s.restoreBot(uuid(e.getKey()), bb.type, bb.number, bb.algorithmVersion,
+                        bb.paused, bb.lastProducedAt);
+            }
+        }
 
         if (b.keyDirectory != null) {
             for (Map.Entry<String, String> e : b.keyDirectory.entrySet()) {

@@ -422,6 +422,14 @@ public class ServerConfig {
      */
     public String gameVersion = null;
 
+    /**
+     * Whether a market this server creates has bots. Read once, when the server creates its
+     * market (and --bots on the command line sets it); a market's bots are decided then and
+     * never change, so this does nothing for a market that already exists. See
+     * docs/BOTS-SPEC.md.
+     */
+    public boolean bots = false;
+
     /** The effective answer, with "not said" resolved to what that has always meant. */
     public String gameVersion() { return GameVersions.normalize(gameVersion); }
 
@@ -823,7 +831,7 @@ public class ServerConfig {
     public com.google.gson.JsonObject hostRulesTree() {
         com.google.gson.JsonObject out = effectiveTree();
         for (String imposed : new String[] {
-                "port", "hostName", "hostUserId", "dedicated", "gameVersion",
+                "port", "hostName", "hostUserId", "dedicated", "gameVersion", "bots",
                 "logFile", "marketName", "creatorUserId" }) {
             out.remove(imposed);
         }

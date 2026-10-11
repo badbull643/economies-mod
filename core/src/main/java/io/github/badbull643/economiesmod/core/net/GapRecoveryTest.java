@@ -129,7 +129,9 @@ public class GapRecoveryTest {
             log.append(dep, joinerKeys.sign(EventCanonical.canonicalPayload(dep)));
         }
 
-        lines = Files.readAllLines(hostLog, StandardCharsets.UTF_8);
+        // The wire form, as a real host sends it. Read straight off the disk these would be
+        // the compact stored form, which no client is ever sent.
+        lines = log.rawLinesFrom(1);
         // Five events on top of whatever genesis writes, and remembered rather than
         // written out again below — genesis is free to grow, the history built here is
         // not.

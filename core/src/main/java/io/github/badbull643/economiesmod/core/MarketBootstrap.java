@@ -23,6 +23,40 @@ public class MarketBootstrap {
      * @throws IOException if the log already has history — a market cannot be
      *                     created twice, and an existing log already has an identity.
      */
+    /**
+     * Switches bots on for a market just created in this log, recording the key every bot
+     * event must be signed with.
+     *
+     * Only valid straight after creation, while the creator is the only identity in the
+     * market — so a dedicated server calls this in the same bootstrap that creates it, before
+     * it registers its own key or anyone joins. Signed by the creator, who is the one person
+     * entitled to decide what kind of market this is.
+     */
+    public static void enableBots(EventLog log, UUID creator, PlayerKeys creatorKeys,
+                                  String botAuthorityPublicKey) throws IOException {
+        MarketState state = EventApplier.replay(log);
+        Event.BotsEnabled be = new Event.BotsEnabled();
+        be.userId = creator;
+        be.marketId = state.marketId();
+        be.botAuthorityPublicKey = botAuthorityPublicKey;
+        be.clientEventId = UUID.randomUUID().toString();
+        be.timestamp = System.currentTimeMillis();
+
+        SequencedEvent probe = new SequencedEvent();
+        probe.seq = log.lastSeq() + 1;
+        probe.event = be;
+        EventApplier.Result check = EventApplier.validate(state, probe);
+        if (!check.accepted) {
+            throw new IOException("could not switch bots on: " + check.reason);
+        }
+        try {
+            log.append(be, creatorKeys.sign(EventCanonical.canonicalPayload(be)));
+        } catch (GeneralSecurityException e) {
+            throw new IOException("could not sign BotsEnabled: " + e.getMessage(), e);
+        }
+        System.out.println("[economiesmod] bots switched on for '" + state.marketName() + "'");
+    }
+
     public static Event.MarketCreated createMarket(EventLog log, UUID creator,
                                                    String marketName, PlayerKeys keys)
             throws IOException {

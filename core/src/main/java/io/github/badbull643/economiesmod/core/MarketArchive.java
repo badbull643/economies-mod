@@ -51,7 +51,17 @@ public class MarketArchive {
         if (dest.getParent() != null) {
             Files.createDirectories(dest.getParent());
         }
-        Files.copy(logFile, dest, StandardCopyOption.REPLACE_EXISTING);
+        // Written out line by line in full form rather than copied: on disk a log may be
+        // compact (no prevHash, no marketId) and may keep its older part in a sealed history
+        // file beside it. An export is meant to be read anywhere, so it carries every entry,
+        // each complete in itself.
+        try (java.io.BufferedWriter w = Files.newBufferedWriter(dest, StandardCharsets.UTF_8)) {
+            log.forEachRawLine(1, line -> {
+                w.write(line);
+                w.newLine();
+                return true;
+            });
+        }
     }
 
     // ─────────── import ───────────
@@ -155,11 +165,17 @@ public class MarketArchive {
         MarketState state = new MarketState();
         String expectedPrev = "0";
         long expectedSeq = 1;
+        // A file copied straight off a disk may hold compact lines, so each is read in its
+        // context — the hash before it and the genesis market — as the log itself reads it.
+        UUID genesisId = null;
 
         for (String line : lines) {
             SequencedEvent se;
             try {
-                se = EventLog.parseLine(line);
+                se = EventLog.parseStoredLine(line, expectedPrev, genesisId);
+                if (se.seq == 1 && se.event instanceof Event.MarketCreated) {
+                    genesisId = se.event.marketId;
+                }
             } catch (Exception e) {
                 throw new InvalidArchive("unreadable event at position " + expectedSeq
                         + " — the file may be from a newer version: " + e.getMessage());

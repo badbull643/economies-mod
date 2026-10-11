@@ -449,8 +449,8 @@ public class MarketClient {
             Message.Sync frame = sync;
             while (true) {
                 frames++;
-                if (frame.logLines != null) {
-                    for (String line : frame.logLines) {
+                {
+                    for (String line : frame.lines()) {
                         if (!applyLine(line)) {
                             synced = false;
                             break;
@@ -696,7 +696,7 @@ public class MarketClient {
             for (int i = 0; i < chunks.size(); i++) {
                 Message.MigrateRequest req = new Message.MigrateRequest();
                 req.userId = userId.toString();
-                req.logLines = chunks.get(i);
+                req.packLines(chunks.get(i));
                 req.complete = (i == chunks.size() - 1);
                 // First chunk only, like Sync: the host reads it off the message that
                 // opened the exchange and the rest are just more history.
@@ -737,7 +737,7 @@ public class MarketClient {
             for (int i = 0; i < chunks.size(); i++) {
                 Message.CatchUp req = new Message.CatchUp();
                 req.userId = userId.toString();
-                req.logLines = chunks.get(i);
+                req.packLines(chunks.get(i));
                 req.complete = (i == chunks.size() - 1);
                 ch.send(req);
             }

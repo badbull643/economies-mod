@@ -72,6 +72,9 @@ tasks.register('serverJar', Jar) {
     // it too — Apache 2.0 §4 requires that of anyone redistributing it, and the gson
     // jar itself carries no license file to fall back on.
     from("../licenses/gson-LICENSE.txt")
+    // Bouncy Castle's Ed25519 is vendored into core (core/crypto/bc), so its MIT notice goes
+    // wherever those classes do.
+    from("../licenses/bouncycastle-LICENSE.txt")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
@@ -97,6 +100,14 @@ def suites = [
                             'Checks a deposit cap is enforced against a real client.'],
         attestationTest  : ['io.github.badbull643.economiesmod.core.net.AttestationTest',
                             'Checks a world attestation reaches the host and is acted on.'],
+        botTest          : ['io.github.badbull643.economiesmod.core.BotTest',
+                            'Checks the bot rules every replica enforces: grants, caps, production, batches, fees.'],
+        botRunnerTest    : ['io.github.badbull643.economiesmod.core.net.BotRunnerTest',
+                            'Checks a dedicated server runs its bots: console, both schedulers, production, restart.'],
+        storageTest      : ['io.github.badbull643.economiesmod.core.StorageTest',
+                            'Checks compact storage, sealed history, full lines on the wire and packing.'],
+        cryptoTest       : ['io.github.badbull643.economiesmod.core.CryptoTest',
+                            'Checks the vendored Ed25519 against RFC 8032 (and the JDK, on Java 15+) and RSA beside it.'],
         gameVersionTest  : ['io.github.badbull643.economiesmod.core.net.GameVersionTest',
                             'Checks a market refuses players on another Minecraft version at every door.'],
 ]

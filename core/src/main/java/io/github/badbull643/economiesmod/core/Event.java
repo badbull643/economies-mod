@@ -267,4 +267,79 @@ public abstract class Event {
         public long price;
     }
 
+    // ─────────── bots (see BotRules and docs/BOTS-SPEC.md) ───────────
+    //
+    // Bots exist only in markets a dedicated server created with bots switched on. Four of
+    // these are signed with the market's bot key, recorded by BotsEnabled, and say what the
+    // server did to a bot; their userId is the bot they are about. BotActions is signed by
+    // the bot itself and is the only way a bot ever places or cancels an order.
+
+    /**
+     * Switches bots on for this market, once, straight after it is created, and records the
+     * key that every bot event after it must be signed with. Signed by the market's creator.
+     */
+    public static class BotsEnabled extends Event {
+        public String botAuthorityPublicKey;
+    }
+
+    /** Makes a registered identity with no history into a bot, and grants it its starting stock. */
+    public static class BotSpawned extends Event {
+        public String botType;
+        public int algorithmVersion;
+    }
+
+    /** A producer's output: new items, at no faster than BotRules' fixed rate. */
+    public static class BotProduced extends Event {
+        public String itemId;
+        public long amount;
+    }
+
+    /** Stops a bot, cancelling its resting orders. */
+    public static class BotPaused extends Event {
+    }
+
+    /** Starts a paused bot again. */
+    public static class BotResumed extends Event {
+    }
+
+    /**
+     * Everything a bot decided in one tick, applied in order and in one step. An action that
+     * is invalid when its turn comes is skipped; the rest still apply.
+     */
+    public static class BotActions extends Event {
+        public List<BotAction> actions;
+    }
+
+    /**
+     * One action in a batch: kind "place" (itemId, isBid, price, volume) or "cancel"
+     * (itemId, isBid, orderId). Not an event itself.
+     */
+    public static class BotAction {
+        public String kind;
+        public String itemId;
+        public boolean isBid;
+        public long price;
+        public long volume;
+        public long orderId;
+
+        public static BotAction place(String itemId, boolean isBid, long price, long volume) {
+            BotAction a = new BotAction();
+            a.kind = BotRules.ACTION_PLACE;
+            a.itemId = itemId;
+            a.isBid = isBid;
+            a.price = price;
+            a.volume = volume;
+            return a;
+        }
+
+        public static BotAction cancel(String itemId, boolean isBid, long orderId) {
+            BotAction a = new BotAction();
+            a.kind = BotRules.ACTION_CANCEL;
+            a.itemId = itemId;
+            a.isBid = isBid;
+            a.orderId = orderId;
+            return a;
+        }
+    }
+
 }

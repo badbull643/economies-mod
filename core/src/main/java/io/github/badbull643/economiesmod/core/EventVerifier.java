@@ -32,7 +32,20 @@ public class EventVerifier {
         if (e instanceof Event.KeyRegistered) {
             return ((Event.KeyRegistered) e).publicKey;
         }
+        // What the server did to a bot is signed by the market's bot key, recorded by
+        // BotsEnabled — not by the bot (it would sign its own grant) and not by whoever is
+        // hosting (a rotating host must never be able to run bots). Null when the market has
+        // no bots, which verify reports as an unregistered author.
+        if (isBotAuthorityEvent(e)) {
+            return state.botAuthorityKey();
+        }
         return state.publicKeyOf(e.userId);
+    }
+
+    /** The bot events the market's bot key signs, as opposed to the bot's own BotActions. */
+    public static boolean isBotAuthorityEvent(Event e) {
+        return e instanceof Event.BotSpawned || e instanceof Event.BotProduced
+                || e instanceof Event.BotPaused || e instanceof Event.BotResumed;
     }
 
     /** Returns null if the signature is good, otherwise why it isn't. */

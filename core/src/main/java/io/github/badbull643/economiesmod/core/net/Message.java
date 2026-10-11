@@ -58,6 +58,21 @@ public abstract class Message {
      */
     public static class Sync extends Message {
         public List<String> logLines;
+
+        /** Log lines packed by LineCodec; senders set this, and logLines is left empty. */
+        public String logLinesGz;
+
+        /** The lines, from whichever form arrived: packed or (from an older sender) plain. */
+        public java.util.List<String> lines() throws java.io.IOException {
+            if (logLinesGz != null) return LineCodec.unpack(logLinesGz);
+            return logLines != null ? logLines : new java.util.ArrayList<>();
+        }
+
+        /** Sets the lines, packed for the wire. */
+        public void packLines(java.util.List<String> lines) {
+            this.logLines = null;
+            this.logLinesGz = LineCodec.pack(lines);
+        }
         /** False on every chunk but the last. */
         public boolean complete = true;
         public List<PeerCache.Peer> knownPeers;
@@ -132,6 +147,21 @@ public abstract class Message {
     public static class MigrateRequest extends Message {
         public String userId;
         public List<String> logLines;
+
+        /** Log lines packed by LineCodec; senders set this, and logLines is left empty. */
+        public String logLinesGz;
+
+        /** The lines, from whichever form arrived: packed or (from an older sender) plain. */
+        public java.util.List<String> lines() throws java.io.IOException {
+            if (logLinesGz != null) return LineCodec.unpack(logLinesGz);
+            return logLines != null ? logLines : new java.util.ArrayList<>();
+        }
+
+        /** Sets the lines, packed for the wire. */
+        public void packLines(java.util.List<String> lines) {
+            this.logLines = null;
+            this.logLinesGz = LineCodec.pack(lines);
+        }
         /** False on every chunk but the last — a whole history in one frame can
          *  exceed MessageChannel's per-line cap, so the transfer is split. */
         public boolean complete = true;
@@ -175,6 +205,21 @@ public abstract class Message {
     public static class CatchUp extends Message {
         public String userId;
         public List<String> logLines;   // events after the host's current head
+
+        /** Log lines packed by LineCodec; senders set this, and logLines is left empty. */
+        public String logLinesGz;
+
+        /** The lines, from whichever form arrived: packed or (from an older sender) plain. */
+        public java.util.List<String> lines() throws java.io.IOException {
+            if (logLinesGz != null) return LineCodec.unpack(logLinesGz);
+            return logLines != null ? logLines : new java.util.ArrayList<>();
+        }
+
+        /** Sets the lines, packed for the wire. */
+        public void packLines(java.util.List<String> lines) {
+            this.logLines = null;
+            this.logLinesGz = LineCodec.pack(lines);
+        }
         /** False on every chunk but the last, exactly as MigrateRequest does it —
          *  the divergence being repaired here has no bound on its length either. */
         public boolean complete = true;
