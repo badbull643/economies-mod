@@ -25,7 +25,10 @@ import java.util.UUID;
 @SuppressWarnings("UnstableApiUsage")
 public class MarketScreensGameTest implements FabricClientGameTest {
 
-    private static final String[] TABS = {"info", "trading", "network", "market", "settings"};
+    // In MarketScreen's SCREEN_ order. "item" is one item's view, reached from Browse.
+    private static final String[] TABS = {"browse", "sell", "orders", "history", "leaderboard",
+            "network", "market", "settings", "item"};
+    private static final int BROWSE = 0, MARKET = 6, ITEM = 8;
 
     @Override
     public void runTest(ClientGameTestContext context) {
@@ -47,7 +50,7 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             }
 
             // The create-a-market confirmation: a modal over a screen full of text.
-            openTab(context, 3);
+            openTab(context, MARKET);
             context.runOnClient(client -> setText(client.currentScreen, "marketNameField", "Test Market"));
             context.clickScreenButton("Create a new market");
             context.waitTicks(3);
@@ -88,15 +91,63 @@ public class MarketScreensGameTest implements FabricClientGameTest {
                         903, 3, "minecraft:iron_ingot", 30, true, other));
             });
 
+            // Some trading of our own, so Your orders and History have rows to draw: a buy
+            // and a sale that fill, through the applier so they are recorded as trades, and
+            // two orders that rest.
+            context.runOnClient(client -> {
+                io.github.badbull643.economiesmod.core.MarketState state = MarketStateHolder.get();
+                UUID me = client.player.getUuid();
+                state.wallets().adjust(me, 2000);
+                state.deposit(me, "minecraft:iron_ingot", 40);
+                apply(state, me, 9001, "minecraft:diamond", 40, 2, true);      // buys from the ask at 40
+                apply(state, me, 9002, "minecraft:iron_ingot", 3, 10, false);  // sells into the bid at 3
+                // A run of iron trades at drifting prices, so the chart has a line to draw.
+                UUID other = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+                long[] prices = {4, 5, 5, 6, 5, 7, 6, 8, 7, 6, 7, 8};
+                for (int i = 0; i < prices.length; i++) {
+                    state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                            920 + i, prices[i], "minecraft:iron_ingot", 2, false, other));
+                    apply(state, me, 9100 + i, "minecraft:iron_ingot", prices[i], 2, true);
+                }
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        910, 30, "minecraft:diamond", 4, true, me));
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        911, 9, "minecraft:iron_ingot", 16, false, me));
+                // More open orders than the panel shows, so the list has to scroll.
+                for (int i = 0; i < 12; i++) {
+                    state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                            940 + i, 1 + i, "minecraft:cobblestone", 2, true, me));
+                }
+            });
+            selectItem("minecraft:diamond");
+
             // Every tab again, now that there is a market and a creator.
             for (int i = 0; i < TABS.length; i++) {
                 openTab(context, i);
                 context.takeScreenshot("04-market-" + TABS[i]);
             }
 
+            // An item's advanced side: the chart, the figures and the book in full.
+            setStatic("itemAdvanced", true);
+            openTab(context, ITEM);
+            context.takeScreenshot("04-market-item-advanced");
+            setStatic("itemAdvanced", false);
+
+            // The view menu, open over Browse.
+            openTab(context, BROWSE);
+            context.runOnClient(client -> setField(client.currentScreen, "menuOpen", true));
+            context.waitTicks(2);
+            context.takeScreenshot("04-market-menu");
+
+            // A search that matches nothing here, which offers every item in the game instead.
+            openTab(context, BROWSE);
+            context.runOnClient(client -> setText(client.currentScreen, "searchField", "gold"));
+            context.waitTicks(2);
+            context.takeScreenshot("04-market-search");
+
             // The item picker, which clips a scrolling grid and layers over the screen.
-            openTab(context, 1);
-            context.runOnClient(client -> click(client.currentScreen, "itemButton"));
+            openTab(context, BROWSE);
+            context.runOnClient(client -> call(client.currentScreen, "openPicker"));
             context.waitTicks(3);
             context.takeScreenshot("05-picker");
             context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
@@ -188,6 +239,63 @@ public class MarketScreensGameTest implements FabricClientGameTest {
         selectTab(tab);
         context.setScreen(MarketScreen::new);
         context.waitTicks(5);
+    }
+
+    /** Which item the item view shows: the selection is saved in settings, which init reads. */
+    private static void selectItem(String id) {
+        io.github.badbull643.economiesmod.core.Settings s = MarketStateHolder.settings();
+        if (s != null) s.setLastItem(id);
+    }
+
+    /** An order put through the applier, so a fill is recorded as a trade the way a real one is. */
+    private static void apply(io.github.badbull643.economiesmod.core.MarketState state, UUID who, long seq,
+                              String item, long price, long volume, boolean bid) {
+        io.github.badbull643.economiesmod.core.Event.PlaceOrder p =
+                new io.github.badbull643.economiesmod.core.Event.PlaceOrder();
+        p.userId = who;
+        p.marketId = state.marketId();
+        p.itemId = item;
+        p.price = price;
+        p.volume = volume;
+        p.isBid = bid;
+        p.timestamp = System.currentTimeMillis() - 5 * 60_000;
+        io.github.badbull643.economiesmod.core.SequencedEvent se =
+                new io.github.badbull643.economiesmod.core.SequencedEvent();
+        se.seq = seq;
+        se.event = p;
+        io.github.badbull643.economiesmod.core.EventApplier.Result r =
+                io.github.badbull643.economiesmod.core.EventApplier.apply(state, se);
+        if (!r.accepted) System.out.println("[gametest] order not applied: " + r.reason);
+    }
+
+    private static void setField(Screen screen, String name, boolean value) {
+        try {
+            Field f = MarketScreen.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.setBoolean(screen, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void setStatic(String name, boolean value) {
+        try {
+            Field f = MarketScreen.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.setBoolean(null, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void call(Screen screen, String method) {
+        try {
+            java.lang.reflect.Method m = MarketScreen.class.getDeclaredMethod(method);
+            m.setAccessible(true);
+            m.invoke(screen);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** The tab is remembered in a static, so choosing one is setting that before opening. */

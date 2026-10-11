@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "economiesmod",
+  "version": "${version}",
+  "name": "EconomiesMod",
+  "description": "A player-run market with a real order book. Deposit items, list them at your price, and trade with your friends over LAN. Balances are computed by every player from a signed, hash-chained log, so whoever hosts orders the trades and cannot invent a credit.",
+  "authors": [
+    "badbull643"
+  ],
+  "contact": {
+    "homepage": "https://github.com/badbull643/economies-mod",
+    "sources": "https://github.com/badbull643/economies-mod",
+    "issues": "https://github.com/badbull643/economies-mod/issues"
+  },
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "io.github.badbull643.economiesmod.client.EconomiesmodClient"
+    ],
+    "main": [
+      "io.github.badbull643.economiesmod.Economiesmod"
+    ]
+  },
+  "mixins": [
+    "economiesmod.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric": "*",
+    "minecraft": "${minecraft_version}",
+    "java": ">=21"
+  }
+}
