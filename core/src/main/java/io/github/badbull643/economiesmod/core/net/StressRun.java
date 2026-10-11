@@ -39,6 +39,8 @@ public final class StressRun {
     private StressRun() {}
 
     private static final String[] ITEMS = BotRules.ITEMS.toArray(new String[0]);
+    /** Which version's seed prices the simulated players start from: the bots' version. */
+    private static volatile int seedVersion = BotRules.LATEST_VERSION;
 
     // What the report counts, from one observer's stream of applied events.
     private static final ConcurrentHashMap<String, AtomicLong> byType = new ConcurrentHashMap<>();
@@ -48,6 +50,8 @@ public final class StressRun {
     // first long run read that as trading stopping.
     private static final AtomicLong fills = new AtomicLong();
     private static final AtomicLong filledUnits = new AtomicLong();
+    /** Fills with a player on at least one side: the activity bots are there to create. */
+    private static final AtomicLong playerFills = new AtomicLong();
     private static final AtomicLong proposed = new AtomicLong();
     private static final ConcurrentHashMap<String, AtomicLong> refusalReasons = new ConcurrentHashMap<>();
 
@@ -55,16 +59,21 @@ public final class StressRun {
         String gameVersion = null;
         int port = 25560, players = 10;
         double minutes = 10;
+        int botVersion = 0;
+        double speed = 1;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--game-version": gameVersion = args[++i]; break;
                 case "--port":         port = Integer.parseInt(args[++i]); break;
                 case "--players":      players = Integer.parseInt(args[++i]); break;
                 case "--minutes":      minutes = Double.parseDouble(args[++i]); break;
+                case "--bot-version":  botVersion = Integer.parseInt(args[++i]); break;
+                case "--speed":        speed = Double.parseDouble(args[++i]); break;
                 default:
                     System.err.println("unknown argument " + args[i]);
                     System.err.println("usage: StressRun --game-version <e.g. 1.21.11>"
-                            + " [--port 25560] [--players 10] [--minutes 10]");
+                            + " [--port 25560] [--players 10] [--minutes 10]"
+                            + " [--bot-version 1|2] [--speed 60]");
                     System.exit(2);
             }
         }
@@ -98,6 +107,12 @@ public final class StressRun {
         pace.producerEvery = 4;       // 200 ms, against 30 s
         pace.productionEvery = 20;    // looked at every second; the rate itself is the market's
         pace.budgetRefillMs = 50;     // about 20 actions a second each, against one per 15 s
+        // --speed: the bots' clock runs this many times faster than the wall's, so production
+        // and upkeep — fixed rates per hour — happen in minutes. The rules check production
+        // against the bot's own earlier timestamps, which are on the same fast clock.
+        final long clockStart = System.currentTimeMillis();
+        final double clockSpeed = speed;
+        pace.clock = () -> clockStart + (long) ((System.currentTimeMillis() - clockStart) * clockSpeed);
         host.useBotTiming(pace);
 
         Thread serverThread = new Thread(() -> {
@@ -108,6 +123,11 @@ public final class StressRun {
         IOException bindError = host.awaitBound(10_000);
         if (bindError != null) throw bindError;
         while (host.botRunner() == null) Thread.sleep(50);
+        if (botVersion > 0) host.botRunner().useSpawnVersion(botVersion);
+        seedVersion = botVersion > 0 ? botVersion : BotRules.LATEST_VERSION;
+        System.out.println("[stress] bots on algorithm version "
+                + (botVersion > 0 ? botVersion : BotRules.LATEST_VERSION)
+                + (speed != 1 ? ", their clock at " + speed + "x" : ""));
 
         // Every bot the market allows, half of each type on each scheduler.
         int half = BotRules.MAX_PER_TYPE / 2;
@@ -129,9 +149,11 @@ public final class StressRun {
         crowd.get(0).client.setOnApplied(a -> {
             byType.computeIfAbsent(a.event.eventType, k -> new AtomicLong()).incrementAndGet();
             if (a.result != null && a.result.fills != null) {
+                MarketState st = crowd.get(0).client.state();
                 for (Fill f : a.result.fills) {
                     fills.incrementAndGet();
                     filledUnits.addAndGet(f.quantity());
+                    if (!st.isBot(f.buyerId()) || !st.isBot(f.sellerId())) playerFills.incrementAndGet();
                 }
             }
         });
@@ -262,6 +284,43 @@ public final class StressRun {
                 "[stress] seq %d%s | trades %d (%d units) | log %s live + %s sealed | queue %d"
                         + " | slowest player %d behind | heap %d MB",
                 host.headSeq(), rate, trades, units, mb(live), mb(sealed), host.pendingWork(), behind, usedMb));
+        System.out.println("[stress]   economy: " + economy(host.state(), trades));
+    }
+
+    /**
+     * How the economy is doing, in three figures: the share of all credits the bots hold
+     * (version 1's producers soaked them up; it should hold steady), a price index (each
+     * basket item's market price over its version 2 seed, averaged geometrically — 1.00
+     * means prices sit where they were seeded), and the share of trades with a player in.
+     */
+    private static String economy(MarketState s, long trades) {
+        Lock read = s.readLock();
+        read.lock();
+        try {
+            long bots = 0, all = 0;
+            for (UUID u : s.registeredUsers()) {
+                long c = s.wallets().getBalance(u);
+                all += c;
+                if (s.isBot(u)) bots += c;
+            }
+            double logSum = 0;
+            int priced = 0;
+            StringBuilder prices = new StringBuilder();
+            for (String item : BotRules.ITEMS) {
+                long mp = MarketView.row(s, null, item, System.currentTimeMillis()).marketPrice;
+                prices.append(' ').append(item.substring(10, Math.min(item.length(), 14))).append('=').append(MarketView.price(mp));
+                if (mp > 0) {
+                    logSum += Math.log((double) mp / BotBrain.basePriceV2(item));
+                    priced++;
+                }
+            }
+            String index = priced == 0 ? "-" : String.format(Locale.ROOT, "%.2f", Math.exp(logSum / priced));
+            String withPlayers = trades == 0 ? "-" : (playerFills.get() * 100 / Math.max(1, trades)) + "%";
+            return String.format(Locale.ROOT, "bots hold %d%% of credits | price index %s (%s) | %s of trades involve a player",
+                    all == 0 ? 0 : bots * 100 / all, index, prices.toString().trim(), withPlayers);
+        } finally {
+            read.unlock();
+        }
     }
 
     private static int verdict(String label, boolean ok, String detail) {
@@ -372,13 +431,29 @@ public final class StressRun {
                 credits = s.wallets().getBalance(id);
                 stock = s.itemBalances().getBalance(id, item);
                 long last = s.trades().lastPrice(item);
-                ref = last > 0 ? last : BotBrain.basePrice(item);
+                ref = last > 0 ? last : seedVersion >= 2 ? BotBrain.basePriceV2(item) : BotBrain.basePrice(item);
                 mine = s.restingOrdersOf(id);
             } finally {
                 read.unlock();
             }
 
-            if (stock < 16 && rnd.nextInt(4) == 0) {
+            // Every player gathers two of the basket items and sells them, and buys the other
+            // three and uses them up — in the game, withdrawing them to place or craft. Like the
+            // producers, and like real players, who both earn and spend. A crowd split into
+            // gatherers and builders went broke on one side: the builders had no income, spent
+            // their grant, and demand died with them, whatever the bots did.
+            int itemIndex = java.util.Arrays.asList(ITEMS).indexOf(item);
+            boolean gatherer = (itemIndex - index % ITEMS.length + ITEMS.length) % ITEMS.length < 2;
+            if (!gatherer) {
+                if (stock > 0 && rnd.nextInt(4) == 0) {
+                    Event.Withdraw w = new Event.Withdraw();
+                    w.userId = id;
+                    w.itemId = item;
+                    w.quantity = Math.min(stock, 8);
+                    send(w);
+                    return;
+                }
+            } else if (stock < 16 && rnd.nextInt(4) == 0) {
                 Event.Deposit d = new Event.Deposit();
                 d.userId = id;
                 d.itemId = item;
@@ -396,7 +471,11 @@ public final class StressRun {
                 send(c);
                 return;
             }
-            boolean bid = rnd.nextBoolean();
+            // Like a player who gathers: sells what they have plenty of, buys what they are
+            // short of, and either in between. The first version picked a side at random, so
+            // simulated players bought things they already held hundreds of until they were
+            // broke — whoever was selling ended up with all the money, bot or not.
+            boolean bid = gatherer ? stock < 4 : stock < 32 || (stock < 128 && rnd.nextInt(3) > 0);
             long price = Math.max(1, ref + rnd.nextInt(3) - (bid ? 0 : 1));   // leans towards crossing
             long volume = 1 + rnd.nextInt(16);
             if (bid && credits < price * volume) return;

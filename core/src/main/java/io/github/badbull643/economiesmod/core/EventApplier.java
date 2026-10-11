@@ -159,6 +159,19 @@ public class EventApplier {
             Event.BotSpawned bs = (Event.BotSpawned) e;
             if (!BotRules.isType(bs.botType)) return Result.reject("unknown bot type " + bs.botType);
             if (bs.algorithmVersion < 1) return Result.reject("missing algorithm version");
+            if (!BotRules.knownVersion(bs.algorithmVersion)) {
+                return Result.reject("this version of the mod does not know bot algorithm version "
+                        + bs.algorithmVersion + " — update the mod");
+            }
+            // A version 2 producer makes one basket item, named when it is spawned; nothing
+            // else carries one.
+            boolean needsProduct = BotRules.PRODUCER.equals(bs.botType) && bs.algorithmVersion >= 2;
+            if (needsProduct && !BotRules.ITEMS.contains(bs.productItem)) {
+                return Result.reject("a producer needs one of the basket items to make");
+            }
+            if (!needsProduct && bs.productItem != null) {
+                return Result.reject("only a version 2 producer has an item of its own");
+            }
             if (state.isBot(e.userId)) return Result.reject("already a bot");
             if (e.userId.equals(state.creator())) return Result.reject("the creator cannot be a bot");
             // Its starting position has to be its fixed grant and nothing else.
@@ -185,7 +198,7 @@ public class EventApplier {
 
         if (e instanceof Event.BotProduced) {
             Event.BotProduced bp = (Event.BotProduced) e;
-            if (!BotRules.produces(bot.type, bp.itemId)) {
+            if (!bot.produces(bp.itemId)) {
                 return Result.reject(bot.type + " bots do not produce " + bp.itemId);
             }
             if (bp.amount <= 0) return Result.reject("amount must be positive");
@@ -202,9 +215,10 @@ public class EventApplier {
             } catch (ArithmeticException overflow) {
                 return Result.reject("past the production ceiling");
             }
-            if (holding > BotRules.PRODUCTION_CEILING) {
+            long ceiling = BotRules.productionCeiling(bot.algorithmVersion);
+            if (holding > ceiling) {
                 return Result.reject("would hold " + holding + " " + bp.itemId
-                        + ", past the production ceiling of " + BotRules.PRODUCTION_CEILING);
+                        + ", past the production ceiling of " + ceiling);
             }
             return null;
         }
@@ -227,6 +241,8 @@ public class EventApplier {
                     if (a.price <= 0 || a.volume <= 0) {
                         return Result.reject("an order needs a positive price and volume");
                     }
+                } else if (BotRules.ACTION_CONSUME.equals(a.kind)) {
+                    if (a.volume <= 0) return Result.reject("nothing to use up");
                 } else if (!BotRules.ACTION_CANCEL.equals(a.kind)) {
                     return Result.reject("unknown action " + a.kind);
                 }
@@ -250,16 +266,17 @@ public class EventApplier {
         if (e instanceof Event.BotSpawned) {
             Event.BotSpawned bs = (Event.BotSpawned) e;
             MarketState.BotRecord record = new MarketState.BotRecord(
-                    bs.botType, state.botCount(bs.botType) + 1, bs.algorithmVersion);
+                    bs.botType, state.botCount(bs.botType) + 1, bs.algorithmVersion, bs.productItem);
             // A producer's production clock starts when it does: no output owed for the
             // time before it existed.
             for (String item : BotRules.ITEMS) {
-                if (BotRules.produces(bs.botType, item)) record.setLastProducedAt(item, e.timestamp);
+                if (record.produces(item)) record.setLastProducedAt(item, e.timestamp);
             }
             state.addBot(e.userId, record);
-            state.wallets().adjust(e.userId, BotRules.startingCredits(bs.botType));
+            state.wallets().adjust(e.userId, BotRules.startingCredits(bs.botType, bs.algorithmVersion));
             for (String item : BotRules.ITEMS) {
-                state.deposit(e.userId, item, BotRules.startingItemsEach(bs.botType));
+                state.deposit(e.userId, item,
+                        BotRules.startingItems(bs.botType, bs.algorithmVersion, item, bs.productItem));
             }
             return Result.ok(Collections.emptyList());
         }
@@ -286,7 +303,7 @@ public class EventApplier {
             // it spent paused earns nothing.
             MarketState.BotRecord record = state.bot(e.userId);
             for (String item : BotRules.ITEMS) {
-                if (BotRules.produces(record.type, item)) record.setLastProducedAt(item, e.timestamp);
+                if (record.produces(item)) record.setLastProducedAt(item, e.timestamp);
             }
             record.setPaused(false);
             return Result.ok(Collections.emptyList());
@@ -308,6 +325,8 @@ public class EventApplier {
                         state.recordTrades(se.seq, e.timestamp, sr.fills);
                         fills.addAll(sr.fills);
                     }
+                } else if (BotRules.ACTION_CONSUME.equals(a.kind)) {
+                    state.consume(e.userId, a.itemId, a.volume);
                 } else {
                     state.cancelOrder(a.orderId, a.itemId, a.isBid, e.userId);
                 }
@@ -388,6 +407,7 @@ public class EventApplier {
         try {
             return applyLocked(state, se);
         } finally {
+            state.changed();
             state.writeLock().unlock();
         }
     }

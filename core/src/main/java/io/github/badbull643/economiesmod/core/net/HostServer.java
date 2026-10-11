@@ -1547,6 +1547,9 @@ public class HostServer {
 
     BotRunner botRunner() { return botRunner; }
 
+    /** The port this host listens on. */
+    int boundPort() { return port; }
+
     /** How much is waiting for the sequencer right now. For the stress run's report. */
     int pendingWork() { return queue.size(); }
 

@@ -133,6 +133,9 @@ public class EventCanonical {
         } else if (e instanceof Event.BotSpawned) {
             Event.BotSpawned bs = (Event.BotSpawned) e;
             sb.append('|').append(bs.botType).append('|').append(bs.algorithmVersion);
+            // Only when there is one, so a version 1 spawn signs exactly what it always did
+            // and every log written before this field existed still verifies.
+            if (bs.productItem != null) sb.append('|').append(bs.productItem);
         } else if (e instanceof Event.BotProduced) {
             Event.BotProduced bp = (Event.BotProduced) e;
             sb.append('|').append(bp.itemId).append('|').append(bp.amount);

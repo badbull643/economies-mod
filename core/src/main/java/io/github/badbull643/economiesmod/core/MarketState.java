@@ -118,14 +118,22 @@ public class MarketState {
         /** 1-based within its type, in spawn order: "Producer #2". */
         public final int number;
         public final int algorithmVersion;
+        /** A version 2 producer's one item; null otherwise. */
+        public final String product;
         private volatile boolean paused;
         /** Per produced item, the timestamp production was last counted from. */
         private final Map<String, Long> lastProducedAt = new ConcurrentHashMap<>();
 
-        BotRecord(String type, int number, int algorithmVersion) {
+        BotRecord(String type, int number, int algorithmVersion, String product) {
             this.type = type;
             this.number = number;
             this.algorithmVersion = algorithmVersion;
+            this.product = product;
+        }
+
+        /** Whether it makes this item. */
+        public boolean produces(String itemId) {
+            return BotRules.produces(type, product, itemId);
         }
 
         public boolean paused() { return paused; }
@@ -214,9 +222,9 @@ public class MarketState {
     void addBot(UUID userId, BotRecord record) { bots.put(userId, record); }
 
     /** Snapshot restore only: a bot record as it was saved. */
-    void restoreBot(UUID userId, String type, int number, int algorithmVersion, boolean paused,
-                    Map<String, Long> lastProducedAt) {
-        BotRecord r = new BotRecord(type, number, algorithmVersion);
+    void restoreBot(UUID userId, String type, int number, int algorithmVersion, String product,
+                    boolean paused, Map<String, Long> lastProducedAt) {
+        BotRecord r = new BotRecord(type, number, algorithmVersion, product);
         r.setPaused(paused);
         if (lastProducedAt != null) {
             for (Map.Entry<String, Long> e : lastProducedAt.entrySet()) {
@@ -256,6 +264,20 @@ public class MarketState {
      * try/finally; never held while doing anything slow.
      */
     public java.util.concurrent.locks.Lock readLock() { return guard.readLock(); }
+
+    /**
+     * Goes up by one every time an event is applied, accepted or not.
+     *
+     * For screens that work figures out from the market: they can keep what they worked out
+     * until this moves, rather than redoing it every frame for a market that has not changed.
+     * Not saved and not compared between replicas; it only means "something may have changed
+     * in this copy since you last looked".
+     */
+    private volatile long version = 0;
+
+    public long version() { return version; }
+
+    void changed() { version++; }
 
     /** Held by EventApplier.apply for the whole of one event, and by nothing else. */
     java.util.concurrent.locks.Lock writeLock() { return guard.writeLock(); }
@@ -680,6 +702,9 @@ public class MarketState {
         long current = itemBalances.getBalance(userId, itemId);
         if (current > Long.MAX_VALUE - qty) return;   // would overflow — reject
         itemBalances.adjust(userId, itemId, +qty);
+        // Arrived from outside the market — mined, crafted, granted, produced — so it cost
+        // nothing here, and selling it later is all profit.
+        pnlIn(userId, itemId, qty, 0);
     }
     /////////////////////
 
@@ -698,6 +723,7 @@ public class MarketState {
         long fee = listingFeeFor(order.userID());
         if (fee > 0) {
             wallets.adjust(order.userID(), -fee);
+            pnlRealize(order.userID(), -fee);
         }
 
         // Reserve
@@ -725,6 +751,9 @@ public class MarketState {
             // does not exist. Destroying it is the only option that closes the loop.
             long tax = taxOn(f.amount(), taxBps);
             wallets.adjust(f.sellerId(), +(f.amount() - tax));
+
+            pnlIn(f.buyerId(), f.itemId(), f.quantity(), f.amount());
+            pnlOut(f.sellerId(), f.itemId(), f.quantity(), f.amount() - tax);
 
             long reservedForThisFill = f.quantity() * buyerOrderPrice(order, f);
             long actuallySpent = f.amount();
@@ -828,14 +857,106 @@ public class MarketState {
         return SubmitResult.ok(Collections.emptyList());
     }
 
+    /**
+     * A bot using up its own goods: they leave the market. At most what it holds free —
+     * goods on the book are not touched. Returns how many went. Counted as an expense in
+     * the bot's profit, at what they cost it.
+     */
+    public long consume(UUID userId, String itemId, long qty) {
+        if (userId == null || qty <= 0) return 0;
+        long take = Math.min(qty, itemBalances.getBalance(userId, itemId));
+        if (take <= 0) return 0;
+        itemBalances.adjust(userId, itemId, -take);
+        pnlOut(userId, itemId, take, 0L);
+        return take;
+    }
+
     public boolean withdraw(UUID userId, String itemId, long qty) {
         if (qty <= 0) return false;
         long available = itemBalances.getBalance(userId, itemId);
         if (available < qty) return false;
         itemBalances.adjust(userId, itemId, -qty);
         withdrawn.merge(userId + "\0" + itemId, qty, Long::sum);
+        // Leaves at what it cost: taking your goods home is neither a profit nor a loss.
+        pnlOut(userId, itemId, qty, null);
         return true;
     }
+
+    // ─────────── profit and loss ───────────
+    //
+    // Average cost, per player per item. What you hold of an item carries the credits it
+    // cost you; selling some realises the difference between what the sale paid (after
+    // the trading fee) and their share of that cost. Listing fees are realised losses.
+    // Items that arrive from outside — deposited, granted, produced — come in at no cost,
+    // so selling what you mined counts as profit, which is what the market has paid you.
+    //
+    // Derived from the log like everything else here, so every replica agrees on everyone's
+    // figures, which is what lets a leaderboard be drawn from anybody's copy. It decides
+    // nothing: no rule reads it.
+    //
+    // Known softness: withdrawing bought goods and depositing them again resets their cost
+    // to nothing, so their next sale reads as all profit. A figure for fun, not an audit.
+
+    /** Per "<uuid>\0<itemId>": {units held, credits they cost}. Replaced whole on each change. */
+    private final Map<String, long[]> pnlPositions = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> pnlRealized = new ConcurrentHashMap<>();
+
+    private static String pnlKey(UUID userId, String itemId) {
+        return userId + "\0" + itemId;
+    }
+
+    private void pnlIn(UUID userId, String itemId, long qty, long cost) {
+        if (userId == null || qty <= 0) return;
+        long[] p = pnlPositions.getOrDefault(pnlKey(userId, itemId), new long[2]);
+        pnlPositions.put(pnlKey(userId, itemId),
+                new long[]{saturatingAdd(p[0], qty), saturatingAdd(p[1], Math.max(0, cost))});
+    }
+
+    /** Units leaving a position: sold for proceeds, or withdrawn when proceeds is null. */
+    private void pnlOut(UUID userId, String itemId, long qty, Long proceeds) {
+        if (userId == null || qty <= 0) return;
+        long[] p = pnlPositions.getOrDefault(pnlKey(userId, itemId), new long[2]);
+        long take = Math.min(qty, p[0]);
+        long costOut = p[0] <= 0 ? 0 : Math.round((double) p[1] * take / p[0]);
+        long units = p[0] - take, cost = Math.max(0, p[1] - costOut);
+        if (units == 0) pnlPositions.remove(pnlKey(userId, itemId));
+        else pnlPositions.put(pnlKey(userId, itemId), new long[]{units, units == 0 ? 0 : cost});
+        if (proceeds != null) pnlRealize(userId, proceeds - costOut);
+    }
+
+    private void pnlRealize(UUID userId, long amount) {
+        if (userId == null || amount == 0) return;
+        pnlRealized.merge(userId, amount, MarketState::saturatingAdd);
+    }
+
+    private static long saturatingAdd(long a, long b) {
+        long r = a + b;
+        if (((a ^ r) & (b ^ r)) < 0) return a < 0 ? Long.MIN_VALUE : Long.MAX_VALUE;
+        return r;
+    }
+
+    /** Profit locked in by selling, less listing fees. 0 for someone who never has. */
+    public long realizedPnl(UUID userId) {
+        Long v = userId == null ? null : pnlRealized.get(userId);
+        return v == null ? 0 : v;
+    }
+
+    /** What someone holds of each item and what it cost them: itemId to {units, cost}. */
+    public Map<String, long[]> positionsOf(UUID userId) {
+        Map<String, long[]> out = new java.util.TreeMap<>();
+        if (userId == null) return out;
+        String prefix = userId + "\0";
+        for (Map.Entry<String, long[]> e : pnlPositions.entrySet()) {
+            if (e.getKey().startsWith(prefix)) {
+                out.put(e.getKey().substring(prefix.length()), e.getValue().clone());
+            }
+        }
+        return out;
+    }
+
+    Map<String, long[]> pnlPositions() { return pnlPositions; }
+
+    Map<UUID, Long> pnlRealized() { return pnlRealized; }
 
     /**
      * How much of an item this market has ever handed to somebody.

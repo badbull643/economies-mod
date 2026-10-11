@@ -30,8 +30,10 @@ public final class BotConsole {
 
     private static final String HELP =
             "bot commands:\n"
-            + "  bot spawn <producer|maker> [count] [tick|threads]   add bots (count defaults to 1,\n"
-            + "                                                    scheduler to tick)\n"
+            + "  bot spawn <producer|maker> [count] [tick|threads] [item]\n"
+            + "                                 add bots (count defaults to 1, scheduler to tick;\n"
+            + "                                 a producer makes the item named, or the one\n"
+            + "                                 fewest producers make)\n"
             + "  bot list                                          every bot and what it holds\n"
             + "  bot pause <bot>                                   take its orders off the book and stop it\n"
             + "  bot resume <bot>                                  start it again\n"
@@ -103,16 +105,27 @@ public final class BotConsole {
                 }
                 int count = 1;
                 BotRunner.Mode mode = BotRunner.Mode.TICK;
+                String product = null;
                 for (int i = 3; i < w.length; i++) {
                     BotRunner.Mode m = BotRunner.Mode.parse(w[i]);
                     if (m != null) {
                         mode = m;
                         continue;
                     }
+                    String item = w[i].contains(":") ? w[i] : "minecraft:" + w[i];
+                    if (BotRules.ITEMS.contains(item)) {
+                        if (!BotRules.PRODUCER.equals(type)) {
+                            reply.accept("only producers make an item of their own");
+                            return;
+                        }
+                        product = item;
+                        continue;
+                    }
                     try {
                         count = Integer.parseInt(w[i]);
                     } catch (NumberFormatException e) {
-                        reply.accept("expected a count or tick|threads, not '" + w[i] + "'");
+                        reply.accept("expected a count, tick|threads, or one of the basket items ("
+                                + String.join(", ", BotRules.ITEMS).replace("minecraft:", "") + "), not '" + w[i] + "'");
                         return;
                     }
                 }
@@ -120,7 +133,7 @@ public final class BotConsole {
                     reply.accept("count must be between 1 and " + BotRules.MAX_PER_TYPE);
                     return;
                 }
-                runner.spawn(type, count, mode, reply);
+                runner.spawn(type, count, mode, product, reply);
                 return;
             }
             case "list": {

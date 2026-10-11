@@ -286,6 +286,8 @@ public abstract class Event {
     public static class BotSpawned extends Event {
         public String botType;
         public int algorithmVersion;
+        /** A version 2 producer's one item; null for market makers and version 1 bots. */
+        public String productItem;
     }
 
     /** A producer's output: new items, at no faster than BotRules' fixed rate. */
@@ -328,6 +330,14 @@ public abstract class Event {
             a.itemId = itemId;
             a.isBid = isBid;
             a.price = price;
+            a.volume = volume;
+            return a;
+        }
+
+        public static BotAction consume(String itemId, long volume) {
+            BotAction a = new BotAction();
+            a.kind = BotRules.ACTION_CONSUME;
+            a.itemId = itemId;
             a.volume = volume;
             return a;
         }

@@ -176,6 +176,9 @@ public final class MarketSnapshot {
         List<String> migratedIn = new ArrayList<>();
         Map<String, Long> stipendedAtFill = new LinkedHashMap<>();
         Map<String, Long> withdrawn = new LinkedHashMap<>();
+        /** Profit and loss: "<uuid>\0<itemId>" to {units, cost}, and uuid to realised profit. */
+        Map<String, long[]> pnlPositions = new LinkedHashMap<>();
+        Map<String, Long> pnlRealized = new LinkedHashMap<>();
         Map<String, Long> wallets = new LinkedHashMap<>();
         Map<String, Map<String, Long>> itemBalances = new LinkedHashMap<>();
         Map<String, BookBody> books = new LinkedHashMap<>();
@@ -209,6 +212,7 @@ public final class MarketSnapshot {
         String type;
         int number;
         int algorithmVersion;
+        String product;
         boolean paused;
         Map<String, Long> lastProducedAt = new LinkedHashMap<>();
     }
@@ -304,6 +308,7 @@ public final class MarketSnapshot {
             bb.type = e.getValue().type;
             bb.number = e.getValue().number;
             bb.algorithmVersion = e.getValue().algorithmVersion;
+            bb.product = e.getValue().product;
             bb.paused = e.getValue().paused();
             bb.lastProducedAt.putAll(e.getValue().lastProducedAtAll());
             b.bots.put(str(e.getKey()), bb);
@@ -320,6 +325,12 @@ public final class MarketSnapshot {
             b.stipendedAtFill.put(str(e.getKey()), e.getValue());
         }
         b.withdrawn.putAll(state.withdrawn());
+        for (Map.Entry<String, long[]> e : state.pnlPositions().entrySet()) {
+            b.pnlPositions.put(e.getKey(), e.getValue().clone());
+        }
+        for (Map.Entry<UUID, Long> e : state.pnlRealized().entrySet()) {
+            b.pnlRealized.put(str(e.getKey()), e.getValue());
+        }
 
         for (Map.Entry<UUID, Long> e : state.wallets().balances().entrySet()) {
             b.wallets.put(str(e.getKey()), e.getValue());
@@ -563,7 +574,7 @@ public final class MarketSnapshot {
             for (Map.Entry<String, BotBody> e : b.bots.entrySet()) {
                 BotBody bb = e.getValue();
                 s.restoreBot(uuid(e.getKey()), bb.type, bb.number, bb.algorithmVersion,
-                        bb.paused, bb.lastProducedAt);
+                        bb.product, bb.paused, bb.lastProducedAt);
             }
         }
 
@@ -582,6 +593,16 @@ public final class MarketSnapshot {
             }
         }
         if (b.withdrawn != null) s.withdrawn().putAll(b.withdrawn);
+        if (b.pnlPositions != null) {
+            for (Map.Entry<String, long[]> e : b.pnlPositions.entrySet()) {
+                if (e.getValue() != null && e.getValue().length == 2) s.pnlPositions().put(e.getKey(), e.getValue());
+            }
+        }
+        if (b.pnlRealized != null) {
+            for (Map.Entry<String, Long> e : b.pnlRealized.entrySet()) {
+                s.pnlRealized().put(uuid(e.getKey()), e.getValue());
+            }
+        }
 
         if (b.wallets != null) {
             for (Map.Entry<String, Long> e : b.wallets.entrySet()) {

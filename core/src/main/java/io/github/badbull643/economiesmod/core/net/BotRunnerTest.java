@@ -108,10 +108,12 @@ public class BotRunnerTest {
         check("(the creator bids for 200 wood)", why == null);
         check("producers sell into it",
                 await(() -> holding(host, p1, WOOD) < BotRules.PRODUCTION_CEILING - BotRules.PRODUCTION_LOT, 5000));
-        long before = holding(host, p1, WOOD);
+        // Measured by its production clock moving rather than by its stock rising: the other
+        // producers buy wood for their upkeep at the same moment, so stock is not a fair gauge.
+        long before = host.state().bot(p1).lastProducedAt(WOOD);
         offset.addAndGet(BotRules.PRODUCTION_INTERVAL_MS * 3);
         check("once a few intervals are owed, the next production pass makes them",
-                await(() -> holding(host, p1, WOOD) > before, 5000));
+                await(() -> host.state().bot(p1).lastProducedAt(WOOD) > before, 5000));
         check("and never past the ceiling",
                 holding(host, p1, WOOD) <= BotRules.PRODUCTION_CEILING
                         && holding(host, p2, WOOD) <= BotRules.PRODUCTION_CEILING);
@@ -172,12 +174,11 @@ public class BotRunnerTest {
             }
             check("a replay of the log agrees with the live market about every bot", same);
         }
-        // Bots may trade with each other, but a market maker stops buying once it holds twice
-        // its starting stock. Without that, the first playtest's makers bought cobblestone off
-        // the producers until each held about 570. One lot over is allowed: a bid placed just
-        // under the limit can still fill.
-        long limit = BotRules.startingItemsEach(BotRules.MARKET_MAKER)
-                * BotBrain.PlaceholderMarketMaker.MAX_HOLDING_MULTIPLE + 8;
+        // Bots may trade with each other, but a market maker stops buying at its holding cap.
+        // Without one, the first playtest's makers bought cobblestone off the producers until
+        // each held about 570. One lot over is allowed: a bid placed just under the cap can
+        // still fill.
+        long limit = BotBrain.MarketMaker.CAP + 8;
         boolean withinLimit = true;
         for (UUID m : Arrays.asList(m1, m2)) {
             for (String item : BotRules.ITEMS) withinLimit &= holding(host.state(), m, item) <= limit;

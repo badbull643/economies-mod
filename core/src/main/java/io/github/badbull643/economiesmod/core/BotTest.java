@@ -285,10 +285,20 @@ public class BotTest {
             UUID p = spawn(BotRules.PRODUCER);
             UUID m = spawn(BotRules.MARKET_MAKER);
             submit(actions(m, Event.BotAction.place(IRON, false, 10, 4)), botKeys.get(m));
+            // A trade between the two, so profit moves: both sides' money and goods come from
+            // logged events, which a replay and a snapshot both have to reproduce.
+            submit(actions(m, Event.BotAction.place(WOOD, true, 12, 3)), botKeys.get(m));
+            submit(actions(p, Event.BotAction.place(WOOD, false, 12, 3)), botKeys.get(p));
             clock += BotRules.PRODUCTION_INTERVAL_MS;
             submit(paused(p), serverKeys);
+            long before = state.version();
+            submit(actions(m, Event.BotAction.place(IRON, false, 11, 1)), botKeys.get(m));
+            check("every applied event moves the version screens cache against", state.version() == before + 1);
             MarketState replayed = EventApplier.replay(new EventLog(log.file()));
             check("a replay finds the same bots", sameBots(state, replayed));
+            check("and the same profit and loss",
+                    state.realizedPnl(p) == 36 && replayed.realizedPnl(p) == state.realizedPnl(p)
+                            && samePositions(state, replayed, m) && samePositions(state, replayed, p));
             MarketSnapshot.save(log, state, log.lastSeq(), log.lastHash());
             MarketSnapshot.Restored restored = MarketSnapshot.loadIfValid(new EventLog(log.file()));
             check("a snapshot keeps them", restored != null && sameBots(state, restored.state));
@@ -296,6 +306,83 @@ public class BotTest {
                     restored != null && restored.state.wallets().getBalance(m) == state.wallets().getBalance(m));
             check("and still exempts them from the listing fee",
                     restored != null && restored.state.isBot(m) && restored.state.botAuthorityKey() != null);
+            check("and the profit and loss",
+                    restored != null && restored.state.realizedPnl(p) == state.realizedPnl(p)
+                            && samePositions(state, restored.state, m) && samePositions(state, restored.state, p));
+        }
+
+        System.out.println("  [B12: version 2 bots: one item each, their own grants, and using goods up]");
+        {
+            fresh(true);
+            check("a version 2 producer needs an item to make", spawnV2(BotRules.PRODUCER, null) == null);
+            check("one from the basket", spawnV2(BotRules.PRODUCER, "minecraft:diamond") == null);
+            check("a market maker has none", spawnV2(BotRules.MARKET_MAKER, WOOD) == null);
+            Event.BotSpawned future = spawned(registerFresh(), BotRules.MARKET_MAKER);
+            future.algorithmVersion = BotRules.LATEST_VERSION + 1;
+            check("a version this build does not know is refused", !submit(future, serverKeys).accepted);
+
+            UUID p = spawnV2(BotRules.PRODUCER, IRON);
+            check("a producer spawns making iron", p != null && IRON.equals(state.bot(p).product));
+            check("with 1,000 credits", state.wallets().getBalance(p) == 1_000);
+            check("256 iron and nothing else",
+                    state.itemBalances().getBalance(p, IRON) == 256 && state.itemBalances().getBalance(p, WOOD) == 0);
+            UUID m = spawnV2(BotRules.MARKET_MAKER, null);
+            check("a market maker gets 1,500 credits and 32 of each",
+                    state.wallets().getBalance(m) == 1_500 && state.itemBalances().getBalance(m, WOOD) == 32
+                            && state.itemBalances().getBalance(m, IRON) == 32);
+
+            clock += BotRules.PRODUCTION_INTERVAL_MS * 100;
+            check("it produces only its own item", !submit(produced(p, WOOD, 1), serverKeys).accepted);
+            check("and its ceiling is 256, already reached", !submit(produced(p, IRON, 1), serverKeys).accepted);
+            submit(actions(p, Event.BotAction.consume(IRON, 50)), botKeys.get(p));
+            check("using goods up takes them out of the market", state.itemBalances().getBalance(p, IRON) == 206);
+            check("after which it can produce back to 256", submit(produced(p, IRON, 50), serverKeys).accepted
+                    && !submit(produced(p, IRON, 1), serverKeys).accepted);
+            submit(actions(m, Event.BotAction.consume(WOOD, 1_000)), botKeys.get(m));
+            check("it can use up no more than it holds", state.itemBalances().getBalance(m, WOOD) == 0);
+            check("a batch to use up nothing is refused",
+                    !submit(actions(m, Event.BotAction.consume(IRON, 0)), botKeys.get(m)).accepted);
+
+            // The maker uses up the iron it was granted (which cost it nothing), then buys 10
+            // from the producer at 12 and uses up 4 of those: an expense of 48.
+            submit(actions(m, Event.BotAction.consume(IRON, 32)), botKeys.get(m));
+            submit(actions(p, Event.BotAction.place(IRON, false, 12, 10)), botKeys.get(p));
+            submit(actions(m, Event.BotAction.place(IRON, true, 12, 10)), botKeys.get(m));
+            long before = state.realizedPnl(m);
+            submit(actions(m, Event.BotAction.consume(IRON, 4)), botKeys.get(m));
+            check("using up bought goods is an expense at their cost", state.realizedPnl(m) == before - 48);
+
+            Event.BotSpawned v1 = spawned(UUID.randomUUID(), BotRules.PRODUCER);
+            Event.BotSpawned v2 = spawned(v1.userId, BotRules.PRODUCER);
+            v2.algorithmVersion = 2;
+            v2.productItem = IRON;
+            String v1Payload = EventCanonical.canonicalPayload(v1);
+            check("a version 1 spawn signs what it always did, with nothing for the item",
+                    v1Payload.endsWith("|producer|1"));
+            check("a version 2 spawn signs its item", EventCanonical.canonicalPayload(v2).endsWith("|producer|2|" + IRON));
+            MarketState replayed = EventApplier.replay(new EventLog(log.file()));
+            check("a replay agrees about who makes what", IRON.equals(replayed.bot(p).product)
+                    && replayed.itemBalances().getBalance(p, IRON) == state.itemBalances().getBalance(p, IRON));
+        }
+
+        System.out.println("  [B13: market makers quote items players have established, carefully]");
+        {
+            fresh(true);
+            UUID m = spawnV2(BotRules.MARKET_MAKER, null);
+            String diamond = "minecraft:diamond";
+            UUID a = UUID.randomUUID(), b = UUID.randomUUID(), c = UUID.randomUUID();
+            long seq = 10_000;
+            for (int i = 0; i < 4; i++) state.recordTrades(seq++, clock, java.util.Collections.singletonList(new Fill(a, b, 1, 100, diamond)));
+            check("four trades are not a market yet", ordersFor(m, diamond).isEmpty());
+            state.recordTrades(seq++, clock, java.util.Collections.singletonList(new Fill(b, a, 1, 100, diamond)));
+            check("nor five between only two players", ordersFor(m, diamond).isEmpty());
+            state.recordTrades(seq++, clock, java.util.Collections.singletonList(new Fill(c, a, 1, 100, diamond)));
+            List<Event.BotAction> quote = ordersFor(m, diamond);
+            check("five or more between three players are", quote.size() == 1 && quote.get(0).isBid);
+            check("it bids under the market price, not over it, holding none",
+                    !quote.isEmpty() && quote.get(0).price <= 100 && quote.get(0).price >= 90);
+            check("in a small lot, by value (about 80 credits' worth)", !quote.isEmpty() && quote.get(0).volume == 1);
+            check("and offers none, having none", quote.stream().noneMatch(x -> !x.isBid));
         }
 
         System.out.println();
@@ -351,6 +438,13 @@ public class BotTest {
 
     private static long lastSeq() { return log.lastSeq(); }
 
+    private static boolean samePositions(MarketState a, MarketState b, UUID who) {
+        java.util.Map<String, long[]> pa = a.positionsOf(who), pb = b.positionsOf(who);
+        if (!pa.keySet().equals(pb.keySet())) return false;
+        for (String k : pa.keySet()) if (!java.util.Arrays.equals(pa.get(k), pb.get(k))) return false;
+        return true;
+    }
+
     private static Event.BotsEnabled botsEnabled(PlayerKeys authority) {
         Event.BotsEnabled be = new Event.BotsEnabled();
         be.userId = CREATOR;
@@ -382,6 +476,25 @@ public class BotTest {
     }
 
     /** Registers a new identity and spawns it as a bot; null if the spawn is refused. */
+    /** What a version 2 market maker would place for one item on its next decision. */
+    private static List<Event.BotAction> ordersFor(UUID maker, String item) {
+        List<Event.BotAction> out = new ArrayList<>();
+        BotBrain.BotView view = new BotBrain.BotView(maker, state, new java.util.HashMap<>(), 0, clock);
+        for (Event.BotAction a : new BotBrain.MarketMaker().tick(view)) {
+            if (item.equals(a.itemId) && BotRules.ACTION_PLACE.equals(a.kind)) out.add(a);
+        }
+        return out;
+    }
+
+    /** Spawns a version 2 bot, a producer making the item given; null if the spawn is refused. */
+    private static UUID spawnV2(String type, String product) throws Exception {
+        UUID id = registerFresh();
+        Event.BotSpawned bs = spawned(id, type);
+        bs.algorithmVersion = 2;
+        bs.productItem = product;
+        return submit(bs, serverKeys).accepted ? id : null;
+    }
+
     private static UUID spawn(String type) throws Exception {
         UUID id = registerFresh();
         return submit(spawned(id, type), serverKeys).accepted ? id : null;

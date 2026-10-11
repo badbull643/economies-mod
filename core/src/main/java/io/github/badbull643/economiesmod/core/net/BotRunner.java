@@ -244,7 +244,8 @@ public final class BotRunner {
             MarketState.BotRecord record = state.bot(r.id);
             if (record == null || record.paused()) return;
             marketId = state.marketId();
-            actions = r.brain.tick(new BotBrain.BotView(r.id, state, r.memory, tick.get()));
+            actions = r.brain.tick(new BotBrain.BotView(r.id, state, r.memory, tick.get(),
+                    timing.clock.getAsLong()));
         } finally {
             read.unlock();
         }
@@ -320,12 +321,12 @@ public final class BotRunner {
             MarketState.BotRecord record = e.getValue();
             if (record.paused()) continue;
             for (String item : BotRules.ITEMS) {
-                if (!BotRules.produces(record.type, item)) continue;
+                if (!record.produces(item)) continue;
                 long owed = BotRules.productionAllowance(now - record.lastProducedAt(item));
                 if (owed < BotRules.PRODUCTION_LOT) continue;
                 long holding = state.itemBalances().getBalance(id, item)
                         + state.restingVolume(id, item, false);
-                long amount = Math.min(owed, BotRules.PRODUCTION_CEILING - holding);
+                long amount = Math.min(owed, BotRules.productionCeiling(record.algorithmVersion) - holding);
                 if (amount <= 0) continue;
 
                 Event.BotProduced bp = new Event.BotProduced();
@@ -363,11 +364,19 @@ public final class BotRunner {
      * sequencer thread, once they are in the log.
      */
     public void spawn(String type, int count, Mode mode, Consumer<String> reply) {
+        spawn(type, count, mode, null, reply);
+    }
+
+    /**
+     * The same, naming the item a producer makes. Null picks for each one the basket item
+     * with the fewest producers, so spawning a few covers the basket.
+     */
+    public void spawn(String type, int count, Mode mode, String product, Consumer<String> reply) {
         boolean queued = server.enqueueHostWork(() -> {
             for (int i = 0; i < count; i++) {
                 String outcome;
                 try {
-                    outcome = spawnOne(type, mode);
+                    outcome = spawnOne(type, mode, product);
                 } catch (Exception e) {
                     outcome = "could not spawn a " + type + ": " + e.getMessage();
                 }
@@ -379,13 +388,31 @@ public final class BotRunner {
     }
 
     /** Sequencer thread only. */
-    private String spawnOne(String type, Mode mode) throws Exception {
+    /** The algorithm version new bots get: the latest, unless a stress run asks for an older one. */
+    private int spawnVersion = 0;
+
+    void useSpawnVersion(int version) { this.spawnVersion = version; }
+
+    /** The basket item fewest producers make, first in basket order on a tie. */
+    private static String leastProduced(MarketState state) {
+        Map<String, Integer> count = new HashMap<>();
+        for (MarketState.BotRecord r : state.bots().values()) {
+            if (r.product != null) count.merge(r.product, 1, Integer::sum);
+        }
+        String best = BotRules.ITEMS.get(0);
+        for (String item : BotRules.ITEMS) {
+            if (count.getOrDefault(item, 0) < count.getOrDefault(best, 0)) best = item;
+        }
+        return best;
+    }
+
+    private String spawnOne(String type, Mode mode, String product) throws Exception {
         MarketState state = server.state();
         if (state.botCount(type) >= BotRules.MAX_PER_TYPE) {
             return "could not spawn a " + type + ": this market already has "
                     + BotRules.MAX_PER_TYPE + ", the most it can have";
         }
-        int version = BotBrain.currentVersion(type);
+        int version = spawnVersion > 0 ? spawnVersion : BotBrain.currentVersion(type);
         BotBrain brain = BotBrain.forType(type, version);
         if (brain == null) return "could not spawn a " + type + ": no algorithm for it";
 
@@ -415,6 +442,9 @@ public final class BotRunner {
         bs.userId = id;
         bs.botType = type;
         bs.algorithmVersion = version;
+        if (BotRules.PRODUCER.equals(type) && version >= 2) {
+            bs.productItem = product != null ? product : leastProduced(state);
+        }
         why = appendAsAuthority(bs, timing.clock.getAsLong());
         if (why != null) return "could not spawn a " + type + ": " + why;
 
@@ -423,8 +453,9 @@ public final class BotRunner {
         Running r = new Running(id, type, keys, brain, mode);
         running.put(id, r);
         schedule(r);
-        return "spawned " + state.botName(id) + " (" + shortId(id) + ") on the "
-                + mode.word() + " scheduler";
+        return "spawned " + state.botName(id) + " (" + shortId(id) + ")"
+                + (bs.productItem != null ? " making " + shortItem(bs.productItem) : "")
+                + " on the " + mode.word() + " scheduler";
     }
 
     /** Pauses a bot: its orders come off the book and it stops deciding until resumed. */
@@ -479,8 +510,9 @@ public final class BotRunner {
                     long n = state.itemBalances().getBalance(id, item) + state.restingVolume(id, item, false);
                     held.append(' ').append(item.substring(item.indexOf(':') + 1)).append('=').append(n);
                 }
-                out.add(String.format(Locale.ROOT, "%-16s %s  %-22s %d credits, %d orders,%s",
-                        state.botName(id), shortId(id), status, state.wallets().getBalance(id),
+                String name = state.botName(id) + (rec.product != null ? " (" + shortItem(rec.product) + ")" : "");
+                out.add(String.format(Locale.ROOT, "%-28s %s  %-22s %d credits, %d orders,%s",
+                        name, shortId(id), status, state.wallets().getBalance(id),
                         state.restingOrdersOf(id).size(), held));
             }
         } finally {
@@ -514,6 +546,10 @@ public final class BotRunner {
 
     private Path keyFile(UUID id) {
         return dir.resolve(id + ".key");
+    }
+
+    private static String shortItem(String itemId) {
+        return itemId.substring(itemId.indexOf(':') + 1);
     }
 
     private static String shortId(UUID id) {
