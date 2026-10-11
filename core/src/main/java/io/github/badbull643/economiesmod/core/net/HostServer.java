@@ -2234,6 +2234,7 @@ public class HostServer {
         Path configFile = Paths.get("server-config.json");
         Path creatorKeyFile = null;
         boolean writeConfig = false;
+        boolean botsFlag = false;
 
         // Read --config first: the rest override what it loaded, so it has to be known
         // before any of them are applied.
@@ -2274,7 +2275,7 @@ public class HostServer {
                     case "--market":       cfg.marketName = args[++i]; break;
                     case "--bind":         cfg.bindAddress = args[++i]; break;
                     case "--game-version": cfg.gameVersion = args[++i]; break;
-                    case "--bots":         cfg.bots = true; break;
+                    case "--bots":         cfg.bots = true; botsFlag = true; break;
                     case "--help":
                     case "-h":
                         System.out.println(USAGE);
@@ -2399,7 +2400,10 @@ public class HostServer {
             if (creatorKeyFile != null) {
                 System.out.println("[host] --creator-key ignored: this log already holds a market");
             }
-            if (cfg.bots) {
+            // Only when typed this time. The config is saved on a first start, so it keeps
+            // "bots": true afterwards, and saying "--bots ignored" on every later start to
+            // someone who never typed it read as a fault.
+            if (botsFlag) {
                 System.out.println("[host] --bots ignored: this log already holds a market, and"
                         + " bots can only be switched on when a market is created");
             }

@@ -143,10 +143,24 @@ public interface BotBrain {
     /**
      * Keeps a buy at 90% and a sell at 110% of the last traded price (base price if none) on each
      * item, lots of 8, leaning both 5% down when holding more than it started with and 5% up when
-     * holding less. Never places an order that would fill against another market maker.
+     * holding less. Stops buying an item once it holds MAX_HOLDING_MULTIPLE times what it
+     * started with, so it passes stock on rather than piling it up. Never places an order that
+     * would fill against another market maker.
      */
     final class PlaceholderMarketMaker implements BotBrain {
         public int version() { return 1; }
+
+        /**
+         * The most of an item it will hold, as a multiple of its starting stock, before it stops
+         * bidding for more.
+         *
+         * Without it the first playtest's market makers kept buying cobblestone from the
+         * producers at 1 — the floor, where its bid and their ask meet — until each held about
+         * 570, and were paying credits to bots that never spend them: roughly 600 each in
+         * twenty minutes, a couple of hours from running dry. Buying from producers is fine;
+         * buying without limit is not.
+         */
+        public static final long MAX_HOLDING_MULTIPLE = 2;
 
         public List<Event.BotAction> tick(BotView v) {
             List<Event.BotAction> out = new ArrayList<>();
@@ -160,6 +174,7 @@ public interface BotBrain {
                 long bid = Math.max(1, ref * 90 * lean / 10_000);
                 long ask = Math.max(bid + 1, (ref * 110 * lean + 9_999) / 10_000);
 
+                if (held >= start * MAX_HOLDING_MULTIPLE) bid = 0;
                 if (crossesAnotherMaker(v, item, true, bid)) bid = 0;
                 if (crossesAnotherMaker(v, item, false, ask)) ask = 0;
 

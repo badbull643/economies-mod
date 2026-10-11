@@ -106,4 +106,14 @@ public final class BotRules {
     public static long batchOrderId(long seq, int position) {
         return seq + position * BATCH_ORDER_STRIDE;
     }
+
+    /**
+     * An order id as a screen shows it. A batch's later orders read "9.1", "9.2" — the batch's
+     * sequence number and the order's place in it — rather than the thirteen-digit numbers
+     * they are stored as, which overflowed the order book's rows. Every other id is unchanged.
+     */
+    public static String displayOrderId(long id) {
+        if (id < BATCH_ORDER_STRIDE) return Long.toString(id);
+        return (id % BATCH_ORDER_STRIDE) + "." + (id / BATCH_ORDER_STRIDE);
+    }
 }

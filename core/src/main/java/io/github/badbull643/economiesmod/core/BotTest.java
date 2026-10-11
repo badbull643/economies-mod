@@ -214,6 +214,11 @@ public class BotTest {
                     !submit(actions(m, Event.BotAction.place(WOOD, false, 9, 1)), serverKeys).accepted);
         }
 
+        check("a batch's first order shows as its seq", BotRules.displayOrderId(BotRules.batchOrderId(9, 0)).equals("9"));
+        check("its later ones as seq.position", BotRules.displayOrderId(BotRules.batchOrderId(9, 1)).equals("9.1")
+                && BotRules.displayOrderId(BotRules.batchOrderId(1234, 7)).equals("1234.7"));
+        check("a player's order id shows as itself", BotRules.displayOrderId(20).equals("20"));
+
         System.out.println("  [B8: bots pay the trading fee, not the listing fee]");
         {
             fresh(true);

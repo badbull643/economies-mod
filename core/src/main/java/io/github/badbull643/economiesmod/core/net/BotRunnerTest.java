@@ -171,6 +171,17 @@ public class BotRunnerTest {
             }
             check("a replay of the log agrees with the live market about every bot", same);
         }
+        // Bots may trade with each other, but a market maker stops buying once it holds twice
+        // its starting stock. Without that, the first playtest's makers bought cobblestone off
+        // the producers until each held about 570. One lot over is allowed: a bid placed just
+        // under the limit can still fill.
+        long limit = BotRules.startingItemsEach(BotRules.MARKET_MAKER)
+                * BotBrain.PlaceholderMarketMaker.MAX_HOLDING_MULTIPLE + 8;
+        boolean withinLimit = true;
+        for (UUID m : Arrays.asList(m1, m2)) {
+            for (String item : BotRules.ITEMS) withinLimit &= holding(host.state(), m, item) <= limit;
+        }
+        check("market makers stop buying at their holding limit", withinLimit);
 
         System.out.println("  [R7: a restart picks the bots back up]");
         HostServer again = server(logPath, serverKeys);

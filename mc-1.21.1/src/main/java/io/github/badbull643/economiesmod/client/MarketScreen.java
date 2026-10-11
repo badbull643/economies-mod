@@ -1404,11 +1404,6 @@ public class MarketScreen extends Screen {
         return e.getClass().getSimpleName();
     }
 
-    /** " (Producer #1)" after a bot's order, nothing after a player's. */
-    private static String botTag(MarketState market, Order o) {
-        return market.isBot(o.userID()) ? " (" + market.botName(o.userID()) + ")" : "";
-    }
-
     /** A bot's events in the feed, under the name the market gives it. Null for anything else. */
     private String describeBotEvent(Event e) {
         if (e instanceof Event.BotsEnabled) return "bots switched on";
@@ -3943,16 +3938,16 @@ public class MarketScreen extends Screen {
         beginClip(matrices, x, startY, listW - 8, viewH);
         for (Order o : asks) {
             boolean mine = myUuid != null && o.userID().equals(myUuid);
-            label(matrices, (mine ? "* " : "  ") + "#" + o.orderId()
-                            + " SELL " + o.volume() + " @ " + o.value() + botTag(market, o),
+            label(matrices, (mine ? "* " : "  ") + "#" + BotRules.displayOrderId(o.orderId())
+                            + " SELL " + o.volume() + " @ " + o.value(),
                     x, y, mine ? 0xFFCC66 : 0xFF8888);
             y += rowHeight;
         }
         y += 4;
         for (Order o : bids) {
             boolean mine = myUuid != null && o.userID().equals(myUuid);
-            label(matrices, (mine ? "* " : "  ") + "#" + o.orderId()
-                            + " BUY  " + o.volume() + " @ " + o.value() + botTag(market, o),
+            label(matrices, (mine ? "* " : "  ") + "#" + BotRules.displayOrderId(o.orderId())
+                            + " BUY  " + o.volume() + " @ " + o.value(),
                     x, y, mine ? 0xFFCC66 : 0x88FF88);
             y += rowHeight;
         }
