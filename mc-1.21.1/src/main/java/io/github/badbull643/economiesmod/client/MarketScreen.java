@@ -1467,8 +1467,8 @@ public class MarketScreen extends Screen {
     private void renderSettingsPlaceholder(DrawContext m) {
         label(m, "Notifications", listX + 4, panelTop(), 0xFFAA00);
 
-        String body = "get a notification when one of your resting orders fills."
-                + "The limit batches them once they come faster than the the limit on a busy market";
+        String body = "Get a notification when one of your resting orders fills. "
+                + "The limit batches them once they come faster than the limit on a busy market.";
 
         int y = panelTop() + 14;
         for (OrderedText line : this.textRenderer.wrapLines(Text.literal(body), listW - 12)) {

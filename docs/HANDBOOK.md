@@ -371,6 +371,69 @@ again afterward.
 | `this market grants N, and welcomeGrant is set to M` | The amount is the market's, fixed when it was created. The config setting only chooses whether this server issues grants at all |
 | `port already in use` | Something else has 25555, or a previous run hasn't exited |
 
+#### Bots
+
+A dedicated server can run bots: traders that keep a market moving when few people are on.
+They trade through the same order book as everyone else, with the same rules and fees, and
+players see their orders like anybody's.
+
+**Bots are switched on when the market is created, and only then.** Add `--bots` to the very
+first start, the one with an empty log:
+
+```
+java -jar economies-server.jar --config server.json --bots
+```
+
+The config remembers it, so later starts are the ordinary command. On a market that already
+exists `--bots` is ignored, and says so. Only a dedicated server runs bots; a market hosted
+from a game never does.
+
+**There are two kinds:**
+
+| Kind | What it does | Starts with |
+| --- | --- | --- |
+| Producer | Makes one item (16 every 10 minutes, holding at most 256), sells it, and buys the other items to use up as upkeep | 1,000 credits and 256 of its item |
+| Market maker | Puts up both a buy and a sell price on each item, so there is always someone to trade with. Once players have settled on a price for something else, it quotes that too | 1,500 credits and 32 of each item |
+
+The items are oak logs, cobblestone, coal, wheat and iron ingots. A market can have up to 8 of
+each kind. Producers decide every 30 seconds, market makers every 10.
+
+**The commands are typed into the server's own console**, the terminal it's running in, not
+in game:
+
+| Command | What it does |
+| --- | --- |
+| `bot spawn producer [count] [item]` | Add producers. Without an item, each makes whichever item the fewest producers make |
+| `bot spawn maker [count]` | Add market makers |
+| `bot list` | Every bot: its name, id, whether it's running, its credits, open orders and what it holds |
+| `bot pause <bot>` | Take its orders off the book and stop it |
+| `bot resume <bot>` | Start it again |
+| `bot help` | The list above |
+
+A `<bot>` is its name, like `producer#2`, its id, or the first few characters of the id (the
+ones `bot list` shows). For example:
+
+```
+bot spawn producer 3
+bot spawn producer iron_ingot
+bot spawn maker 2
+bot pause producer#2
+```
+
+Count defaults to 1. `spawn` also takes `tick` or `threads`, which only changes how the server
+schedules that bot, not how it trades; leave it on the default `tick`.
+
+**A bot can't be removed, only paused.** It's part of the market's history from the moment it
+joins, so pausing is how you stop one: its orders come off the book and it does nothing more
+until resumed.
+
+**The bots' keys live in a `bots` folder beside the log.** Back it up with `market.jsonl`. A
+bot whose key is lost stays in the market but this server can't run it any more, and `bot
+list` shows it as "not running here".
+
+A server started with nothing attached to its input, like a service, has no console to type
+into. Start it in a terminal (or `screen`/`tmux`) when you want to manage the bots.
+
 ## Extra Notes
 
 #### Two differences from a friend hosting
