@@ -31,6 +31,12 @@ import java.util.concurrent.locks.Lock;
  * --pace is the seconds between one simulated player's actions: 0.4 (the fastest a server
  * allows) is a crowd of hard traders; 10 to 30 is closer to people who are also playing.
  *
+ * With --connect host:port it starts no server and no bots: only the crowd, joining a real
+ * server running somewhere else, so the server's machine carries the server's load alone.
+ *
+ *   java -cp economies-server.jar io.github.badbull643.economiesmod.core.net.StressRun
+ *        --connect 192.168.1.20:25555 --game-version 1.21.11 --players 100 --pace 10
+ *
  * Only the runner's pace is changed — how often bots decide and how fast their action budget
  * refills. Everything the market's rules govern (the bot cap, grants, production rate) is as
  * it is anywhere, because every player's game checks those.
@@ -67,8 +73,10 @@ public final class StressRun {
         // Seconds between one simulated player's actions. 0.4 is a trader hammering the market
         // all session; somebody actually playing the game does something every half-minute or so.
         double playerPace = 0.4;
+        String connectTo = null;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
+                case "--connect":      connectTo = args[++i]; break;
                 case "--game-version": gameVersion = args[++i]; break;
                 case "--port":         port = Integer.parseInt(args[++i]); break;
                 case "--players":      players = Integer.parseInt(args[++i]); break;
@@ -81,6 +89,8 @@ public final class StressRun {
                     System.err.println("usage: StressRun --game-version <e.g. 1.21.11>"
                             + " [--port 25560] [--players 10] [--minutes 10]"
                             + " [--bot-version 1|2] [--speed 60] [--pace 0.4]");
+                    System.err.println("   or: StressRun --connect <host:port> --game-version <e.g. 1.21.11>"
+                            + " [--players 10] [--minutes 10] [--pace 0.4]");
                     System.exit(2);
             }
         }
@@ -93,6 +103,16 @@ public final class StressRun {
         if (!GameVersions.isSet(gameVersion)) {
             System.err.println("say which Minecraft version can join: --game-version 1.21.11");
             System.exit(2);
+        }
+        if (connectTo != null) {
+            int colon = connectTo.lastIndexOf(':');
+            String address = colon > 0 ? connectTo.substring(0, colon) : connectTo;
+            int remotePort = colon > 0 ? Integer.parseInt(connectTo.substring(colon + 1)) : 25555;
+            if (botVersion > 0 || speed != 1) {
+                System.out.println("[stress] (--bot-version and --speed are ignored with --connect:"
+                        + " the bots are the server's, spawned from its own console)");
+            }
+            System.exit(runCrowd(address, remotePort, gameVersion, players, minutes, playerPace));
         }
 
         Path dir = Paths.get("stress-" + new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date()));
@@ -249,8 +269,16 @@ public final class StressRun {
         for (FakePlayer p : everyone) {
             while (p.client.lastSeq() < finalHead && System.currentTimeMillis() < deadline) Thread.sleep(20);
         }
-        int agree = 0;
-        for (FakePlayer p : crowd) if (sameMarket(host.state(), p.client.state())) agree++;
+        // Players the server dropped for falling too far behind are counted apart. Their copies
+        // stopped where they were cut off, which is the server doing its job, not a disagreement
+        // — and these simulated players do not reconnect the way a real one would.
+        int agree = 0, stillOn = 0;
+        for (FakePlayer p : crowd) {
+            if (!p.client.isConnected()) continue;
+            stillOn++;
+            if (sameMarket(host.state(), p.client.state())) agree++;
+        }
+        int dropped = crowd.size() - stillOn;
         boolean newcomerAgrees = sameMarket(host.state(), newcomer.client.state());
 
         for (FakePlayer p : crowd) p.client.disconnect();
@@ -280,14 +308,268 @@ public final class StressRun {
                 verified != null, verifyError);
         failures += verdict("a replay of the log matches the server's market",
                 verified != null && sameMarket(host.state(), verified.state), null);
-        failures += verdict("every player's copy matches the server's (" + agree + " of " + crowd.size() + ")",
-                agree == crowd.size(), null);
+        failures += verdict("every connected player's copy matches the server's (" + agree + " of " + stillOn + ")",
+                agree == stillOn, null);
+        if (dropped > 0) {
+            System.out.println("[stress]   note " + dropped + " player(s) were dropped by the server for"
+                    + " falling too far behind, so their copies stop where they were cut off");
+        }
         failures += verdict("a newcomer's copy matches too", newcomerAgrees, null);
         failures += verdict("bots stayed within the market's rules (holdings within the production ceiling)",
                 botsWithinRules(host.state()), null);
         System.out.println();
         System.out.println(failures == 0 ? "[stress] PASSED" : "[stress] " + failures + " check(s) FAILED");
         System.exit(failures == 0 ? 0 : 1);
+    }
+
+    // ─────────── --connect: the crowd alone, against a server elsewhere ───────────
+
+    /**
+     * Only the simulated players, connected to a real server on another machine. The local
+     * run shares one computer between the server and every player's game, so what it measures
+     * is that computer as much as the server; this puts the crowd's load somewhere else, and
+     * whatever the server then cannot keep up with is the server's limit.
+     *
+     * It cannot see the server's own copy of the market, so its checks are the ones a player
+     * could make: every connected player's copy agrees with a newcomer's, and the history the
+     * newcomer downloads verifies and replays to the same market. Bots are the server's: spawn
+     * them from its console before starting this.
+     *
+     * Returns the exit code: 0 when every check passed.
+     */
+    private static int runCrowd(String address, int port, String gameVersion, int players,
+                                double minutes, double playerPace) throws Exception {
+        Path dir = Paths.get("stress-crowd-" + new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date()));
+        Files.createDirectories(dir);
+        System.out.println("[stress] crowd only, against " + address + ":" + port
+                + " — the players' copies are in " + dir.toAbsolutePath());
+
+        // ─── join ───
+        List<FakePlayer> crowd = new ArrayList<>();
+        Map<String, Integer> turnedAway = new TreeMap<>();
+        for (int i = 0; i < players; i++) {
+            FakePlayer p = new FakePlayer(i, dir, gameVersion);
+            try {
+                p.client.connect(address, port);
+                crowd.add(p);
+            } catch (IOException refusedAtDoor) {
+                String why = refusedAtDoor.getMessage() == null ? "?" : refusedAtDoor.getMessage();
+                turnedAway.merge(why.length() > 80 ? why.substring(0, 80) : why, 1, Integer::sum);
+            }
+            Thread.sleep(150);   // under the server's limit on connections being set up at once
+        }
+        if (!turnedAway.isEmpty()) {
+            System.out.println("[stress] " + (players - crowd.size()) + " could not join: " + turnedAway);
+        }
+        if (crowd.isEmpty()) {
+            System.out.println("[stress] nobody could join, so there is nothing to measure");
+            return 1;
+        }
+        // Their grants and registrations land as they join; give them a moment to arrive.
+        Thread.sleep(2_000);
+
+        FakePlayer observer = crowd.get(0);
+        observer.client.setOnApplied(a -> {
+            byType.computeIfAbsent(a.event.eventType, k -> new AtomicLong()).incrementAndGet();
+            if (a.result != null && a.result.fills != null) {
+                MarketState st = observer.client.state();
+                for (Fill f : a.result.fills) {
+                    fills.incrementAndGet();
+                    filledUnits.addAndGet(f.quantity());
+                    if (!st.isBot(f.buyerId()) || !st.isBot(f.sellerId())) playerFills.incrementAndGet();
+                }
+            }
+        });
+        int bots = observer.client.state().bots().size();
+        if (bots == 0) {
+            System.out.println("[stress] (this market has no bots running yet; spawn some from the"
+                    + " server's console if you want them in the run)");
+        }
+
+        ScheduledExecutorService playerPool = Executors.newScheduledThreadPool(4, r -> {
+            Thread t = new Thread(r, "stress-player");
+            t.setDaemon(true);
+            return t;
+        });
+        long paceMs = (long) (playerPace * 1000);
+        for (FakePlayer p : crowd) {
+            playerPool.scheduleWithFixedDelay(p::stepSafely, 200 + (p.index * 37L) % paceMs,
+                    paceMs, TimeUnit.MILLISECONDS);
+        }
+        System.out.println("[stress] " + crowd.size() + " players trading (one action every " + playerPace
+                + " s each, about " + String.format(Locale.ROOT, "%.0f", crowd.size() / playerPace)
+                + " a second together) with the server's " + bots + " bots."
+                + " Watch the server's own window and its CPU. Type 'status' or 'stop'.");
+
+        // ─── run ───
+        AtomicBoolean finish = new AtomicBoolean();
+        Thread console = new Thread(() -> {
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = in.readLine()) != null) {
+                    line = line.trim();
+                    if (line.equals("stop") || line.equals("quit")) { finish.set(true); return; }
+                    if (line.equals("status")) crowdReport(crowd, 0, 0, 0, 0);
+                    else if (!line.isEmpty()) System.out.println("[stress] only 'status' and 'stop' here —"
+                            + " bot and server commands go in the server's own window");
+                }
+            } catch (IOException ignored) {}
+        }, "stress-console");
+        console.setDaemon(true);
+        console.start();
+
+        long started = System.currentTimeMillis();
+        long until = minutes > 0 ? started + (long) (minutes * 60_000) : Long.MAX_VALUE;
+        long lastSeq = headSeen(crowd), lastAt = started;
+        long lastProposed = proposed.get(), lastRefused = refused.get();
+        while (!finish.get() && System.currentTimeMillis() < until) {
+            Thread.sleep(250);
+            if (System.currentTimeMillis() - lastAt >= 10_000) {
+                long now = System.currentTimeMillis(), head = headSeen(crowd);
+                crowdReport(crowd, head - lastSeq, now - lastAt,
+                        proposed.get() - lastProposed, refused.get() - lastRefused);
+                lastSeq = head;
+                lastAt = now;
+                lastProposed = proposed.get();
+                lastRefused = refused.get();
+            }
+        }
+
+        // ─── checks ───
+        System.out.println();
+        System.out.println("[stress] finishing after " + (System.currentTimeMillis() - started) / 1000 + " s");
+        playerPool.shutdownNow();
+        // Quiet, as far as anyone here can tell: the newest event anybody has seen stops moving.
+        // The server's bots go on trading, so it may never be still; ten seconds is enough to
+        // tell the crowd's last orders have landed.
+        long deadline = System.currentTimeMillis() + 10_000;
+        for (long seen = -1; System.currentTimeMillis() < deadline; Thread.sleep(1_000)) {
+            long now = headSeen(crowd);
+            if (now == seen) break;
+            seen = now;
+        }
+        long head = headSeen(crowd);
+
+        long joinStart = System.currentTimeMillis();
+        FakePlayer newcomer = new FakePlayer(players, dir, gameVersion);
+        long joinMs;
+        try {
+            newcomer.client.connect(address, port);
+            while (newcomer.client.lastSeq() < head && System.currentTimeMillis() - joinStart < 120_000) Thread.sleep(20);
+            joinMs = System.currentTimeMillis() - joinStart;
+        } catch (IOException e) {
+            System.out.println("[stress] the newcomer could not join: " + e.getMessage());
+            joinMs = -1;
+        }
+
+        playerPool.awaitTermination(1, TimeUnit.SECONDS);
+        List<FakePlayer> compared = new ArrayList<>();
+        for (FakePlayer p : crowd) if (p.client.isConnected()) compared.add(p);
+        int dropped = crowd.size() - compared.size();
+
+        System.out.println("[stress] final report");
+        crowdReport(crowd, 0, 0, 0, 0);
+
+        // Everyone, newcomer included, on the same event before comparing. The server's bots keep
+        // the market moving, so wait for a moment between their batches when every copy has
+        // applied the same last event, then disconnect at once, which freezes each copy where it
+        // is. A copy that still slipped past or behind is left out rather than misjudged.
+        // Together for a whole second, not merely at one instant: the first version froze the
+        // moment everyone matched, which was usually the moment just after the newcomer joined
+        // and before its own registration and grant had arrived — so everyone else received
+        // those two while being disconnected, and most of the crowd went uncompared.
+        deadline = System.currentTimeMillis() + 15_000;
+        long steadyAt = -1, steadySince = 0;
+        while (System.currentTimeMillis() < deadline) {
+            long now = System.currentTimeMillis(), seq = newcomer.client.lastSeq();
+            boolean together = true;
+            for (FakePlayer p : compared) together &= p.client.lastSeq() == seq;
+            if (!together) {
+                steadyAt = -1;
+            } else if (seq != steadyAt) {
+                steadyAt = seq;
+                steadySince = now;
+            } else if (now - steadySince >= 1_000) {
+                break;
+            }
+            Thread.sleep(20);
+        }
+        newcomer.client.disconnect();
+        for (FakePlayer p : crowd) p.client.disconnect();
+        long frozenAt = newcomer.client.lastSeq();
+        int agree = 0, atSamePoint = 0;
+        for (FakePlayer p : compared) {
+            if (p.client.lastSeq() != frozenAt) continue;
+            atSamePoint++;
+            if (sameMarket(newcomer.client.state(), p.client.state())) agree++;
+        }
+
+        MarketArchive.Verified verified = null;
+        String verifyError = null;
+        long verifyStart = System.currentTimeMillis();
+        try {
+            verified = MarketArchive.verifyLines(newcomer.client.log().rawLinesFrom(1));
+        } catch (IOException e) {
+            verifyError = e.getMessage();
+        }
+        long verifyMs = System.currentTimeMillis() - verifyStart;
+
+        System.out.println("[stress]   events by type, as one player saw them: " + new TreeMap<>(byType));
+        System.out.println("[stress]   player proposals " + proposed.get() + ", refused " + refused.get()
+                + (refusalReasons.isEmpty() ? "" : " " + topReasons()));
+        System.out.println("[stress]   a newcomer synced " + head + " events in "
+                + (joinMs < 0 ? "— (could not join)" : joinMs + " ms"));
+        System.out.println("[stress]   the history it downloaded verified in " + verifyMs + " ms");
+        System.out.println();
+        int failures = 0;
+        failures += verdict("the history a newcomer downloads verifies: every hash and every signature",
+                verified != null, verifyError);
+        failures += verdict("a replay of it matches the newcomer's copy",
+                verified != null && sameMarket(newcomer.client.state(), verified.state), null);
+        failures += verdict("every player who reached the same event agrees with the newcomer ("
+                + agree + " of " + atSamePoint + ")", atSamePoint > 0 && agree == atSamePoint, null);
+        if (compared.size() > atSamePoint) {
+            Map<Long, Integer> where = new TreeMap<>();
+            for (FakePlayer p : compared) {
+                if (p.client.lastSeq() != frozenAt) where.merge(p.client.lastSeq(), 1, Integer::sum);
+            }
+            System.out.println("[stress]   note " + (compared.size() - atSamePoint) + " connected player(s)"
+                    + " were on a different event from the newcomer (" + frozenAt + ") when the run"
+                    + " stopped, so were not compared — event: players " + where);
+        }
+        if (dropped > 0) {
+            System.out.println("[stress]   note " + dropped + " player(s) were dropped by the server for"
+                    + " falling too far behind, so their copies stop where they were cut off");
+        }
+        System.out.println();
+        System.out.println(failures == 0 ? "[stress] PASSED" : "[stress] " + failures + " check(s) FAILED");
+        return failures == 0 ? 0 : 1;
+    }
+
+    /** The newest event any player here has applied: as close to the server's head as this side can see. */
+    private static long headSeen(List<FakePlayer> crowd) {
+        long head = 0;
+        for (FakePlayer p : crowd) head = Math.max(head, p.client.lastSeq());
+        return head;
+    }
+
+    private static void crowdReport(List<FakePlayer> crowd, long events, long ms, long sent, long turnedDown) {
+        long head = headSeen(crowd), behind = 0;
+        int connected = 0;
+        for (FakePlayer p : crowd) {
+            if (!p.client.isConnected()) continue;
+            connected++;
+            behind = Math.max(behind, head - p.client.lastSeq());
+        }
+        Runtime rt = Runtime.getRuntime();
+        long usedMb = (rt.totalMemory() - rt.freeMemory()) >> 20;
+        String rate = ms > 0 ? String.format(Locale.ROOT, " (+%d, %.0f/s)", events, events * 1000.0 / ms) : "";
+        String sentRate = ms > 0 ? String.format(Locale.ROOT, " | sent %.0f/s, %d%% refused",
+                sent * 1000.0 / ms, sent == 0 ? 0 : turnedDown * 100 / sent) : "";
+        System.out.println(String.format(Locale.ROOT,
+                "[stress] seq %d%s%s | trades %d | %d of %d players connected | slowest %d behind | heap %d MB here",
+                head, rate, sentRate, fills.get(), connected, crowd.size(), behind, usedMb));
+        System.out.println("[stress]   economy: " + economy(crowd.get(0).client.state(), fills.get()));
     }
 
     // ─────────── reporting ───────────
