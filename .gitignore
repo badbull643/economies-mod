@@ -22,6 +22,8 @@
 build/
 run/
 .gradle/
+# What an editor's Java support compiles to beside the sources (VS Code, Eclipse).
+bin/
 
 # Dev-only notes: backlog, session logs, design notes, testing fixtures. Kept on disk for
 # reference but not part of the public repo — HANDBOOK.md is the only doc that ships.
