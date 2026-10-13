@@ -26,7 +26,10 @@ import java.util.concurrent.locks.Lock;
  * The server accepts game connections like any other, so a real player can join and watch.
  *
  *   java -cp economies-server.jar io.github.badbull643.economiesmod.core.net.StressRun
- *        --game-version 1.21.11 [--port 25560] [--players 10] [--minutes 10]
+ *        --game-version 1.21.11 [--port 25560] [--players 10] [--minutes 10] [--pace 0.4]
+ *
+ * --pace is the seconds between one simulated player's actions: 0.4 (the fastest a server
+ * allows) is a crowd of hard traders; 10 to 30 is closer to people who are also playing.
  *
  * Only the runner's pace is changed — how often bots decide and how fast their action budget
  * refills. Everything the market's rules govern (the bot cap, grants, production rate) is as
@@ -61,6 +64,9 @@ public final class StressRun {
         double minutes = 10;
         int botVersion = 0;
         double speed = 1;
+        // Seconds between one simulated player's actions. 0.4 is a trader hammering the market
+        // all session; somebody actually playing the game does something every half-minute or so.
+        double playerPace = 0.4;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--game-version": gameVersion = args[++i]; break;
@@ -69,13 +75,20 @@ public final class StressRun {
                 case "--minutes":      minutes = Double.parseDouble(args[++i]); break;
                 case "--bot-version":  botVersion = Integer.parseInt(args[++i]); break;
                 case "--speed":        speed = Double.parseDouble(args[++i]); break;
+                case "--pace":         playerPace = Double.parseDouble(args[++i]); break;
                 default:
                     System.err.println("unknown argument " + args[i]);
                     System.err.println("usage: StressRun --game-version <e.g. 1.21.11>"
                             + " [--port 25560] [--players 10] [--minutes 10]"
-                            + " [--bot-version 1|2] [--speed 60]");
+                            + " [--bot-version 1|2] [--speed 60] [--pace 0.4]");
                     System.exit(2);
             }
+        }
+        if (playerPace < 0.4) {
+            // A server lets one connection propose 30 events per 10 s; faster than that and the
+            // run would be measuring its own refusals.
+            System.err.println("--pace below 0.4 s is faster than a server lets one player go");
+            System.exit(2);
         }
         if (!GameVersions.isSet(gameVersion)) {
             System.err.println("say which Minecraft version can join: --game-version 1.21.11");
@@ -99,6 +112,9 @@ public final class StressRun {
         cfg.hostUserId = serverId.toString();
         cfg.gameVersion = gameVersion;
         cfg.dedicated = true;
+        // Room for the whole crowd, the newcomer that syncs at the end, and a few real players
+        // joining to watch. The default of 64 turned everyone past it away as "server full".
+        cfg.maxConnections = Math.max(cfg.maxConnections, players + 16);
         HostServer host = new HostServer(cfg, logPath, serverKeys, new PeerCache(dir.resolve("server-peers.json")));
 
         BotRunner.Timing pace = new BotRunner.Timing();
@@ -162,12 +178,16 @@ public final class StressRun {
             t.setDaemon(true);
             return t;
         });
+        long paceMs = (long) (playerPace * 1000);
         for (FakePlayer p : crowd) {
-            // About 2.5 a second each, under the 30 per 10 s a server allows one connection.
-            playerPool.scheduleWithFixedDelay(p::stepSafely, 200 + p.index * 37, 400, TimeUnit.MILLISECONDS);
+            // Spread across the interval so the crowd does not all act on the same beat.
+            playerPool.scheduleWithFixedDelay(p::stepSafely, 200 + (p.index * 37L) % paceMs,
+                    paceMs, TimeUnit.MILLISECONDS);
         }
 
-        System.out.println("[stress] " + players + " players and " + host.state().bots().size()
+        System.out.println("[stress] " + players + " players (one action every " + playerPace + " s each, about "
+                + String.format(Locale.ROOT, "%.0f", players / playerPace) + " a second together) and "
+                + host.state().bots().size()
                 + " bots trading. Join on port " + port + " with Minecraft " + gameVersion
                 + " to watch. Type 'status', 'stop', or any bot command.");
 
