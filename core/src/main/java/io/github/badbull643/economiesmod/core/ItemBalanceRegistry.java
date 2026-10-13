@@ -42,6 +42,15 @@ public class ItemBalanceRegistry {
         return userBalances == null ? new HashMap<>() : new HashMap<>(userBalances);
     }
 
+    /** Everybody's balances, deep-copied in one moment. For totals and the operator's stats. */
+    public synchronized Map<UUID, Map<String, Long>> all() {
+        Map<UUID, Map<String, Long>> out = new HashMap<>();
+        for (Map.Entry<UUID, Map<String, Long>> e : balances.entrySet()) {
+            out.put(e.getKey(), new HashMap<>(e.getValue()));
+        }
+        return out;
+    }
+
     // package-private, for MarketState's snapshot logic
     Map<UUID, Map<String, Long>> balances() { return balances; }
 }

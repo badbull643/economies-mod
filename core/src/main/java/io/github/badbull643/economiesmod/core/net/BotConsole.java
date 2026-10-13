@@ -1,25 +1,31 @@
 package io.github.badbull643.economiesmod.core.net;
 
 import io.github.badbull643.economiesmod.core.BotRules;
+import io.github.badbull643.economiesmod.core.MarketStats;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
- * The bot commands a dedicated server's operator types into its console.
+ * The commands a dedicated server's operator types into its console.
  *
+ *   stats
+ *   cancel-orders <player> [reason]
+ *   ban <player> [reason]
  *   bot spawn <producer|maker> [count] [tick|threads]
  *   bot list
  *   bot pause <bot>
  *   bot resume <bot>
- *   bot help
+ *   help
  *
- * A bot is named by its id, the first few characters of it, or like producer#2.
+ * A bot is named by its id, the first few characters of it, or like producer#2. A player by
+ * their id, the start of it, or the name they last connected under.
  *
  * Reads standard input on a thread of its own. A server started with nothing attached to its
  * input (a service, a container without a tty) reads end-of-file at once, and this thread
@@ -29,7 +35,16 @@ public final class BotConsole {
     private BotConsole() {}
 
     private static final String HELP =
-            "bot commands:\n"
+            "server commands:\n"
+            + "  stats                                             the money supply, who holds it, and what goods exist\n"
+            + "  cancel-orders <player> [reason]                   take all of a player's orders off the book;\n"
+            + "                                 what they reserved goes back to them (needs this\n"
+            + "                                 server to have created the market)\n"
+            + "  ban <player> [reason]                             deny them in the config, disconnect them, and\n"
+            + "                                 cancel their orders\n"
+            + "  a <player> is their id, the start of it, or the name they connected with\n"
+            + "\n"
+            + "bot commands:\n"
             + "  bot spawn <producer|maker> [count] [tick|threads] [item]\n"
             + "                                 add bots (count defaults to 1, scheduler to tick;\n"
             + "                                 a producer makes the item named, or the one\n"
@@ -73,8 +88,38 @@ public final class BotConsole {
             reply.accept(HELP);
             return;
         }
+        if (first.equals("stats")) {
+            reply.accept(MarketStats.of(server.state()).describe(server::nameOf, 5, 10));
+            return;
+        }
+        if (first.equals("cancel-orders") || first.equals("ban")) {
+            if (w.length < 2) {
+                reply.accept("whose? " + first + " <player> [reason]");
+                return;
+            }
+            UUID player = server.resolvePlayer(w[1]);
+            BotRunner bots = server.botRunner();
+            if (player == null && bots != null && bots.resolve(w[1]) != null) {
+                reply.accept("'" + w[1] + "' is a bot — pause it instead (bot pause " + w[1]
+                        + "), which also takes its orders off the book");
+                return;
+            }
+            if (player == null) {
+                reply.accept("no single player matches '" + w[1] + "' — use their id, or the"
+                        + " start of it, if the name is shared or they never connected here");
+                return;
+            }
+            String reason = w.length > 2 ? String.join(" ", Arrays.copyOfRange(w, 2, w.length)) : null;
+            if (first.equals("ban")) {
+                server.banPlayer(player, reason, reply);
+            } else {
+                server.cancelOrdersOf(player,
+                        reason != null ? reason : "cancelled by the server's operator", reply);
+            }
+            return;
+        }
         if (!first.equals("bot") && !first.equals("bots")) {
-            reply.accept("unknown command '" + w[0] + "' — the console takes bot commands (try: bot help)");
+            reply.accept("unknown command '" + w[0] + "' — try: help");
             return;
         }
         String verb = w.length > 1 ? w[1].toLowerCase(Locale.ROOT) : "help";

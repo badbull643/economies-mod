@@ -26,7 +26,9 @@ public class HostServer {
     // 9: bot events (BotsEnabled, BotSpawned, BotProduced, BotPaused, BotResumed,
     //    BotActions), compact stored lines, packed log lines on the wire (logLinesGz),
     //    and Ed25519 keys. A client on 8 could not read any of these.
-    public static final String PROTOCOL_VERSION = "9";
+    // 10: OperatorCancel, a market creator taking a player's orders off the book. A client
+    //    on 9 would stop at the first one with "an event this version can't read".
+    public static final String PROTOCOL_VERSION = "10";
     /** Only the fallback for the deprecated constructors now — see ServerConfig. */
     private static final int MAX_CONNECTIONS = 64;
 
@@ -118,6 +120,8 @@ public class HostServer {
          * the warning standing forever.
          */
         final String peerName;
+        /** Who this connection belongs to, so a ban can find it and close it. */
+        final UUID userId;
         private final BlockingQueue<Message> outbound;
         private final Thread writer;
         private volatile boolean open = true;
@@ -134,9 +138,10 @@ public class HostServer {
         static final int SYNC_BACKLOG_MAX = 20_000;
 
         /** Starts holding broadcasts; nothing is written until goLive(). */
-        ClientLink(MessageChannel channel, int queueDepth, String peerName) {
+        ClientLink(MessageChannel channel, int queueDepth, String peerName, UUID userId) {
             this.channel = channel;
             this.peerName = peerName;
+            this.userId = userId;
             this.outbound = new ArrayBlockingQueue<>(queueDepth);
             this.writer = new Thread(this::drain, "market-writer");
             this.writer.setDaemon(true);
@@ -930,6 +935,12 @@ public class HostServer {
                         if (config.banOnWorldChange && config.ban(liveUser.toString())) {
                             System.out.println("[host] banned " + liveUser
                                     + " — remove them from deny in the config to undo it");
+                            // What they listed comes off the book with them: goods from a
+                            // world that just failed its checks should not go on selling.
+                            if (isCreator() && !state.restingOrdersOf(liveUser).isEmpty()) {
+                                cancelOrdersOf(liveUser, "banned for changing their world",
+                                        said -> System.out.println("[host] " + said));
+                            }
                             sendError(channel, Refusal.NOT_ADMITTED, why
                                     + " — this server bans identities that change their"
                                     + " world after connecting, so speak to whoever runs"
@@ -1221,7 +1232,8 @@ public class HostServer {
         // dozens of events a second, the first stress run hit it on every join. Now
         // anything broadcast meanwhile is held on the link and sent once the history is
         // done, and an event that turns up in both is one the client already skips.
-        final ClientLink link = new ClientLink(channel, config.outboundQueueDepth, hello.displayName);
+        final ClientLink link = new ClientLink(channel, config.outboundQueueDepth, hello.displayName,
+                claimedUser);
         clients.add(link);
         try {
             log.forEachRawLine(hello.lastSeq + 1, line -> {
@@ -1534,6 +1546,137 @@ public class HostServer {
         acc.logLine = log.rawLineFor(se.seq);
         broadcast(acc);
         return null;
+    }
+
+    // ─────────── what the operator's console is given ───────────
+
+    /** Whether this server created its market, and so may sign what only the creator can. */
+    boolean isCreator() {
+        UUID creator = state.creator();
+        return creator != null && creator.equals(hostUserIdAsUuid());
+    }
+
+    /** What to call somebody in the console: a bot's name, the name a player last connected under, or the start of their id. */
+    String nameOf(UUID userId) {
+        if (userId == null) return null;
+        if (userId.equals(hostUserIdAsUuid())) return "this server";
+        String bot = state.botName(userId);
+        if (bot != null) return bot;
+        if (peerCache != null) {
+            for (PeerCache.Peer p : peerCache.all()) {
+                if (userId.toString().equalsIgnoreCase(p.userId) && p.displayName != null) {
+                    return p.displayName;
+                }
+            }
+        }
+        return userId.toString().substring(0, 8);
+    }
+
+    /**
+     * A player from what an operator typed: their id, the start of it, or the name they last
+     * connected under. Null when nobody matches, or more than one player does — guessing
+     * between two people is not something a ban should ever do.
+     */
+    UUID resolvePlayer(String typed) {
+        if (typed == null || typed.trim().isEmpty()) return null;
+        String t = typed.trim();
+        java.util.Set<UUID> players = state.registeredIds();
+        players.removeIf(state::isBot);
+
+        try {
+            UUID exact = UUID.fromString(t);
+            return players.contains(exact) ? exact : null;
+        } catch (IllegalArgumentException notAnId) {
+            // a prefix or a name, below
+        }
+
+        UUID found = null;
+        if (t.length() >= 4) {
+            for (UUID id : players) {
+                if (id.toString().toLowerCase(java.util.Locale.ROOT)
+                        .startsWith(t.toLowerCase(java.util.Locale.ROOT))) {
+                    if (found != null) return null;
+                    found = id;
+                }
+            }
+            if (found != null) return found;
+        }
+        if (peerCache != null) {
+            for (PeerCache.Peer p : peerCache.all()) {
+                if (p.displayName == null || !p.displayName.equalsIgnoreCase(t)) continue;
+                UUID id;
+                try {
+                    id = UUID.fromString(p.userId);
+                } catch (IllegalArgumentException | NullPointerException bad) {
+                    continue;
+                }
+                if (!players.contains(id)) continue;
+                if (found != null && !found.equals(id)) return null;
+                found = id;
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Takes every resting order of one player off the book, as the market's creator. Their
+     * reservations go back to them; only the listing fees stay paid. Replies once it is in the
+     * log, or with why it was not.
+     */
+    void cancelOrdersOf(UUID target, String reason, java.util.function.Consumer<String> reply) {
+        if (!isCreator()) {
+            reply.accept("this server did not create the market, so it cannot cancel anybody's"
+                    + " orders — only its creator can (" + state.creator() + ")");
+            return;
+        }
+        boolean queued = enqueueHostWork(() -> {
+            Event.OperatorCancel oc = new Event.OperatorCancel();
+            oc.userId = hostUserIdAsUuid();
+            oc.marketId = state.marketId();
+            oc.targetUserId = target;
+            oc.reason = reason;
+            oc.clientEventId = UUID.randomUUID().toString();
+            oc.timestamp = System.currentTimeMillis();
+            // Counted here, on the sequencer, so it is the number the event actually took.
+            int count = state.restingOrdersOf(target).size();
+            try {
+                String why = appendHostEvent(oc);
+                reply.accept(why == null
+                        ? "cancelled " + count + (count == 1 ? " order" : " orders") + " of "
+                                + nameOf(target) + " — what they reserved is back in their balance"
+                        : nameOf(target) + ": " + why);
+            } catch (IOException e) {
+                reply.accept("could not write it to the log: " + e.getMessage());
+            }
+        });
+        if (!queued) reply.accept("the server is too busy right now, try again");
+    }
+
+    /**
+     * Bans a player: onto the deny list in the config for good, off the server now, and their
+     * orders off the book when this server created the market.
+     */
+    void banPlayer(UUID target, String reason, java.util.function.Consumer<String> reply) {
+        boolean added = config.ban(target.toString());
+        int closed = 0;
+        for (ClientLink link : clients) {
+            if (target.equals(link.userId)) {
+                clients.remove(link);
+                link.close();
+                closed++;
+            }
+        }
+        reply.accept((added ? "banned " : "already banned ") + nameOf(target)
+                + (closed > 0 ? " and disconnected them" : "")
+                + " — remove them from deny in the config to undo it");
+
+        if (state.restingOrdersOf(target).isEmpty()) return;
+        if (isCreator()) {
+            cancelOrdersOf(target, reason == null ? "banned" : "banned: " + reason, reply);
+        } else {
+            reply.accept("their open orders stay on the book: this server did not create the"
+                    + " market, and only its creator can cancel them");
+        }
     }
 
     // ─────────── what the bot runner is given ───────────
@@ -2474,6 +2617,8 @@ public class HostServer {
             HostServer server = new HostServer(cfg, logFile, keys, peers);
             // Before start(), which does not return until the server stops.
             BotConsole.start(server);
+            System.out.println("[host] type 'help' in this window for the operator's commands"
+                    + " (stats, cancel-orders, ban, bots)");
             server.start();
         } catch (java.net.BindException e) {
             // The in-game path has named this fix since the two-client dev setup made it

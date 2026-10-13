@@ -127,6 +127,108 @@ public class MarketTests {
                     replayed.bookFor(IRON).restingAsks().size(), 0);
         }
 
+        section("OC1: the creator can take a player's orders off the book, and nothing else");
+        {
+            Path file = scratch("test-log-oc1.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);                       // Alice creates it
+            register(log, live, BOB);
+            grant(log, live, BOB, 1000);
+            apply(log, live, deposit(BOB, IRON, 50));
+            apply(log, live, placeOrder(BOB, IRON, 20, 30, false));    // ask 30 iron at 20
+            apply(log, live, placeOrder(BOB, DIAMOND, 10, 5, true));   // bid 5 diamond at 10
+            check("Bob has two orders resting", live.restingOrdersOf(BOB).size(), 2);
+            long credits = live.wallets().getBalance(BOB);
+
+            Event.OperatorCancel oc = operatorCancel(ALICE, BOB, "listing duped iron");
+            check("the creator may", rejection(live, oc) == null ? 1 : 0, 1);
+            apply(log, live, oc);
+            check("both orders are off the book", live.restingOrdersOf(BOB).size(), 0);
+            check("the 50 credits the bid reserved are back", live.wallets().getBalance(BOB), credits + 50);
+            check("the iron the ask reserved is back", live.itemBalances().getBalance(BOB, IRON), 50);
+
+            MarketState replayed = EventApplier.replay(log);
+            check("a replay agrees about his orders", replayed.restingOrdersOf(BOB).size(), 0);
+            check("and about his money", replayed.wallets().getBalance(BOB), live.wallets().getBalance(BOB));
+            check("and his goods", replayed.itemBalances().getBalance(BOB, IRON), 50);
+        }
+
+        section("OC2: nobody else may, and a cancel that does nothing is refused");
+        {
+            Path file = scratch("test-log-oc2.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            register(log, live, CAROL);
+            grant(log, live, BOB, 1000);
+            apply(log, live, placeOrder(BOB, IRON, 10, 5, true));
+
+            String notCreator = rejection(live, operatorCancel(CAROL, BOB, null));
+            check("a player cannot cancel a rival's orders",
+                    notCreator != null && notCreator.contains("creator") ? 1 : 0, 1);
+            String nothing = rejection(live, operatorCancel(ALICE, CAROL, null));
+            check("someone with no orders is refused, not logged",
+                    nothing != null && nothing.contains("no open orders") ? 1 : 0, 1);
+            String nobody = rejection(live, operatorCancel(ALICE, null, null));
+            check("a cancel needs somebody to cancel", nobody != null ? 1 : 0, 1);
+            StringBuilder essay = new StringBuilder();
+            for (int i = 0; i <= EventApplier.MAX_OPERATOR_REASON; i++) essay.append('x');
+            String tooLong = rejection(live, operatorCancel(ALICE, BOB, essay.toString()));
+            check("the reason is kept short, since it is in the log for good",
+                    tooLong != null && tooLong.contains("longer") ? 1 : 0, 1);
+            check("and none of that touched his order", live.restingOrdersOf(BOB).size(), 1);
+        }
+
+        section("OC3: the listing fees stay paid; everything reserved comes back");
+        {
+            Path file = scratch("test-log-oc3.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState m = new MarketState();
+            seedMarket(log, m);
+            register(log, m, BOB);
+            grant(log, m, BOB, 1000);
+            m.setListingFee(5);
+            apply(log, m, deposit(BOB, IRON, 10));
+            apply(log, m, placeOrder(BOB, IRON, 20, 10, false));    // fee 5, reserves 10 iron
+            apply(log, m, placeOrder(BOB, DIAMOND, 10, 3, true));   // fee 5, reserves 30
+            apply(log, m, operatorCancel(ALICE, BOB, null));
+            check("only the two listing fees are gone", m.wallets().getBalance(BOB), 990);
+            check("and every iron is back", m.itemBalances().getBalance(BOB, IRON), 10);
+        }
+
+        section("ST1: the operator's stats add up");
+        {
+            MarketState m = new MarketState();
+            m.wallets().setBalance(ALICE, 1000L);
+            m.wallets().setBalance(BOB, 1000L);
+            m.deposit(ALICE, IRON, 10);
+            m.setTaxBps(1000);       // 10%
+            m.setListingFee(2);
+            m.submitOrder(new Order(1, 50, IRON, 10, false, ALICE));   // ask 10 at 50
+            m.submitOrder(new Order(2, 60, IRON, 4, true, BOB));       // buys 4 at 50: 200, tax 20
+            m.submitOrder(new Order(3, 10, IRON, 5, true, BOB));       // rests, holding 50
+
+            MarketStats s = MarketStats.of(m);
+            check("burned: three listing fees and 10% of 200", s.burned, 2 + 2 + 2 + 20);
+            check("credits held plus burned is everything issued", s.issued(), 2000);
+            check("a resting bid's credits still count as held", s.circulating(), 2000 - 26);
+            check("the richest is Alice, who sold", s.holders.get(0).id.equals(ALICE) ? 1 : 0, 1);
+            check("Bob's credits include the bid he has resting", s.holders.get(1).credits,
+                    1000 - 2 - 200 - 2);
+            long iron = 0;
+            for (MarketStats.ItemTotal t : s.items) if (t.itemId.equals(IRON)) iron = t.units;
+            check("iron is counted wherever it is: Bob's 4 and the 6 still listed", iron, 10);
+            check("two orders resting", s.openOrders, 2);
+            String report = s.describe(id -> id.equals(ALICE) ? "Alice" : null, 5, 10);
+            check("the report names who it can", report.contains("Alice") ? 1 : 0, 1);
+            check("and says what was burned", report.contains("burned by fees") ? 1 : 0, 1);
+        }
+
 
         section("G1: zero-volume order");
         {
@@ -4127,6 +4229,8 @@ public class MarketTests {
                         firstOrderIdAt(restored.state, IRON, 7, false),
                         firstOrderIdAt(full.state, IRON, 7, false));
                 check("fillsEver survives", restored.state.fillsEver(), full.state.fillsEver());
+                check("the credits the fees burned survive", restored.state.creditsBurned(),
+                        full.state.creditsBurned());
                 check("the migration guard survives",
                         restored.state.hasMigratedIn(CAROL) ? 1 : 0, 1);
                 check("the second-grant guard survives",
@@ -5245,6 +5349,22 @@ public class MarketTests {
         Event.PlaceOrder e = new Event.PlaceOrder();
         e.userId = user; e.itemId = item; e.price = price; e.volume = volume; e.isBid = isBid;
         return e;
+    }
+
+    private static Event.OperatorCancel operatorCancel(UUID author, UUID target, String reason) {
+        Event.OperatorCancel e = new Event.OperatorCancel();
+        e.userId = author; e.targetUserId = target; e.reason = reason;
+        return e;
+    }
+
+    /** Why validate would refuse an event here, or null if it would accept it. Changes nothing. */
+    private static String rejection(MarketState state, Event e) {
+        e.marketId = state.marketId();
+        SequencedEvent se = new SequencedEvent();
+        se.seq = 99;
+        se.event = e;
+        EventApplier.Result r = EventApplier.validate(state, se);
+        return r.accepted ? null : r.reason;
     }
 
     private static Event.CancelOrder cancelOrder(UUID user, String item, long orderId, boolean isBid) {

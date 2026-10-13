@@ -155,7 +155,7 @@ public final class BotRunner {
         }
         ticker.scheduleAtFixedRate(this::onTick, timing.tickMs, timing.tickMs, TimeUnit.MILLISECONDS);
         System.out.println("[bots] running " + resumed + " of " + state.bots().size() + " bot"
-                + (state.bots().size() == 1 ? "" : "s") + " (type 'bot help' for commands)");
+                + (state.bots().size() == 1 ? "" : "s") + " (type 'help' for commands)");
     }
 
     public synchronized void stop() {

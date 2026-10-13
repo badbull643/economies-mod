@@ -128,6 +128,11 @@ public class EventCanonical {
                     .append('|').append(hd.banOnWorldChange)
                     .append('|').append(hd.maxDepositUnitsPerPlayHour)
                     .append('|').append(hd.maxDepositMultipleOfHandled);
+        } else if (e instanceof Event.OperatorCancel) {
+            // The reason too: it is what the log tells every player about why their orders
+            // went, and a relay rewriting it would be putting words in the creator's mouth.
+            Event.OperatorCancel oc = (Event.OperatorCancel) e;
+            sb.append('|').append(oc.targetUserId).append('|').append(oc.reason);
         } else if (e instanceof Event.BotsEnabled) {
             sb.append('|').append(((Event.BotsEnabled) e).botAuthorityPublicKey);
         } else if (e instanceof Event.BotSpawned) {

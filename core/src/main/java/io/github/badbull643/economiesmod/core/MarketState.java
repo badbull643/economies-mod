@@ -666,6 +666,25 @@ public class MarketState {
 
     public long fillsEver() { return fillsEver; }
 
+    /**
+     * Credits the fees have destroyed, all time: the trading fee on every fill and every
+     * listing fee paid.
+     *
+     * The other half of the money supply. Everything that ever came into this market — a
+     * grant, a stipend, a migration, a bot's starting money — is either still held by
+     * somebody or was burned here, so the two together say how much was ever issued. An
+     * operator watching only the circulating figure cannot tell a market that issued little
+     * from one that issued a lot and burned most of it.
+     */
+    private volatile long creditsBurned = 0;
+
+    public long creditsBurned() { return creditsBurned; }
+
+    void setCreditsBurned(long burned) { this.creditsBurned = burned; }
+
+    /** Every identity registered here, players and bots. A copy. */
+    public Set<UUID> registeredIds() { return new java.util.HashSet<>(keyDirectory.keySet()); }
+
     // Get-or-create the order book for a given item
     public OrderBook bookFor(String itemId) {
         return markets.computeIfAbsent(itemId, k -> new OrderBook());
@@ -724,6 +743,7 @@ public class MarketState {
         if (fee > 0) {
             wallets.adjust(order.userID(), -fee);
             pnlRealize(order.userID(), -fee);
+            creditsBurned = saturatingAdd(creditsBurned, fee);
         }
 
         // Reserve
@@ -751,6 +771,7 @@ public class MarketState {
             // does not exist. Destroying it is the only option that closes the loop.
             long tax = taxOn(f.amount(), taxBps);
             wallets.adjust(f.sellerId(), +(f.amount() - tax));
+            creditsBurned = saturatingAdd(creditsBurned, tax);
 
             pnlIn(f.buyerId(), f.itemId(), f.quantity(), f.amount());
             pnlOut(f.sellerId(), f.itemId(), f.quantity(), f.amount() - tax);

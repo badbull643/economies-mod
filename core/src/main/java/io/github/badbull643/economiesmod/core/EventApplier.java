@@ -548,8 +548,21 @@ public class EventApplier {
             return sr.accepted ? Result.ok(sr.fills) : Result.reject(sr.reason);
         }
 
+        if (e instanceof Event.OperatorCancel) {
+            // Exactly what the owner's own cancels would do, one order at a time: each
+            // reservation goes back to them, and the listing fees stay paid.
+            java.util.UUID target = ((Event.OperatorCancel) e).targetUserId;
+            for (Order o : state.restingOrdersOf(target)) {
+                state.cancelOrder(o.orderId(), o.itemID(), o.isBid(), target);
+            }
+            return Result.ok(Collections.emptyList());
+        }
+
         return Result.reject("unknown event type: " + e.getClass().getSimpleName());
     }
+
+    /** The longest reason an OperatorCancel may carry. It is in the log for good. */
+    public static final int MAX_OPERATOR_REASON = 200;
 
     /**
      * A replayed state together with where the replay actually finished.
@@ -1158,6 +1171,36 @@ public class EventApplier {
                     state.canDepositAndList(d.userId, d.itemId, d.quantity, d.price);
             return listable.accepted ? Result.ok(Collections.emptyList())
                     : Result.reject(listable.reason);
+        }
+
+        if (e instanceof Event.OperatorCancel) {
+            Event.OperatorCancel oc = (Event.OperatorCancel) e;
+
+            // Creator-signed, as policy is. Anybody else being able to sign one would let
+            // any player pull a rival's listings off the book.
+            if (state.creator() == null) {
+                return Result.reject("this market has no creator recorded");
+            }
+            if (!state.creator().equals(e.userId)) {
+                return Result.reject("only the market's creator can cancel somebody else's orders");
+            }
+            if (oc.targetUserId == null) return Result.reject("missing targetUserId");
+            // A bot is stopped by pausing it, which takes its orders off the book too and
+            // keeps it from simply placing them again on its next tick.
+            if (state.isBot(oc.targetUserId)) {
+                return Result.reject("that is a bot — pause it instead, which also takes its"
+                        + " orders off the book");
+            }
+            if (oc.reason != null && oc.reason.length() > MAX_OPERATOR_REASON) {
+                return Result.reject("the reason is longer than " + MAX_OPERATOR_REASON
+                        + " characters");
+            }
+            // Nothing to cancel is refused rather than logged, so the log never records an
+            // action that did nothing — and the operator hears that there was nothing.
+            if (state.restingOrdersOf(oc.targetUserId).isEmpty()) {
+                return Result.reject("they have no open orders");
+            }
+            return Result.ok(Collections.emptyList());
         }
 
         return Result.reject("unknown event type: " + e.getClass().getSimpleName());

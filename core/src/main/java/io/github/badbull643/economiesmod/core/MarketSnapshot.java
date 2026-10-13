@@ -168,6 +168,7 @@ public final class MarketSnapshot {
         long stipendAmount;
         long stipendEveryFills;
         long fillsEver;
+        long creditsBurned;
 
         Map<String, String> keyDirectory = new LinkedHashMap<>();
         List<String> granted = new ArrayList<>();
@@ -301,6 +302,7 @@ public final class MarketSnapshot {
         b.stipendAmount = state.stipendAmount();
         b.stipendEveryFills = state.stipendEveryFills();
         b.fillsEver = state.fillsEver();
+        b.creditsBurned = state.creditsBurned();
         b.hostDefaults = state.hostDefaults();
         b.botAuthorityKey = state.botAuthorityKey();
         for (Map.Entry<UUID, MarketState.BotRecord> e : state.bots().entrySet()) {
@@ -568,6 +570,7 @@ public final class MarketSnapshot {
         s.setListingFreeOrders(b.listingFreeOrders);
         s.setStipend(b.stipendAmount, b.stipendEveryFills);
         s.setFillsEver(b.fillsEver);
+        s.setCreditsBurned(b.creditsBurned);
         s.setHostDefaults(b.hostDefaults);
         if (b.botAuthorityKey != null) s.setBotAuthorityKey(b.botAuthorityKey);
         if (b.bots != null) {

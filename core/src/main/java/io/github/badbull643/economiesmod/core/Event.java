@@ -267,6 +267,23 @@ public abstract class Event {
         public long price;
     }
 
+    /**
+     * The market's creator taking every resting order of one identity off the book — for
+     * whoever runs a server, on somebody they have banned or caught listing goods they
+     * should not have.
+     *
+     * Orders only, never balances. What each order had reserved goes back to its owner,
+     * exactly as their own cancel would, and the listing fees they paid stay paid. No credit
+     * and no item changes hands, so what this gives the creator is the power to stop
+     * somebody's goods selling, not to take them. It is in the log like everything else, so
+     * every player can see that it happened and to whom.
+     */
+    public static class OperatorCancel extends Event {
+        public UUID targetUserId;
+        /** Why, in the operator's words. Free text for people reading the log; decides nothing. */
+        public String reason;
+    }
+
     // ─────────── bots (see BotRules and docs/BOTS-SPEC.md) ───────────
     //
     // Bots exist only in markets a dedicated server created with bots switched on. Four of

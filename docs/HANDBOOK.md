@@ -434,6 +434,42 @@ list` shows it as "not running here".
 A server started with nothing attached to its input, like a service, has no console to type
 into. Start it in a terminal (or `screen`/`tmux`) when you want to manage the bots.
 
+#### Watching the economy, and dealing with a cheater
+
+These are typed into the same console as the bot commands. `help` lists everything.
+
+| Command | What it does |
+| --- | --- |
+| `stats` | The money supply: credits held by players and by bots, what the fees have burned, and the total ever issued. Then the five richest and the ten most-held items, with their market price |
+| `cancel-orders <player> [reason]` | Takes all of a player's orders off the book. What the orders reserved goes back to them; the listing fees they paid stay paid |
+| `ban <player> [reason]` | Adds them to `deny` in the config, disconnects them, and cancels their orders |
+
+A `<player>` is the name they connected with, their id, or the first few characters of it.
+For example:
+
+```
+stats
+cancel-orders Steve listing duped iron
+ban 3f2a91c0 duping
+```
+
+**Cancelling never takes anything.** It moves no credits and no items: the player keeps what
+they own, it just stops being for sale. The cancel goes into the market's history with your
+reason, like every other event, so every player can see it happened and why.
+
+**Only a server that created its market can cancel orders.** That's the default. If the
+market was created with `--creator-key`, only that player can, and `cancel-orders` says so.
+`ban` still adds them to `deny` and disconnects them either way.
+
+**With `banOnWorldChange` on**, someone banned for switching their world to creative or
+cheats has their orders cancelled automatically too.
+
+**To undo a ban,** take them out of `deny` in the config and restart.
+
+**How to read `stats`:** "held" plus "burned" always equals "issued". If held keeps climbing
+while burned stays small, money is coming in faster than the fees take it out, and prices will
+creep up. Raising the trading fee or the listing fee slows that down.
+
 ## Extra Notes
 
 #### Two differences from a friend hosting

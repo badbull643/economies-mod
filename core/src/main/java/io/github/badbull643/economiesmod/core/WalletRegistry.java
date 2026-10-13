@@ -31,6 +31,11 @@ public class WalletRegistry {
         balances.put(userId, balances.getOrDefault(userId, 0L) + delta);
     }
 
+    /** Every balance, as a copy taken in one moment. For totals and the operator's stats. */
+    public synchronized Map<UUID, Long> all() {
+        return new HashMap<>(balances);
+    }
+
     // package-private — used by MarketState for serialization
     Map<UUID, Long> balances() { return balances; }
 }

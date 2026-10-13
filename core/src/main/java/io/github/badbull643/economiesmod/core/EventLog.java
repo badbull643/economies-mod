@@ -786,6 +786,7 @@ public class EventLog {
             case "BotPaused":     return Event.BotPaused.class;
             case "BotResumed":    return Event.BotResumed.class;
             case "BotActions":    return Event.BotActions.class;
+            case "OperatorCancel": return Event.OperatorCancel.class;
             default:
                 throw new IllegalStateException("Unknown event type in log: " + typeName);
         }

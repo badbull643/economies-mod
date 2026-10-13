@@ -243,7 +243,86 @@ public class BotRunnerTest {
             }, 5000));
             for (MarketClient c : joiners) c.disconnect();
         }
+
+        System.out.println("  [R11: the operator's console — stats, cancelling a player's orders, a ban]");
+        {
+            String stats = say(again, "stats");
+            check("stats reports the money supply", stats.contains("credits held") && stats.contains("burned by fees"));
+            MarketStats figures = MarketStats.of(again.state());
+            check("and splits it between players and bots, the bots holding some",
+                    figures.botCredits > 0 && stats.contains(String.format(java.util.Locale.ROOT, "bots %,d", figures.botCredits)));            check("an unknown player is not guessed at",
+                    say(again, "cancel-orders nobody").contains("no single player"));
+            check("a bot is paused, not cancelled",
+                    contains(sayQueued(again, "cancel-orders " + p1, 1), "pause it instead"));
+
+            UUID cheaterId = UUID.randomUUID();
+            Path cd = dir.resolve("cheater");
+            Files.createDirectories(cd);
+            MarketClient cheater = new MarketClient(cheaterId, "Cheater", PlayerKeys.generate(),
+                    new EventLog(cd.resolve("market.jsonl")), true, new PeerCache(cd.resolve("peers.json")), 0);
+            cheater.connect("127.0.0.1", againPort);
+            check("(a player joins and is given their grant)",
+                    await(() -> again.state().wallets().getBalance(cheaterId) > 0
+                            && cheaterId.equals(again.resolvePlayer("Cheater")), 5000));
+
+            Event.Deposit d = new Event.Deposit();
+            d.userId = cheaterId; d.itemId = WOOD; d.quantity = 5;
+            cheater.propose(d);
+            check("(and deposits five wood)",
+                    await(() -> again.state().itemBalances().getBalance(cheaterId, WOOD) == 5, 5000));
+            Event.PlaceOrder ask = new Event.PlaceOrder();
+            ask.userId = cheaterId; ask.itemId = WOOD; ask.price = 999; ask.volume = 5; ask.isBid = false;
+            cheater.propose(ask);
+            Event.PlaceOrder bid = new Event.PlaceOrder();
+            bid.userId = cheaterId; bid.itemId = WOOD; bid.price = 1; bid.volume = 10; bid.isBid = true;
+            cheater.propose(bid);
+            check("(lists the wood, and bids far under the market)", await(() -> orders(again, cheaterId) == 2, 5000));
+            long credits = again.state().wallets().getBalance(cheaterId);
+
+            check("the player is found by the name they connected with",
+                    contains(sayQueued(again, "cancel-orders Cheater listing duped wood", 1), "cancelled 2 orders"));
+            check("their orders are off the book", orders(again, cheaterId) == 0);
+            check("the bid's credits are back", again.state().wallets().getBalance(cheaterId) == credits + 10);
+            check("and so is the wood", again.state().itemBalances().getBalance(cheaterId, WOOD) == 5);
+            long head = again.headSeq();
+            check("their own copy of the market takes the cancel like any other event",
+                    await(() -> cheater.lastSeq() >= head && !cheater.needsResync(), 5000));
+            check("cancelling again says there is nothing to cancel",
+                    contains(sayQueued(again, "cancel-orders Cheater", 1), "no open orders"));
+
+            Event.PlaceOrder bidAgain = new Event.PlaceOrder();
+            bidAgain.userId = cheaterId; bidAgain.itemId = WOOD; bidAgain.price = 1; bidAgain.volume = 10; bidAgain.isBid = true;
+            cheater.propose(bidAgain);
+            check("(they bid again)", await(() -> orders(again, cheaterId) == 1, 5000));
+            List<String> banned = sayQueued(again, "ban " + cheaterId.toString().substring(0, 8) + " duping", 2);
+            check("a ban says so", contains(banned, "banned Cheater and disconnected them"));
+            check("and takes the new order off the book too", contains(banned, "cancelled 1 order"));
+            check("they are disconnected", await(() -> !cheater.isConnected(), 5000));
+            boolean back;
+            try {
+                cheater.connect("127.0.0.1", againPort);
+                back = await(cheater::isConnected, 1000);
+            } catch (Exception refused) {
+                back = false;
+            }
+            check("and cannot come back", !back);
+            cheater.disconnect();
+        }
         again.stop();
+
+        System.out.println("  [R12: the cancel is in the log, and the log still verifies]");
+        {
+            Thread.sleep(300);
+            List<String> all = new EventLog(logPath).rawLinesFrom(1);
+            check("an OperatorCancel was written", count(String.join("\n", all), "OperatorCancel") >= 2);
+            MarketArchive.Verified v = null;
+            try {
+                v = MarketArchive.verifyLines(all);
+            } catch (IOException e) {
+                System.out.println("    (" + e.getMessage() + ")");
+            }
+            check("and the whole log verifies, rules and signatures, with it in", v != null);
+        }
 
         System.out.println("  [R8: the action budget]");
         {
@@ -256,12 +335,12 @@ public class BotRunnerTest {
             check("and a full bucket does not bank time", b.take(20, 2_000_000) == 8 && b.take(1, 2_000_500) == 0);
         }
 
-        System.out.println("  [R9: a client from before bots is told to update]");
-        check("protocol 9", HostServer.PROTOCOL_VERSION.equals("9"));
+        System.out.println("  [R9: a client from before operator cancels is told to update]");
+        check("protocol 10", HostServer.PROTOCOL_VERSION.equals("10"));
         check("an older client hears it needs a newer mod",
-                HostServer.protocolRefusal("8").contains("needs a newer version of EconomiesMod"));
+                HostServer.protocolRefusal("9").contains("needs a newer version of EconomiesMod"));
         check("a newer client hears the server is the old one",
-                HostServer.protocolRefusal("10").contains("older version of EconomiesMod"));
+                HostServer.protocolRefusal("11").contains("older version of EconomiesMod"));
         check("nonsense still gets the plain refusal",
                 HostServer.protocolRefusal("x").contains("mismatch"));
 
@@ -317,6 +396,20 @@ public class BotRunnerTest {
         StringBuilder out = new StringBuilder();
         BotConsole.handle(host, command, s -> out.append(s).append('\n'));
         return out.toString();
+    }
+
+    /** A console command whose answers come later, from the sequencer: waits for n of them. */
+    private static List<String> sayQueued(HostServer host, String command, int n) throws InterruptedException {
+        BlockingQueue<String> q = new LinkedBlockingQueue<>();
+        BotConsole.handle(host, command, q::add);
+        List<String> got = take(q, n, 5000);
+        for (String s : got) System.out.println("      > " + s);
+        return got;
+    }
+
+    private static boolean contains(List<String> lines, String needle) {
+        for (String s : lines) if (s.contains(needle)) return true;
+        return false;
     }
 
     private static List<String> take(BlockingQueue<String> q, int n, long ms) throws InterruptedException {
