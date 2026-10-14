@@ -965,6 +965,9 @@ public class MarketClient {
             try { channel.close(); } catch (IOException ignored) {}
         }
         keepWhatWeLearned();
+        // The log keeps its file open while events flow; let go of it now rather than a
+        // second from now, since leaving is often followed by a reset that deletes it.
+        log.close();
     }
 
     /**

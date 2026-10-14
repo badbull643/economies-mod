@@ -2403,6 +2403,8 @@ public class HostServer {
                 Thread.currentThread().interrupt();
             }
         }
+        // Nothing more is written, so the file can be let go of at once.
+        log.close();
 
         if (serverSocket != null) {
             try { serverSocket.close(); } catch (IOException ignored) {}

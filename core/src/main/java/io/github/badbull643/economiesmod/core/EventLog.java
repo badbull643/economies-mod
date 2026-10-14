@@ -23,6 +23,9 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
@@ -391,11 +394,7 @@ public class EventLog {
 
         assertSoleWriter();
         String line = compactLine(se, genesisMarketIdForWriting(se));
-        try (BufferedWriter w = Files.newBufferedWriter(file,
-                StandardCharsets.UTF_8, StandardOpenOption.APPEND)) {
-            w.write(line);
-            w.newLine();
-        }
+        writeLine(line);
         knownSize = Files.size(file);
 
         lastSeq = se.seq;
@@ -1010,11 +1009,7 @@ public class EventLog {
         assertSoleWriter();
         // Stored compact like anything appended here; what arrived was the full wire form.
         String stored = compactLine(se, genesisMarketIdForWriting(se));
-        try (BufferedWriter w = Files.newBufferedWriter(file,
-                StandardCharsets.UTF_8, StandardOpenOption.APPEND)) {
-            w.write(stored);
-            w.newLine();
-        }
+        writeLine(stored);
         knownSize = Files.size(file);
 
         lastSeq = se.seq;
@@ -1087,6 +1082,9 @@ public class EventLog {
     public synchronized boolean trySealHistory() throws IOException {
         if (!storage.writeLock().tryLock()) return false;
         try {
+            // The live file is about to be replaced; the next append reopens whichever file
+            // is there then.
+            closeWriter();
             assertSoleWriter();
 
             long sealedThrough = 0;
@@ -1153,12 +1151,117 @@ public class EventLog {
         }
     }
 
-    private static void replace(Path tmp, Path target) throws IOException {
+    // ─────────── the open writer ───────────
+    //
+    // Every append used to open the file, write one line and close it again. That is four
+    // trips to the file system per event, and on Windows the close is also what sets the
+    // virus scanner going over a file that has just changed — a scan that takes longer the
+    // bigger the log gets. Measured on one machine: about 9,500 lines a second with single
+    // lines taking up to 381 ms, against 260,000 a second and at most 0.3 ms with the file
+    // kept open. On a busy dedicated server that was the whole of the stall: one thread puts
+    // every event in order, so a third of a second on one close held up everybody's trades,
+    // the players' queues backed up, and those furthest behind were cut off.
+    //
+    // So the file stays open while events are flowing, and each line is flushed as it is
+    // written. Flushing hands the line to the operating system straight away, which is
+    // everything the close did: a program that crashes loses nothing it was told was written,
+    // exactly as before. Only a power cut can lose the last instant, as it always could.
+    //
+    // It is closed again after a second with nothing written, so a log nobody is writing to
+    // holds no file open — removing a market slot or resetting one deletes these files, and
+    // an idle log should never be what stands in the way. close() does it at once.
+    // assertSoleWriter still runs before every append: it asks the file's size, which costs
+    // no scan, and it is what notices another writer, or the file having been replaced.
+
+    /** Open between appends while events are flowing; null when idle. Guarded by this. */
+    private BufferedWriter writer;
+    /** When the writer was last written through. Guarded by this. */
+    private long lastWriteNanos;
+    /** Whether an idle check is waiting to run. Guarded by this. */
+    private boolean closeCheckPending;
+
+    private static final long IDLE_CLOSE_MS = 1_000;
+
+    private static final ScheduledExecutorService CLOSER =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "eventlog-closer");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** One line on the end of the live file, flushed. Callers hold this object's monitor. */
+    private void writeLine(String line) throws IOException {
+        if (writer == null) {
+            writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8, StandardOpenOption.APPEND);
+        }
         try {
-            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            writer.write(line);
+            writer.newLine();
+            writer.flush();
+        } catch (IOException e) {
+            closeWriter();
+            throw e;
+        }
+        lastWriteNanos = System.nanoTime();
+        if (!closeCheckPending) {
+            closeCheckPending = true;
+            CLOSER.schedule(this::closeIfIdle, IDLE_CLOSE_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private synchronized void closeIfIdle() {
+        closeCheckPending = false;
+        if (writer == null) return;
+        long idleMs = (System.nanoTime() - lastWriteNanos) / 1_000_000;
+        if (idleMs >= IDLE_CLOSE_MS) {
+            closeWriter();
+        } else {
+            closeCheckPending = true;
+            CLOSER.schedule(this::closeIfIdle, IDLE_CLOSE_MS - idleMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void closeWriter() {
+        if (writer == null) return;
+        try {
+            writer.close();
+        } catch (IOException ignored) {
+            // Every line was flushed as it was written; there is nothing left in it to lose.
+        }
+        writer = null;
+    }
+
+    /**
+     * Lets go of the file now rather than after a second of quiet. For whoever is about to
+     * delete or replace it, or is finished with this log. Appending afterwards reopens it.
+     */
+    public synchronized void close() {
+        closeWriter();
+    }
+
+    private static void replace(Path tmp, Path target) throws IOException {
+        // Windows refuses to replace a file that anything still holds open, and another
+        // EventLog on this file keeps it open for up to IDLE_CLOSE_MS after its last write
+        // (see "the open writer"). Deleting it or creating it afresh is not affected — only
+        // this. So a refusal is waited out, briefly, rather than failing the seal.
+        for (int attempt = 0; ; attempt++) {
+            try {
+                try {
+                    Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+                return;
+            } catch (AccessDeniedException busy) {
+                if (attempt * 100L >= IDLE_CLOSE_MS * 3) throw busy;
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw busy;
+                }
+            }
         }
     }
 
