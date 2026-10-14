@@ -28,7 +28,7 @@ public class MarketScreensGameTest implements FabricClientGameTest {
     // In MarketScreen's SCREEN_ order. "item" is one item's view, reached from Browse.
     private static final String[] TABS = {"browse", "sell", "orders", "history", "leaderboard",
             "network", "market", "settings", "item"};
-    private static final int BROWSE = 0, MARKET = 6, ITEM = 8;
+    private static final int BROWSE = 0, ORDERS = 2, NETWORK = 5, MARKET = 6, ITEM = 8;
 
     @Override
     public void runTest(ClientGameTestContext context) {
@@ -224,6 +224,79 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
             context.waitTicks(3);
 
+            // The warnings a rotating market raises, on the new screen: each banner, all of
+            // them stacked with a recovery note under the panel, a damaged log, and the offer
+            // that joining a different market brings up. Set by hand rather than by really
+            // forking a market — this checks how they look and read; RotationTest covers how
+            // they arise. Back at the usual GUI scale, which the inventory shot above changed.
+            context.runOnClient(client -> {
+                client.options.getGuiScale().setValue(0);
+                client.onResolutionChanged();
+            });
+            context.waitTicks(5);
+            long head = context.computeOnClient(client -> localHead());
+
+            // Behind: somebody on this market was last seen 37 events further on.
+            context.runOnClient(client -> MarketStateHolder.observeMarketHeight(
+                    MarketStateHolder.get().marketId(), head + 37, "a-peer-further-on"));
+            openTab(context, BROWSE);
+            context.takeScreenshot("12-warning-behind");
+
+            // Forked: a host on another branch, with where the two parted.
+            context.runOnClient(client -> setHolder("divergence",
+                    holderNew("Divergence", "Alice's world", 412L, "aaaa", "bbbb", 400L)));
+            openTab(context, BROWSE);
+            context.takeScreenshot("12-warning-forked");
+
+            // Orders from a market left behind, waiting to be placed again — the banner, then
+            // the list itself in Your orders. And a recovery note under the panel.
+            context.runOnClient(client -> {
+                @SuppressWarnings("unchecked")
+                java.util.List<Object> waiting = (java.util.List<Object>) holder("pendingReplace");
+                waiting.add(holderNew("OldOrder", "minecraft:iron_ingot", 6L, 16L, false));
+                waiting.add(holderNew("OldOrder", "minecraft:diamond", 30L, 4L, true));
+                waiting.add(holderNew("OldOrder", "minecraft:oak_log", 9L, 64L, false));
+                setHolder("recoveryNote", "Recovered 12 iron ingots from a deposit that did not finish");
+            });
+            openTab(context, BROWSE);
+            context.takeScreenshot("12-warning-all-stacked");
+            openTab(context, ORDERS);
+            context.takeScreenshot("12-warning-replace-orders");
+            openTab(context, MARKET);
+            context.takeScreenshot("12-warning-market");
+
+            // A damaged log, which replaces every other warning. Set once the screen is open:
+            // opening it reads the log again, which would clear a flag set beforehand.
+            openTab(context, BROWSE);
+            context.runOnClient(client -> {
+                setHolder("chainBrokenAt", 388L);
+                setHolder("damageReason", "chain is broken at event 388");
+            });
+            context.waitTicks(3);
+            context.takeScreenshot("12-warning-log-unusable");
+            context.runOnClient(client -> selectTabNow(client.currentScreen, MARKET));
+            context.waitTicks(3);
+            context.takeScreenshot("12-warning-log-unusable-market");
+
+            context.runOnClient(client -> {
+                setHolder("chainBrokenAt", -1L);
+                setHolder("damageReason", null);
+                setHolder("divergence", null);
+                ((java.util.List<?>) holder("pendingReplace")).clear();
+                setHolder("recoveryNote", "");
+            });
+
+            // Connecting to a server that holds a different market: the offer of a new slot.
+            openTab(context, NETWORK);
+            context.runOnClient(client -> setObject(client.currentScreen, "offerNewSlot",
+                    new String[]{"192.168.1.20", "25555", "192.168.1.20:25555"}));
+            context.waitTicks(3);
+            context.takeScreenshot("12-different-market-offer");
+            context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+            context.waitTicks(3);
+            context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+            context.waitTicks(3);
+
             // The chat commands, which now register through a different Fabric API.
             for (String command : new String[] {"trade", "trade balance", "trade price iron_ingot",
                     "trade hostrules", "trade hostconfig"}) {
@@ -232,6 +305,72 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             }
             context.runOnClient(client -> client.inGameHud.getChatHud().scroll(0));
             context.takeScreenshot("07-commands");
+        }
+    }
+
+    // ─── MarketStateHolder's private state, for putting the screen into its warning states ───
+
+    private static Object holder(String name) {
+        try {
+            Field f = MarketStateHolder.class.getDeclaredField(name);
+            f.setAccessible(true);
+            return f.get(null);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void setHolder(String name, Object value) {
+        try {
+            Field f = MarketStateHolder.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(null, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** One of MarketStateHolder's nested records, through its package-private constructor. */
+    private static Object holderNew(String nested, Object... args) {
+        try {
+            for (Class<?> c : MarketStateHolder.class.getDeclaredClasses()) {
+                if (!c.getSimpleName().equals(nested)) continue;
+                for (java.lang.reflect.Constructor<?> k : c.getDeclaredConstructors()) {
+                    if (k.getParameterCount() != args.length) continue;
+                    k.setAccessible(true);
+                    return k.newInstance(args);
+                }
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+        throw new IllegalStateException("no " + nested + " taking " + args.length + " arguments");
+    }
+
+    /** Where this world's own copy of the market has got to. */
+    private static long localHead() {
+        Object log = holder("localLog");
+        return log == null ? 0 : ((io.github.badbull643.economiesmod.core.EventLog) log).lastSeq();
+    }
+
+    /** Switches view on the open screen, as the menu does, without opening a fresh one. */
+    private static void selectTabNow(Screen screen, int tab) {
+        try {
+            java.lang.reflect.Method m = MarketScreen.class.getDeclaredMethod("selectScreen", int.class);
+            m.setAccessible(true);
+            m.invoke(screen, tab);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void setObject(Screen screen, String name, Object value) {
+        try {
+            Field f = MarketScreen.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(screen, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
         }
     }
 

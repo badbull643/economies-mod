@@ -961,7 +961,7 @@ public class MarketScreen extends Screen {
         showConfirm("Join " + label + "?",
                 "It is a different market from " + current + ", which this world is using now."
                         + " Joining puts it in a new market slot of its own; " + current + " stays"
-                        + " exactly as it is, and you can switch back from Setup > Market.",
+                        + " exactly as it is, and you can switch back from Market in the menu.",
                 "Join", () -> {
                     if (!MarketStateHolder.addMarketSlot()) return;
                     MinecraftClient mc = MinecraftClient.getInstance();
@@ -2214,9 +2214,10 @@ public class MarketScreen extends Screen {
 
         switch (situation) {
             case MS_DAMAGED:
-                heading = "This world's market log is unreadable";
-                body = (MarketStateHolder.damageReason() == null
-                        ? "The file is damaged." : MarketStateHolder.damageReason())
+                heading = "This market's log is damaged";
+                String reason = MarketStateHolder.damageReason();
+                body = (reason == null ? "The file is damaged."
+                        : reason.endsWith(".") ? reason : reason + ".")
                         + " Nothing can be done until it is discarded. If somebody else"
                         + " still has this market, you get it all back when you"
                         + " reconnect.";
@@ -2231,7 +2232,7 @@ public class MarketScreen extends Screen {
                         + " one here, or import a file somebody exported.";
                 break;
             case MS_FORKED:
-                heading = "You have diverged from this market";
+                heading = "Your copy has forked";
                 // "the host will refuse it" read as a fault rather than a safeguard, so
                 // it says whose protection it is and why it exists.
                 body = MarketStateHolder.divergence().describe()
@@ -3218,14 +3219,20 @@ public class MarketScreen extends Screen {
         int footerW = this.width - listX - 8;
         int below = panelOuterBottom() + 4;
 
+        // Each on a dark strip: just under the panel is over the hearts and the hotbar now
+        // that the world shows through, and bare text there was hard to read.
         if (!status.isEmpty()) {
-            label(matrices, trim(status, footerW), listX, below, 0xFFDD66);
-            below += 11;
+            String shown = trim(status, footerW - 8);
+            matrices.fill(listX, below - 2, listX + this.textRenderer.getWidth(shown) + 8, below + 10, 0xC0000000);
+            label(matrices, shown, listX + 4, below, 0xFFDD66);
+            below += 13;
         }
 
         String note = MarketStateHolder.recoveryNote();
         if (!note.isEmpty()) {
-            label(matrices, trim(note, footerW), listX, below, 0x88CCFF);
+            String shown = trim(note, footerW - 8);
+            matrices.fill(listX, below - 2, listX + this.textRenderer.getWidth(shown) + 8, below + 10, 0xC0000000);
+            label(matrices, shown, listX + 4, below, 0x88CCFF);
         }
 
         // The text fields are registered with addButton now, so super.render draws
@@ -3401,7 +3408,13 @@ public class MarketScreen extends Screen {
         // can be showing before anyone has tried to connect.
         MarketStateHolder.Divergence split = MarketStateHolder.divergence();
         if (split != null) {
-            out.add(new Alert("FORKED: " + split.describe(), 0xFF8844, SCREEN_MARKET));
+            // Short enough for one line: the whole sentence ran off the panel, losing its end
+            // and the "open Market" that says where the answer is. Market has it in full.
+            String who = split.hostName == null ? "a host" : split.hostName;
+            out.add(new Alert(split.splitAt >= 0
+                    ? "FORKED: split from " + who + " after event " + split.splitAt
+                    : "FORKED: " + who + " is on another branch",
+                    0xFF8844, SCREEN_MARKET));
         }
 
         // The orders from a market you left used to sit in a box over the screen, so they
