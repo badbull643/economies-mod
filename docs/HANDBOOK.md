@@ -207,6 +207,21 @@ the market settles*, 50 by default (can be changed). Click **Claim stipend** on 
 
 **It counts fills, not time or events.**. A fill needs two orders to cross, and every order costs a listing fee (if the host has set a listing fee).
 
+**What a fill is.** One buy order meeting one sell order is one fill, whatever the quantity:
+selling 64 iron to one buyer is one fill. One order matching three orders on the book is three
+fills. Placing, cancelling, depositing and withdrawing don't count.
+
+**The count is the whole market's, not yours.** Everyone's trades move it along, bots' too, so
+you don't have to trade to claim. If you claim when the market is at 1,080 fills, your next
+claim opens at 1,130 on the default of 50. A busy market pays out more often and a quiet one
+less.
+
+**New players wait a full interval.** Your count starts when you join, so arriving in a market
+that's already traded thousands of times doesn't pay out straight away.
+
+**Missed intervals don't add up.** Claiming resets your count to now, so 200 fills without a
+claim still pays once. The **Claim stipend** button only appears when you can claim.
+
 How much you get is up to your market's creator check the Market tab, or `/trade hostconfig`, for the
 current amount. What it can be set to is tied to the **listing fee**, the market only
 allows a stipend that the fees collected over one interval can actually cover, so a low listing
@@ -216,6 +231,34 @@ fee (or none at all) means a small stipend, or none.
 registered player is more than the listing fees collect over the same interval, the market is
 printing money and the rule turns it down. It's checked when the stipend is set and again at
 every claim, since a market can outgrow one that was affordable when it was chosen.
+
+The rule is `stipend × registered players < listing fee × fills per interval`. Registered players
+means everyone who has ever joined, apart from bots, and that number only goes up. Players who
+stopped playing still count, because the market can't tell they won't come back to claim.
+
+**Only the listing fee counts, not the trading fee.** The trading fee is a percentage of the
+price, and someone trading with themselves can set the price to 1 and pay almost nothing. The
+listing fee is the same on every order, so it's the only cost a fill is guaranteed to have.
+
+**The stipend gives back part of the listing fees, it doesn't add to them.** Both fees are
+destroyed, and the rule keeps the stipend smaller than the listing fees collected over the
+same interval, so a market with a stipend still loses credits overall. What it does is move
+credits from whoever places the most orders to everyone who claims. New money still only comes
+in with new players' welcome grants.
+
+**Choosing one for a busy server.** Turn the stipend on once the market has been running for
+a while, not at the start:
+
+1. Run the server for a week and type `stats` in the console every day or so. The `trades`
+   line is the fill count, and `people` is the registered player count the rule uses.
+2. Set the interval to about one day's fills, so each player can claim about once a day.
+3. The most the stipend can be is `listing fee × interval ÷ people`. Set it to half of that or
+   less, so there's room for the market to grow.
+4. Look at `stats` again now and then. Once `people` doubles, claims start being refused until
+   the interval goes up or the stipend comes down.
+
+Example: listing fee 2, about 2,000 fills a day and 200 people gives an interval of 2,000 and a
+maximum of 2 × 2,000 ÷ 200 = 20. A stipend of 10 lasts until there are 400 people.
 
 ---
 
@@ -283,11 +326,31 @@ java -jar economies-server.jar --config server.json --write-config
 }
 ```
 
+The file also has a `welcomeGrant` at the top level, outside `policy`. Set it to the same
+number as `policy.welcomeGrant`, or every start prints a "welcome grant mismatch" warning.
+It's harmless, because the `policy` figure is the one newcomers get. Don't set it to 0 to quiet
+the warning, though: 0 means this server hands out no welcome grants at all.
+
+Leaving out `logFile` names the market `server-market.jsonl`. This handbook calls it
+`market.jsonl` throughout.
+
 **4. Start it.**
 
 ```
 java -jar economies-server.jar --config server.json
 ```
+
+**The first start needs to know the Minecraft version.** A new market won't be created until
+`gameVersion` is set. Without it, the server stops straight away and says it "does not know
+which Minecraft version its players are on". Either set `gameVersion` in the config (step 3),
+or add it to the command:
+
+```
+java -jar economies-server.jar --config server.json --game-version 1.21.11
+```
+
+Use the version your players are on. It can't be changed once the market exists, and players
+on any other version are turned away.
 
 The first start with an empty log creates the market. You should see roughly:
 
@@ -370,6 +433,7 @@ again afterward.
 | `the policy block in this config was refused: …` | The numbers break a market rule, usually the stipend interlock. The market is fine and unchanged |
 | `this market grants N, and welcomeGrant is set to M` | The amount is the market's, fixed when it was created. The config setting only chooses whether this server issues grants at all |
 | `port already in use` | Something else has 25555, or a previous run hasn't exited |
+| `does not know which Minecraft version its players are on` | A new market needs its version before it can be created. Set `gameVersion` in the config, or add `--game-version 1.21.11` (your players' version) to the start command |
 
 #### Bots
 
@@ -382,6 +446,13 @@ first start, the one with an empty log:
 
 ```
 java -jar economies-server.jar --config server.json --bots
+```
+
+This is the first start, so it needs the Minecraft version too. If `gameVersion` isn't set in
+your config, the server stops without creating the market. Add it to the same command:
+
+```
+java -jar economies-server.jar --config server.json --bots --game-version 1.21.11
 ```
 
 The config remembers it, so later starts are the ordinary command. On a market that already
