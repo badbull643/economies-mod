@@ -68,12 +68,16 @@ java {
     withSourcesJar()
 }
 
+apply from: '../test-classes.gradle'
+
 jar {
     from("../LICENSE.txt") {
         rename { "${it}_${project.archives_base_name}" }
     }
     // core's vendored Bouncy Castle Ed25519 is compiled into this jar, so its MIT notice is too.
     from("../licenses/bouncycastle-LICENSE.txt")
+    // The test suites and the stress run compile with core but are no use to a player.
+    exclude testClasses
 }
 
 publishing {

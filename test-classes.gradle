@@ -1,0 +1,18 @@
+// The test suites and the stress run, by name.
+//
+// They live beside the engine in core/src/main/java, so every build compiles them with it,
+// but nobody playing or running a server needs them: about a third of every jar. Every build
+// that makes a jar for players or operators reads this list and leaves them out; the suites
+// and the stress run still run from core's Gradle tasks, against the compiled classes.
+//
+// Read with: apply from: '../test-classes.gradle', then exclude testClasses.
+ext.testClasses = [
+        'io/github/badbull643/economiesmod/core/**/*Test.class',
+        'io/github/badbull643/economiesmod/core/**/*Test$*.class',
+        'io/github/badbull643/economiesmod/core/**/*Tests.class',
+        'io/github/badbull643/economiesmod/core/**/*Tests$*.class',
+        'io/github/badbull643/economiesmod/core/**/StressRun.class',
+        'io/github/badbull643/economiesmod/core/**/StressRun$*.class',
+        'io/github/badbull643/economiesmod/core/**/TestPorts.class',
+        'io/github/badbull643/economiesmod/core/**/TestPorts$*.class',
+]

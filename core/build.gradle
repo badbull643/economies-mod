@@ -42,6 +42,9 @@ tasks.withType(JavaCompile).configureEach {
  *
  * java -jar economies-server.jar --write-config
  */
+// The test suites and the stress run, which no jar a player or operator gets should carry.
+apply from: '../test-classes.gradle'
+
 tasks.register('serverJar', Jar) {
     group = 'build'
     description = 'A standalone runnable jar for the dedicated server.'
@@ -55,6 +58,10 @@ tasks.register('serverJar', Jar) {
 
     from(sourceSets.main.output) {
         include 'io/github/badbull643/economiesmod/core/**'
+        // The test suites and the stress run live beside the engine, so they compile with it,
+        // but nobody running a server needs them: about a quarter of the jar. They run from
+        // Gradle (the suite tasks below, and stressRun) rather than from here.
+        exclude testClasses
     }
     // Unpacked rather than nested: java -jar reads no classpath from inside a jar, so a
     // dependency has to be flattened in beside the classes that use it.
@@ -131,4 +138,16 @@ tasks.register('hostServer', JavaExec) {
     description = 'Runs the standalone dedicated server (no Minecraft).'
     mainClass = 'io.github.badbull643.economiesmod.core.net.HostServer'
     classpath = sourceSets.main.runtimeClasspath
+}
+
+// The stress run, which is no longer in the server jar. Its options go after --args, e.g.
+//   ./gradlew stressRun --args="--connect 192.168.1.20:25555 --game-version 1.21.11 --players 100 --pace 1"
+// The console ('status', 'stop') reads this window, and the players' copies land in
+// core/stress-* (or stress-crowd-* with --connect).
+tasks.register('stressRun', JavaExec) {
+    group = 'verification'
+    description = 'Runs StressRun: a busy market of simulated players, local or against a server.'
+    mainClass = 'io.github.badbull643.economiesmod.core.net.StressRun'
+    classpath = sourceSets.main.runtimeClasspath
+    standardInput = System.in
 }

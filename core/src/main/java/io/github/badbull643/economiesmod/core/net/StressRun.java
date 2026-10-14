@@ -25,8 +25,8 @@ import java.util.concurrent.locks.Lock;
  *
  * The server accepts game connections like any other, so a real player can join and watch.
  *
- *   java -cp economies-server.jar io.github.badbull643.economiesmod.core.net.StressRun
- *        --game-version 1.21.11 [--port 25560] [--players 10] [--minutes 10] [--pace 0.4]
+ *   ./gradlew stressRun --args="--game-version 1.21.11 [--port 25560] [--players 10]
+ *        [--minutes 10] [--pace 0.4]"            (from core/; it is not in the server jar)
  *
  * --pace is the seconds between one simulated player's actions: 0.4 (the fastest a server
  * allows) is a crowd of hard traders; 10 to 30 is closer to people who are also playing.
@@ -34,8 +34,8 @@ import java.util.concurrent.locks.Lock;
  * With --connect host:port it starts no server and no bots: only the crowd, joining a real
  * server running somewhere else, so the server's machine carries the server's load alone.
  *
- *   java -cp economies-server.jar io.github.badbull643.economiesmod.core.net.StressRun
- *        --connect 192.168.1.20:25555 --game-version 1.21.11 --players 100 --pace 10
+ *   ./gradlew stressRun --args="--connect 192.168.1.20:25555 --game-version 1.21.11
+ *        --players 100 --pace 10"
  *
  * Only the runner's pace is changed — how often bots decide and how fast their action budget
  * refills. Everything the market's rules govern (the bot cap, grants, production rate) is as
