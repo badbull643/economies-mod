@@ -68,6 +68,16 @@ public class Settings {
          * here; there the history is how hosting rotates at all.
          */
         java.util.List<String> archiveMarkets = new java.util.ArrayList<>();
+
+        /**
+         * Market ids this machine has seen shared across Minecraft versions.
+         *
+         * Remembered rather than read off the current connection, because the market is
+         * shared whoever happens to host it: if its server is down and somebody hosts it
+         * from their game, that host only knows its own version, and a client that went
+         * back to its own names would split a renamed item into two. See ItemVersions.
+         */
+        java.util.List<String> sharedMarkets = new java.util.ArrayList<>();
     }
 
     private final Path file;
@@ -108,6 +118,20 @@ public class Settings {
         if (marketId == null) return true;
         return record.archiveMarkets != null
                 && record.archiveMarkets.contains(marketId.toString());
+    }
+
+    /** Whether this market has been seen shared across Minecraft versions. */
+    public boolean shared(java.util.UUID marketId) {
+        return marketId != null && record.sharedMarkets != null
+                && record.sharedMarkets.contains(marketId.toString());
+    }
+
+    /** Remembers a market as shared. Never forgotten: its log keeps first names either way. */
+    public void markShared(java.util.UUID marketId) {
+        if (marketId == null || shared(marketId)) return;
+        if (record.sharedMarkets == null) record.sharedMarkets = new java.util.ArrayList<>();
+        record.sharedMarkets.add(marketId.toString());
+        save();
     }
 
     public void setArchives(java.util.UUID marketId, boolean on) {

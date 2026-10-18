@@ -434,6 +434,38 @@ public class ServerConfig {
     public String gameVersion() { return GameVersions.normalize(gameVersion); }
 
     /**
+     * More Minecraft versions this server lets in besides gameVersion, making its market one
+     * shared across versions. Empty, the default, keeps the market to gameVersion alone,
+     * exactly as before.
+     *
+     * In a shared market every player trades only the items their own version has: the
+     * server checks each deposit, buy and withdrawal against the player's version, and
+     * items are named by their first name so a renamed one is still one item. See
+     * {@link ItemVersions}, and docs/CROSS-VERSION-SPEC.md for why it works this way.
+     *
+     * Dedicated servers only. A world hosting from somebody's game serves the version that
+     * game is, so this is imposed empty there, like gameVersion is imposed.
+     */
+    public List<String> gameVersions = new ArrayList<>();
+
+    /** Every version this server admits, gameVersion first, without repeats. */
+    public List<String> acceptedVersions() {
+        List<String> out = new ArrayList<>();
+        out.add(gameVersion());
+        if (gameVersions != null) {
+            for (String v : gameVersions) {
+                if (v == null || v.trim().isEmpty()) continue;
+                String n = GameVersions.normalize(v);
+                if (!out.contains(n)) out.add(n);
+            }
+        }
+        return out;
+    }
+
+    /** Whether this server's market is shared by more than one Minecraft version. */
+    public boolean crossVersion() { return acceptedVersions().size() > 1; }
+
+    /**
      * Whether to describe this host as a dedicated server to clients.
      *
      * Set by the standalone launcher, not by anything a player can reach. It is the
@@ -804,6 +836,9 @@ public class ServerConfig {
         // a default: the callers are the ones that know it, and a forgotten argument that
         // quietly meant 1.16.5 would let a 1.21.11 host admit 1.16.5 players.
         this.gameVersion = gameVersion;
+        // A game serves its own version and no other: sharing a market across versions is a
+        // dedicated server's setting.
+        this.gameVersions = new ArrayList<>();
         return this;
     }
 
@@ -831,7 +866,7 @@ public class ServerConfig {
     public com.google.gson.JsonObject hostRulesTree() {
         com.google.gson.JsonObject out = effectiveTree();
         for (String imposed : new String[] {
-                "port", "hostName", "hostUserId", "dedicated", "gameVersion", "bots",
+                "port", "hostName", "hostUserId", "dedicated", "gameVersion", "gameVersions", "bots",
                 "logFile", "marketName", "creatorUserId" }) {
             out.remove(imposed);
         }
@@ -945,6 +980,22 @@ public class ServerConfig {
         if (ALLOWLIST.equalsIgnoreCase(admission) && (allow == null || allow.isEmpty())) {
             return "admission is \"" + ALLOWLIST + "\" but allow is empty —"
                     + " that server would refuse everyone, including you";
+        }
+        if (crossVersion()) {
+            // Without it the first of the list would be read as 1.16.5, which is what an
+            // unset gameVersion has always meant — and a server meant for 1.21.11 and 26.3
+            // would quietly let 1.16.5 in as well.
+            if (!GameVersions.isSet(gameVersion)) {
+                return "gameVersions is set but gameVersion is not — set gameVersion to one of"
+                        + " the versions too";
+            }
+            for (String v : acceptedVersions()) {
+                if (!ItemVersions.knowsVersion(v)) {
+                    return "gameVersions lists " + v + ", which a shared market can't take yet:"
+                            + " its items aren't known. Versions it can share: "
+                            + String.join(", ", ItemVersions.VERSIONS);
+                }
+            }
         }
         return null;
     }

@@ -305,6 +305,77 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             }
             context.runOnClient(client -> client.inGameHud.getChatHud().scroll(0));
             context.takeScreenshot("07-commands");
+
+            // What a reconnect says about the fills that happened while you were away. Fed a
+            // summary by hand: how the count arises is AW1 in the core suite.
+            context.runOnClient(client -> {
+                UUID me = client.player.getUuid();
+                UUID other = UUID.randomUUID();
+                io.github.badbull643.economiesmod.core.SequencedEvent se =
+                        new io.github.badbull643.economiesmod.core.SequencedEvent();
+                se.seq = 1;
+                io.github.badbull643.economiesmod.core.AwaySummary away =
+                        new io.github.badbull643.economiesmod.core.AwaySummary(me, 0);
+                away.accept(new io.github.badbull643.economiesmod.core.AppliedEvent(se,
+                        io.github.badbull643.economiesmod.core.EventApplier.Result.ok(java.util.Arrays.asList(
+                                new io.github.badbull643.economiesmod.core.Fill(other, me, 20, 3, "minecraft:cobblestone"),
+                                new io.github.badbull643.economiesmod.core.Fill(other, me, 12, 6, "minecraft:iron_ingot"),
+                                new io.github.badbull643.economiesmod.core.Fill(me, other, 2, 40, "minecraft:diamond"),
+                                new io.github.badbull643.economiesmod.core.Fill(other, me, 64, 1, "minecraft:oak_log"))),
+                        false));
+                new io.github.badbull643.economiesmod.client.FillNotifier().onAway(away);
+            });
+            context.waitTicks(3);
+            context.takeScreenshot("13-away-summary");
+
+            // A market shared across versions: renamed items go by their first name, and
+            // Browse shows only what this version has. The server side is CrossVersionTest.
+            context.runOnClient(client -> {
+                net.minecraft.item.Item ironChain =
+                        io.github.badbull643.economiesmod.client.MinecraftIds.idToItem("minecraft:iron_chain");
+                if (!"minecraft:iron_chain".equals(
+                        io.github.badbull643.economiesmod.client.MinecraftIds.itemToId(ironChain))) {
+                    throw new IllegalStateException("a market of one version renamed an item");
+                }
+                io.github.badbull643.economiesmod.core.MarketState state = MarketStateHolder.get();
+                MarketStateHolder.settings().markShared(state.marketId());
+                if (!MarketStateHolder.sharedMarket()) {
+                    throw new IllegalStateException("the market wasn't remembered as shared");
+                }
+                if (!"minecraft:chain".equals(
+                        io.github.badbull643.economiesmod.client.MinecraftIds.itemToId(ironChain))) {
+                    throw new IllegalStateException("iron chain didn't go by its first name");
+                }
+                if (io.github.badbull643.economiesmod.client.MinecraftIds.idToItem("minecraft:chain") != ironChain) {
+                    throw new IllegalStateException("chain didn't come back as iron chain");
+                }
+                UUID other = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+                state.deposit(other, "minecraft:poplar_log", 30);
+                state.deposit(other, "minecraft:chain", 10);
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        960, 4, "minecraft:poplar_log", 30, false, other));
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        961, 2, "minecraft:chain", 10, false, other));
+            });
+            openTab(context, BROWSE);
+            context.runOnClient(client -> {
+                try {
+                    java.lang.reflect.Method rowsOf = MarketScreen.class.getDeclaredMethod("browseRows");
+                    rowsOf.setAccessible(true);
+                    java.util.List<?> rows = (java.util.List<?>) rowsOf.invoke(client.currentScreen);
+                    boolean poplar = false, chain = false;
+                    for (Object r : rows) {
+                        String id = (String) r.getClass().getField("itemId").get(r);
+                        if (id.equals("minecraft:poplar_log")) poplar = true;
+                        if (id.equals("minecraft:chain")) chain = true;
+                    }
+                    if (poplar) throw new IllegalStateException("Browse shows a 26.3-only item on 1.21.11");
+                    if (!chain) throw new IllegalStateException("Browse lost the chains");
+                } catch (ReflectiveOperationException e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+            context.takeScreenshot("14-shared-browse");
         }
     }
 

@@ -1,6 +1,7 @@
 package io.github.badbull643.economiesmod.client;
 
 import net.minecraft.text.Text;
+import io.github.badbull643.economiesmod.core.AwaySummary;
 import io.github.badbull643.economiesmod.core.Fill;
 import io.github.badbull643.economiesmod.core.MarketState;
 import io.github.badbull643.economiesmod.core.Settings;
@@ -30,6 +31,8 @@ public final class FillNotifier {
 
     private long windowStarted = System.currentTimeMillis();
     private int sentThisWindow;
+
+    private AwaySummary pendingAway;
 
     private int batchedFills;
     private long batchedNet;
@@ -199,6 +202,7 @@ public final class FillNotifier {
 
     /** Flushes any batched fills once their window closes. Call from the client tick. */
     public void tick() {
+        flushAway();
         if (batchedFills == 0) return;
         if (System.currentTimeMillis() - windowStarted < WINDOW_MS) return;
 
@@ -216,6 +220,51 @@ public final class FillNotifier {
         batchedFills = 0;
         batchedNet = 0;
         rollWindow();
+    }
+
+    /**
+     * What your orders did while you were offline, said once after a reconnect catches up.
+     *
+     * Kept until there is a player to tell. A reconnect can finish while the world is still
+     * loading, and send() drops anything that arrives before the player exists.
+     */
+    public void onAway(AwaySummary away) {
+        if (away != null && !away.isEmpty()) pendingAway = away;
+        flushAway();
+    }
+
+    private void flushAway() {
+        AwaySummary away = pendingAway;
+        if (away == null) return;
+        Settings settings = MarketStateHolder.settings();
+        if (settings == null || MinecraftClient.getInstance().player == null) return;
+        pendingAway = null;
+        if (!settings.notifyChat() && !settings.notifyActionBar()) return;
+
+        // The biggest few by value; the rest are a count, since History has them all.
+        List<AwaySummary.ItemTotal> totals = away.totals();
+        MutableText chat = prefix()
+                .append(Text.literal("While you were away: ").formatted(Formatting.AQUA));
+        int shown = 0;
+        for (AwaySummary.ItemTotal t : totals) {
+            if (shown == 3) break;
+            if (shown > 0) chat.append(Text.literal(", ").formatted(Formatting.DARK_GRAY));
+            chat.append(Text.literal(t.bought ? "bought " : "sold ").formatted(Formatting.GRAY))
+                    .append(Text.literal(t.quantity() + " " + name(t.itemId)).formatted(Formatting.WHITE));
+            shown++;
+        }
+        if (totals.size() > shown) {
+            chat.append(Text.literal(" and " + (totals.size() - shown) + " more").formatted(Formatting.GRAY));
+        }
+        chat.append(Text.literal(" · ").formatted(Formatting.DARK_GRAY))
+                .append(credits(away.net()))
+                .append(Text.literal(" · see History").formatted(Formatting.DARK_GRAY));
+
+        MutableText bar = Text.literal("While you were away: " + away.fills()
+                        + (away.fills() == 1 ? " trade " : " trades ")).formatted(Formatting.GRAY)
+                .append(credits(away.net()));
+
+        send(settings, chat, bar);
     }
 
     private void rollWindow() {

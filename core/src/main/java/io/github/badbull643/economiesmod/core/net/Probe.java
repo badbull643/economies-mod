@@ -71,6 +71,8 @@ public class Probe {
                 // always signed. A host on another version signs one more field, which an
                 // older client cannot reproduce — so it cannot verify the reply and never
                 // lists the host, which is the right outcome for a host it could not join.
-                + (r.gameVersion == null ? "" : "|" + r.gameVersion);
+                + (r.gameVersion == null ? "" : "|" + r.gameVersion)
+                // The same again for a market shared across versions.
+                + (r.gameVersions == null ? "" : "|" + String.join(",", r.gameVersions));
     }
 }

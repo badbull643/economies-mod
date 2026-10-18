@@ -131,6 +131,10 @@ public class EconomiesmodClient implements ClientModInitializer {
             settlePendingOps(mc);
         });
 
+        // What your orders did while you were offline: counted during a reconnect's
+        // catch-up, and said on the client thread once there is a player to say it to.
+        MarketStateHolder.setOnAway(away -> MinecraftClient.getInstance().execute(() -> FILLS.onAway(away)));
+
         MarketStateHolder.setOnApplied(applied -> {
             // Replayed history must not hand over anything. Joining a market syncs its
             // whole log, which includes every withdrawal you ever made in it — acting

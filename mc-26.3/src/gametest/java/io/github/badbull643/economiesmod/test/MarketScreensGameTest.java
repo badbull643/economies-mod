@@ -257,6 +257,48 @@ public class MarketScreensGameTest implements FabricClientGameTest {
             }
             context.runOnClient(client -> client.gui.hud.getChat().scrollChat(0));
             context.takeScreenshot("07-commands");
+
+            // A market shared across versions, seen from the newest one: chains come back
+            // as iron chains, and poplar logs, which only 26.3 has, are listed here.
+            context.runOnClient(client -> {
+                net.minecraft.world.item.Item ironChain =
+                        io.github.badbull643.economiesmod.client.MinecraftIds.idToItem("minecraft:iron_chain");
+                io.github.badbull643.economiesmod.core.MarketState state = MarketStateHolder.get();
+                MarketStateHolder.settings().markShared(state.marketId());
+                if (!"minecraft:chain".equals(
+                        io.github.badbull643.economiesmod.client.MinecraftIds.itemToId(ironChain))) {
+                    throw new IllegalStateException("iron chain didn't go by its first name");
+                }
+                if (io.github.badbull643.economiesmod.client.MinecraftIds.idToItem("minecraft:chain") != ironChain) {
+                    throw new IllegalStateException("chain didn't come back as iron chain");
+                }
+                UUID other = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+                state.deposit(other, "minecraft:poplar_log", 30);
+                state.deposit(other, "minecraft:chain", 10);
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        960, 4, "minecraft:poplar_log", 30, false, other));
+                state.submitOrder(new io.github.badbull643.economiesmod.core.Order(
+                        961, 2, "minecraft:chain", 10, false, other));
+            });
+            openTab(context, BROWSE);
+            context.runOnClient(client -> {
+                try {
+                    java.lang.reflect.Method rowsOf = MarketScreen.class.getDeclaredMethod("browseRows");
+                    rowsOf.setAccessible(true);
+                    java.util.List<?> rows = (java.util.List<?>) rowsOf.invoke(client.gui.screen());
+                    boolean poplar = false, chain = false;
+                    for (Object r : rows) {
+                        String id = (String) r.getClass().getField("itemId").get(r);
+                        if (id.equals("minecraft:poplar_log")) poplar = true;
+                        if (id.equals("minecraft:chain")) chain = true;
+                    }
+                    if (!poplar) throw new IllegalStateException("Browse hides poplar logs on 26.3");
+                    if (!chain) throw new IllegalStateException("Browse lost the chains");
+                } catch (ReflectiveOperationException e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+            context.takeScreenshot("14-shared-browse");
         }
     }
 

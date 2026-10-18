@@ -25,6 +25,13 @@ public class PeerPoll {
          * to join — and a host that says nothing is a 1.16.5 host, as it always has been.
          */
         public boolean servesVersion(String gameVersion) {
+            if (reply.gameVersions != null && !reply.gameVersions.isEmpty()) {
+                // A market shared across versions takes everyone on its list.
+                for (String v : reply.gameVersions) {
+                    if (GameVersions.same(v, gameVersion)) return true;
+                }
+                return false;
+            }
             return GameVersions.same(reply.gameVersion, gameVersion);
         }
     }

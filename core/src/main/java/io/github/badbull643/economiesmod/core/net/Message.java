@@ -24,6 +24,13 @@ public abstract class Message {
          * from this before it sends a word of history.
          */
         public String gameVersion;
+        /**
+         * True from a client that can join a market shared across Minecraft versions: one
+         * that names items by their first name and hides what its version lacks. Absent from
+         * every client older than that, which is how a shared market tells them apart and
+         * asks them to update rather than letting them in to trade under the wrong names.
+         */
+        public Boolean crossVersion;
         public String marketId;      // null means "no history yet" — free to adopt any market
         public String marketName;    // so a refusal can name both markets, not just their UUIDs
         /**
@@ -89,6 +96,13 @@ public abstract class Message {
          * lets a client on any other version turn it away.
          */
         public String gameVersion;
+        /**
+         * Every version this host's market is shared by, or null for a market of one
+         * version. When present, gameVersion above is the joining client's own version, so
+         * a check written before shared markets existed still passes for a client the host
+         * has already let in.
+         */
+        public List<String> gameVersions;
         /**
          * Whether this host is a dedicated server rather than somebody's game.
          *
@@ -319,6 +333,12 @@ public abstract class Message {
          * was and an older client still verifies it — see Probe.queryPayload.
          */
         public String gameVersion;
+        /**
+         * Every version a shared market takes, or null for a market of one version. Signed
+         * like gameVersion, and only when present: a client too old to join a shared market
+         * cannot reproduce the payload, so it never lists one, which is right.
+         */
+        public List<String> gameVersions;
         public QueryReply() { type = "QueryReply"; }
     }
 

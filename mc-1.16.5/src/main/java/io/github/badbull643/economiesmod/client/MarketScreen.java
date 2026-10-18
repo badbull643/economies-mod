@@ -3562,8 +3562,21 @@ public class MarketScreen extends Screen {
     private List<MarketView.ItemRow> browseRows() {
         MarketState market = MarketStateHolder.get();
         if (market == null) return Collections.emptyList();
-        List<MarketView.ItemRow> rows = cached("browse",
-                () -> MarketView.browse(market, myId(), null, System.currentTimeMillis()));
+        List<MarketView.ItemRow> rows = cached("browse", () -> {
+            List<MarketView.ItemRow> all = MarketView.browse(market, myId(), null, System.currentTimeMillis());
+            if (!MarketStateHolder.sharedMarket()) return all;
+            // A market shared across versions: what this game has, and anything you hold
+            // anyway (deposited from another version), which you can still sell from here.
+            UUID me = myId();
+            List<MarketView.ItemRow> here = new ArrayList<>();
+            for (MarketView.ItemRow r : all) {
+                if (ItemVersions.availableIn(r.itemId, GameVersion.current())
+                        || (me != null && market.itemBalances().getBalance(me, r.itemId) > 0)) {
+                    here.add(r);
+                }
+            }
+            return here;
+        });
         String q = searchText();
         if (q.isEmpty()) return rows;
         List<MarketView.ItemRow> out = new ArrayList<>();

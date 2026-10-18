@@ -508,6 +508,12 @@ public class MarketStateHolder {
     /** Acknowledged: it describes something already done, so it is shown only once. */
     public static void clearRecoveryNote() { recoveryNote = ""; }
 
+    // Told once a reconnect has caught up, with what this player's orders did while the
+    // copy was behind. See AwaySummary.
+    private static Consumer<AwaySummary> onAway = a -> {};
+
+    public static void setOnAway(Consumer<AwaySummary> handler) { onAway = handler; }
+
     public static void setOnApplied(Consumer<AppliedEvent> handler) {
         onApplied = handler;
         if (client != null) client.setOnApplied(APPLIED);
@@ -604,6 +610,19 @@ public class MarketStateHolder {
      * SERVER_STARTED has run, and a missing settings file is not worth crashing over.
      */
     public static Settings settings() { return settings; }
+
+    /**
+     * Whether the active market is shared across Minecraft versions: said so by the host
+     * we're connected to, or seen so on this machine before, whoever hosts it now. Items
+     * are then named by their first name, and Browse shows only what this version has.
+     * See ItemVersions.
+     */
+    public static boolean sharedMarket() {
+        MarketClient c = client;
+        if (c != null && c.crossVersion()) return true;
+        MarketState s = get();
+        return settings != null && s != null && settings.shared(s.marketId());
+    }
 
 
     // ─────────── LOCAL mode ───────────
@@ -845,7 +864,16 @@ public class MarketStateHolder {
             // this is what they compare against.
             c.setGameVersion(GameVersion.current());
             c.setOnProposalRefused(MarketStateHolder::noteRefusedProposal);
-            c.setOnApplied(APPLIED);
+            // Fills that happened while this copy was behind arrive in the catch-up below,
+            // replayed, and so are never announced one by one. They are counted here
+            // instead, from our old head on, and said once connect() has returned. A copy
+            // with no history has nothing to compare against, and no orders to have filled.
+            final long oldHead = log.lastSeq();
+            final AwaySummary away = oldHead > 0 ? new AwaySummary(userId, oldHead) : null;
+            c.setOnApplied(away == null ? APPLIED : a -> {
+                away.accept(a);
+                APPLIED.accept(a);
+            });
             // Describes the world we are actually in. Honest, which is why it catches
             // only people who are also being honest — see WorldAttestation.
             WorldAttestation described = WorldFacts.of(
@@ -857,9 +885,12 @@ public class MarketStateHolder {
             lastToldGameMode = described == null || described.gameMode == null
                     ? "" : described.gameMode;
             c.connect(host, port);
+            c.setOnApplied(APPLIED);
 
             client = c;
             localLog = log;
+            // Remembered, so this market keeps its first names whoever hosts it next.
+            if (c.crossVersion() && settings != null) settings.markShared(c.state().marketId());
             localState = null;
             mode = targetMode;
             lastRefusal = null;
@@ -884,6 +915,7 @@ public class MarketStateHolder {
 
             System.out.println("[economiesmod] connected to " + host + ":" + port
                     + " at seq " + c.lastSeq());
+            if (away != null && !away.isEmpty()) onAway.accept(away);
         } catch (MarketClient.Refused e) {
             lastRefusal = e;
             noteForkFromRefusal(log, e, host, port);

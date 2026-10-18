@@ -1,5 +1,6 @@
 package io.github.badbull643.economiesmod.client;
 
+import io.github.badbull643.economiesmod.core.ItemVersions;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
@@ -9,7 +10,10 @@ import java.util.UUID;
 
 public class MinecraftIds {
     public static String itemToId(Item item) {
-        return Registries.ITEM.getId(item).toString();   // "minecraft:iron_ingot"
+        String id = Registries.ITEM.getId(item).toString();   // "minecraft:iron_ingot"
+        // In a market shared across versions an item goes by its first name, so a
+        // renamed one is one item whoever trades it. See ItemVersions.
+        return MarketStateHolder.sharedMarket() ? ItemVersions.canonical(id) : id;
     }
 
     /**
@@ -24,6 +28,15 @@ public class MinecraftIds {
      * inventory, and again on every reopen, because the order stays in the log.
      */
     public static Item idToItem(String id) {
+        Item found = lookup(id);
+        if (found != Items.AIR || id == null) return found;
+        // A renamed item under its first name, as a shared market names it: look
+        // it up by what this version calls it.
+        String here = ItemVersions.nameIn(id, GameVersion.current());
+        return here == null || here.equals(id) ? found : lookup(here);
+    }
+
+    private static Item lookup(String id) {
         Identifier parsed = id == null ? null : Identifier.tryParse(id);
         return parsed == null ? Items.AIR : Registries.ITEM.get(parsed);
     }

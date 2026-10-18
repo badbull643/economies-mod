@@ -219,6 +219,15 @@ public class MarketClient {
     public boolean hostIsDedicated() { return hostDedicated; }
 
     /**
+     * Every Minecraft version the host's market is shared by, or null for a market of one
+     * version. Set from the handshake; a client in a shared market names items by their
+     * first name and hides what its own version doesn't have. See ItemVersions.
+     */
+    private volatile List<String> sharedVersions = null;
+    public List<String> sharedVersions() { return sharedVersions; }
+    public boolean crossVersion() { return sharedVersions != null && sharedVersions.size() > 1; }
+
+    /**
      * What to tell a host about the world we are trading from, or null to say nothing.
      *
      * Set from outside rather than read here: describing a Minecraft world means
@@ -304,6 +313,8 @@ public class MarketClient {
         hello.displayName = displayName;
         hello.protocolVersion = HostServer.PROTOCOL_VERSION;
         hello.gameVersion = io.github.badbull643.economiesmod.core.GameVersions.toWire(gameVersion);
+        // This client can join a market shared across versions. See Message.Hello.
+        hello.crossVersion = Boolean.TRUE;
         // From the state, for the same reason lastSeq is: the two have to come from one
         // source or they describe different moments. This used to read the log's genesis
         // event, which is the same answer whenever there is a log — and no answer at all
@@ -341,6 +352,16 @@ public class MarketClient {
         // from a host on another version should reach this replica at all.
         String hostVersion = io.github.badbull643.economiesmod.core.GameVersions
                 .normalize(sync.gameVersion);
+        // A shared market lists every version it takes; this client has to be one of them.
+        boolean shared = sync.gameVersions != null && sync.gameVersions.size() > 1;
+        if (shared) {
+            boolean listed = false;
+            for (String v : sync.gameVersions) {
+                if (io.github.badbull643.economiesmod.core.GameVersions.same(v, gameVersion)) listed = true;
+            }
+            hostVersion = listed ? gameVersion : String.join(", ", sync.gameVersions);
+        }
+        sharedVersions = shared ? new ArrayList<>(sync.gameVersions) : null;
         if (!hostVersion.equals(gameVersion)) {
             channel.close();
             throw new Refused(HostServer.Refusal.GAME_VERSION,

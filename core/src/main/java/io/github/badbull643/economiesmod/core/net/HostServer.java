@@ -122,6 +122,12 @@ public class HostServer {
         final String peerName;
         /** Who this connection belongs to, so a ban can find it and close it. */
         final UUID userId;
+        /**
+         * The Minecraft version this connection is on. Belongs to the connection, not the
+         * identity: one account can play several versions. What a shared market checks items
+         * against.
+         */
+        final String gameVersion;
         private final BlockingQueue<Message> outbound;
         private final Thread writer;
         private volatile boolean open = true;
@@ -138,10 +144,12 @@ public class HostServer {
         static final int SYNC_BACKLOG_MAX = 20_000;
 
         /** Starts holding broadcasts; nothing is written until goLive(). */
-        ClientLink(MessageChannel channel, int queueDepth, String peerName, UUID userId) {
+        ClientLink(MessageChannel channel, int queueDepth, String peerName, UUID userId,
+                   String gameVersion) {
             this.channel = channel;
             this.peerName = peerName;
             this.userId = userId;
+            this.gameVersion = gameVersion;
             this.outbound = new ArrayBlockingQueue<>(queueDepth);
             this.writer = new Thread(this::drain, "market-writer");
             this.writer.setDaemon(true);
@@ -782,6 +790,24 @@ public class HostServer {
 
     //print da stack trace for the tests
 
+    /**
+     * Whether a connection failed because what it sent isn't an EconomiesMod message at all:
+     * not JSON, JSON that isn't a message, a message type nobody sends, or one endless line.
+     * The reader's own failures, not anything further in.
+     */
+    static boolean notOurProtocol(Exception e) {
+        if (e instanceof com.google.gson.JsonParseException) return true;
+        if (e instanceof IllegalStateException || e instanceof NullPointerException
+                || e instanceof UnsupportedOperationException || e instanceof ClassCastException) {
+            for (StackTraceElement frame : e.getStackTrace()) {
+                if (frame.getClassName().equals(MessageChannel.class.getName())) return true;
+            }
+            return false;
+        }
+        return e instanceof IOException && e.getMessage() != null
+                && e.getMessage().startsWith("message exceeded");
+    }
+
     private void handleClient(Socket socket) {
         MessageChannel channel = null;
         // Only set once this connection becomes a live client. Probes and pre-handshake
@@ -825,6 +851,7 @@ public class HostServer {
                 // bystander could rewrite.
                 reply.dedicated = config.dedicated;
                 reply.gameVersion = GameVersions.toWire(config.gameVersion);
+                if (config.crossVersion()) reply.gameVersions = config.acceptedVersions();
                 try {
                     reply.signature = hostKeys.sign(Probe.queryPayload(reply, q.nonce));
                 } catch (GeneralSecurityException e) {
@@ -956,7 +983,14 @@ public class HostServer {
                 }
             }
         } catch (Exception e) {
-            if (running && !(e instanceof SocketException)) {
+            if (running && link == null && notOurProtocol(e)) {
+                // Something that isn't EconomiesMod at all, refused on its first line: a
+                // web or port scanner, which every open port on the internet gets within
+                // hours. One line, because a stack trace for it reads like a crash.
+                System.out.println("[host] dropped a connection from "
+                        + (channel != null ? channel.remoteAddress() : "somewhere")
+                        + " that isn't EconomiesMod (port scanners do this)");
+            } else if (running && !(e instanceof SocketException)) {
                 System.out.println("[host] client error: " + e);
                 //remove this at somepoint since redundant not yet though
                 e.printStackTrace();
@@ -1026,6 +1060,18 @@ public class HostServer {
                     + GameVersions.normalize(hello.gameVersion) + ", this host serves "
                     + gameVersion());
             sendError(channel, Refusal.GAME_VERSION, wrongVersion);
+            return null;
+        }
+
+        // A client from before shared markets would trade renamed items under its own
+        // version's name and show items its game doesn't have. Its version is right; the
+        // mod is too old. Same refusal code, so an old client shows the words as they are.
+        if (config.crossVersion() && !Boolean.TRUE.equals(hello.crossVersion)) {
+            System.out.println("[host] refused " + hello.displayName + " — their EconomiesMod"
+                    + " predates markets shared across versions");
+            sendError(channel, Refusal.GAME_VERSION, "this market is shared by Minecraft "
+                    + servedVersions() + " players, and joining it needs a newer EconomiesMod"
+                    + " — update the mod to join");
             return null;
         }
 
@@ -1233,14 +1279,14 @@ public class HostServer {
         // anything broadcast meanwhile is held on the link and sent once the history is
         // done, and an event that turns up in both is one the client already skips.
         final ClientLink link = new ClientLink(channel, config.outboundQueueDepth, hello.displayName,
-                claimedUser);
+                claimedUser, GameVersions.normalize(hello.gameVersion));
         clients.add(link);
         try {
             log.forEachRawLine(hello.lastSeq + 1, line -> {
                 int lineBytes = line.getBytes(StandardCharsets.UTF_8).length;
                 if (!current.isEmpty() && bytes[0] + lineBytes > MessageChannel.CHUNK_BUDGET_BYTES) {
                     sendSyncChunk(channel, current, false, chunksSent[0] == 0,
-                            ourMarket, shareable);
+                            ourMarket, shareable, link.gameVersion);
                     chunksSent[0]++;
                     current.clear();
                     bytes[0] = 0;
@@ -1252,7 +1298,8 @@ public class HostServer {
             });
             // Always one final frame, even for a client that is already up to date: the
             // handshake is not finished until something says so.
-            sendSyncChunk(channel, current, true, chunksSent[0] == 0, ourMarket, shareable);
+            sendSyncChunk(channel, current, true, chunksSent[0] == 0, ourMarket, shareable,
+                    link.gameVersion);
             chunksSent[0]++;
         } catch (IOException | RuntimeException e) {
             clients.remove(link);
@@ -1275,7 +1322,8 @@ public class HostServer {
      */
     private void sendSyncChunk(MessageChannel channel, List<String> lines, boolean complete,
                                boolean first, String ourMarket,
-                               List<PeerCache.Peer> shareable) throws IOException {
+                               List<PeerCache.Peer> shareable,
+                               String clientVersion) throws IOException {
         Message.Sync sync = new Message.Sync();
         sync.packLines(lines);
         sync.complete = complete;
@@ -1288,6 +1336,13 @@ public class HostServer {
             sync.marketName = state.marketName();
             sync.dedicated = config.dedicated;
             sync.gameVersion = GameVersions.toWire(config.gameVersion);
+            if (config.crossVersion()) {
+                // The client's own version, which this host has already accepted, so a
+                // check that predates shared markets still passes; the list is what a
+                // client that knows about them reads.
+                sync.gameVersion = GameVersions.toWire(clientVersion);
+                sync.gameVersions = config.acceptedVersions();
+            }
             sync.knownPeers = shareable;
         }
         channel.send(sync);
@@ -1380,6 +1435,15 @@ public class HostServer {
             // First of everything, ahead even of "does this host take migrations": a
             // migration moves a whole balance of credits and items in one step, and nothing
             // after this checks what version the items came from.
+            // A migration brings a whole balance across under the names of the market it
+            // left, which knows nothing about first names or which versions have what.
+            // Not supported into a shared market yet, rather than half-supported.
+            if (config.crossVersion()) {
+                reply.reason = "this market is shared by Minecraft " + servedVersions()
+                        + " players, and doesn't take migrations from other markets";
+                channel.send(reply);
+                return;
+            }
             String wrongVersion = versionRefusal(first.gameVersion);
             if (wrongVersion != null) {
                 System.out.println("[host] refused migration from " + first.userId
@@ -1972,6 +2036,18 @@ public class HostServer {
             }
         }
 
+        // A shared market: does this player's version have this item? A table lookup, beside
+        // a signature check and a disk write; matching never asks.
+        if (config.crossVersion() && p.from != null) {
+            String wrongItem = crossVersionRefusal(p.from.gameVersion, event);
+            if (wrongItem != null) {
+                System.out.println("[host] refused " + msg.eventType + " from a "
+                        + p.from.gameVersion + " player: " + wrongItem);
+                reject(p.from, msg.clientEventId, wrongItem);
+                return;
+            }
+        }
+
         // After validate, so an event refused for some other reason costs nobody any of
         // their allowance, and before append, because this is the last point at which
         // declining is free.
@@ -2362,12 +2438,80 @@ public class HostServer {
      * rule gets argued with.
      */
     private String versionRefusal(String theirs) {
-        String mine = gameVersion();
         String them = GameVersions.normalize(theirs);
-        if (mine.equals(them)) return null;
+        if (config.acceptedVersions().contains(them)) return null;
+        if (config.crossVersion()) {
+            return "this market is shared by Minecraft " + servedVersions() + " players, and you"
+                    + " are on " + them + " — join a host on " + them + ", or run your own";
+        }
+        String mine = gameVersion();
         return "this host serves Minecraft " + mine + " players, and you are on " + them
                 + ". A market belongs to one Minecraft version and does not cross to another"
                 + " — join a host on " + them + ", or run your own";
+    }
+
+    /** The versions this host takes, for saying out loud: "1.21.11", or "1.21.11 and 26.3". */
+    public String servedVersions() {
+        List<String> all = config.acceptedVersions();
+        if (all.size() == 1) return all.get(0);
+        return String.join(", ", all.subList(0, all.size() - 1)) + " and " + all.get(all.size() - 1);
+    }
+
+    /**
+     * Why a player in a shared market can't do this with this item, or null if they can.
+     *
+     * The per-player half of a shared market: whether the item exists in the version this
+     * player is on right now, which belongs to the connection, not the identity — one
+     * account can play 1.16.5 today and 26.3 tomorrow. A host rule, like the deposit caps,
+     * because an event doesn't say what version its author was on.
+     *
+     * Deposits, withdrawals and buys need the item in the player's own version: it comes out
+     * of their game, goes into it, or would be owned with no way of taking it out. Selling
+     * only needs the item to be one the market knows, so someone holding poplar logs from a
+     * 26.3 session can still sell them from 1.16.5; the matching engine checks they hold them.
+     * Cancelling is always allowed.
+     */
+    private String crossVersionRefusal(String playerVersion, Event event) {
+        String itemId = null;
+        boolean needsOwnVersion = true;
+        if (event instanceof Event.Deposit) {
+            itemId = ((Event.Deposit) event).itemId;
+        } else if (event instanceof Event.Withdraw) {
+            itemId = ((Event.Withdraw) event).itemId;
+        } else if (event instanceof Event.DepositAndList) {
+            itemId = ((Event.DepositAndList) event).itemId;
+        } else if (event instanceof Event.PlaceOrder) {
+            Event.PlaceOrder o = (Event.PlaceOrder) event;
+            itemId = o.itemId;
+            needsOwnVersion = o.isBid;
+        } else {
+            return null;
+        }
+
+        if (!ItemVersions.isKnownItem(itemId)) {
+            String first = ItemVersions.canonical(itemId);
+            if (first != null && !first.equals(itemId)) {
+                // A later name for a renamed item: a client that predates shared markets.
+                return itemId + " is called " + first + " in this market, which is shared across"
+                        + " Minecraft versions — update EconomiesMod to trade it";
+            }
+            return itemId + " isn't an item every version of this market can know about, so it"
+                    + " can't be traded here";
+        }
+        boolean someoneHasIt = false;
+        for (String v : config.acceptedVersions()) {
+            if (ItemVersions.availableIn(itemId, v)) { someoneHasIt = true; break; }
+        }
+        if (!someoneHasIt) {
+            return itemId + " isn't in any Minecraft version this market is shared by ("
+                    + servedVersions() + ")";
+        }
+        if (needsOwnVersion && !ItemVersions.availableIn(itemId, playerVersion)) {
+            return itemId + " isn't in Minecraft " + playerVersion + " (it arrived in "
+                    + ItemVersions.firstVersion(itemId) + "), so you can't deposit, buy or"
+                    + " withdraw it from this version";
+        }
+        return null;
     }
 
     private void sendError(MessageChannel channel, String reason) {
@@ -2591,7 +2735,13 @@ public class HostServer {
             System.out.println("[host] no gameVersion set — this market predates the setting,"
                     + " which makes it a Minecraft " + GameVersions.LEGACY + " market");
         }
-        System.out.println("[host] serving Minecraft " + cfg.gameVersion() + " players only");
+        if (cfg.crossVersion()) {
+            System.out.println("[host] a market shared by Minecraft "
+                    + String.join(", ", cfg.acceptedVersions()) + " players: each trades the"
+                    + " items their own version has");
+        } else {
+            System.out.println("[host] serving Minecraft " + cfg.gameVersion() + " players only");
+        }
 
         if (log.lastSeq() == 0) {
             try {

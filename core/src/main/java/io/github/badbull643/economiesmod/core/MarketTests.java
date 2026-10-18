@@ -155,6 +155,52 @@ public class MarketTests {
             check("and his goods", replayed.itemBalances().getBalance(BOB, IRON), 50);
         }
 
+        section("AW1: a reconnect adds up what your resting orders did while you were away");
+        {
+            Path file = scratch("test-log-aw1.jsonl");
+            Files.deleteIfExists(file);
+            EventLog log = new EventLog(file);
+            MarketState live = new MarketState();
+            seedMarket(log, live);
+            register(log, live, BOB);
+            register(log, live, CAROL);
+            grant(log, live, BOB, 1000);
+            grant(log, live, CAROL, 1000);
+            apply(log, live, deposit(BOB, IRON, 50));
+            apply(log, live, placeOrder(BOB, IRON, 20, 30, false));     // ask 30 iron at 20
+            apply(log, live, placeOrder(BOB, DIAMOND, 10, 5, true));    // bid 5 diamonds at 10
+            long bobLeftAt = log.lastSeq();                              // and logs off
+
+            apply(log, live, placeOrder(CAROL, IRON, 20, 12, true));    // takes 12 of his iron
+            apply(log, live, placeOrder(CAROL, IRON, 20, 8, true));     // and 8 more
+            apply(log, live, deposit(CAROL, DIAMOND, 5));
+            apply(log, live, placeOrder(CAROL, DIAMOND, 10, 5, false)); // sells him 5 diamonds
+
+            // His game reconnecting: the whole log replayed, none of it live.
+            AwaySummary away = new AwaySummary(BOB, bobLeftAt);
+            AwaySummary caughtUp = new AwaySummary(BOB, log.lastSeq());
+            AwaySummary liveOnly = new AwaySummary(BOB, bobLeftAt);
+            MarketState replica = new MarketState();
+            for (SequencedEvent se : log.readFrom(1)) {
+                EventApplier.Result r = EventApplier.apply(replica, se);
+                away.accept(new AppliedEvent(se, r, false));
+                caughtUp.accept(new AppliedEvent(se, r, false));
+                liveOnly.accept(new AppliedEvent(se, r, true));
+            }
+
+            check("three fills of his while he was away", away.fills(), 3);
+            check("net: 400 in for iron, 50 out for diamonds", away.net(), 350);
+            List<AwaySummary.ItemTotal> totals = away.totals();
+            check("two lines, one per item and direction", totals.size(), 2);
+            check("the bigger one first: 20 iron sold", totals.get(0).quantity(), 20);
+            check("which was a sale", totals.get(0).bought ? 0 : 1, 1);
+            check("for 400", totals.get(0).credits(), 400);
+            check("then 5 diamonds bought", totals.get(1).quantity(), 5);
+            check("for 50", totals.get(1).credits(), 50);
+            check("nothing to report for a copy that was already up to date", caughtUp.isEmpty() ? 1 : 0, 1);
+            check("live events are announced as they happen, not counted here", liveOnly.isEmpty() ? 1 : 0, 1);
+        }
+
         section("OC2: nobody else may, and a cancel that does nothing is refused");
         {
             Path file = scratch("test-log-oc2.jsonl");

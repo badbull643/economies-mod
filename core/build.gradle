@@ -121,6 +121,8 @@ def suites = [
                             'Checks the vendored Ed25519 against RFC 8032 (and the JDK, on Java 15+) and RSA beside it.'],
         gameVersionTest  : ['io.github.badbull643.economiesmod.core.net.GameVersionTest',
                             'Checks a market refuses players on another Minecraft version at every door.'],
+        crossVersionTest : ['io.github.badbull643.economiesmod.core.net.CrossVersionTest',
+                            'Checks a market shared across Minecraft versions: who joins, and what each may trade.'],
 ]
 suites.each { taskName, spec ->
     tasks.register(taskName, JavaExec) {
