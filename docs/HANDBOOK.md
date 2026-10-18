@@ -171,6 +171,11 @@ for. The action bar can do the same, more briefly. Both are settings.
 
 Filling somebody else's order is reported too.
 
+**While you were offline.** When you reconnect and some of your orders traded while you were
+away, one line in chat adds it all up: *"While you were away: sold 20 Cobblestone, bought 2
+Diamond · +40cr · see History"*. The biggest three come first and the rest are counted. It
+follows the same notification settings, and History has every trade in full.
+
 ---
 
 ## 5. What it costs to trade
@@ -541,6 +546,35 @@ cheats has their orders cancelled automatically too.
 while burned stays small, money is coming in faster than the fees take it out, and prices will
 creep up. Raising the trading fee or the listing fee slows that down.
 
+#### Sharing one market across Minecraft versions
+
+A dedicated server can let several Minecraft versions into the same market. List the extra
+versions next to `gameVersion` in the config and restart:
+
+```jsonc
+"gameVersion": "1.21.11",
+"gameVersions": ["1.16.5", "1.20.1", "1.21.1", "26.3"],
+```
+
+Everyone trades in the same order books, so a 1.16.5 seller and a 26.3 buyer meet on oak logs
+like anyone else. Each player can only use the items their own version has:
+
+- **Depositing, buying and withdrawing** need the item in your version. Copper can't be bought
+  from 1.16.5, because it isn't in 1.16.5.
+- **Selling** only needs you to hold it. Poplar logs you deposited on 26.3 can still be sold
+  from 1.16.5, but only withdrawn on a version that has them.
+- **The market screen only lists items your version has**, plus anything you already hold.
+- **Renamed items are still one item.** The market uses the item's first name (`chain`), and
+  each version shows its own: 26.3 players see Iron Chain.
+- **Other mods' items can't be traded** in a shared market, since there's no way to know which
+  versions have them.
+
+Joining a shared market needs **EconomiesMod 0.5.0 or newer**. Older versions are told to
+update. Migrating a balance in from another market isn't supported in a shared market yet.
+
+The versions that can share are 1.16.5, 1.20.1, 1.21.1, 1.21.11 and 26.3. The server refuses
+to start if the list names any other.
+
 ## Extra Notes
 
 #### Two differences from a friend hosting
@@ -674,6 +708,18 @@ A dedicated server needs `--game-version` (or `gameVersion` in its config) when 
 market, and refuses to start without one rather than guess. An existing market with no setting
 is treated as a Minecraft 1.16.5 market, which is what every server before the setting was
 serving.
+
+Since 0.5.0 a dedicated server can also share one market across several versions. In that case
+the message lists every version it takes. See
+[Sharing one market across Minecraft versions](#sharing-one-market-across-minecraft-versions).
+
+In a shared market you may also see:
+
+| Message | What it means |
+| --- | --- |
+| `joining it needs a newer EconomiesMod` | The market is shared across versions, and your mod is older than 0.5.0. Update it |
+| `… isn't in Minecraft X (it arrived in Y)` | That item doesn't exist in your version, so you can't deposit, buy or withdraw it from here |
+| `… is called minecraft:chain in this market` | A renamed item sent under its newer name, which only an outdated mod does. Update it |
 
 ### Migration, or leaving with what you hold
 
