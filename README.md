@@ -52,9 +52,16 @@ would rather one machine stay up. See
 
 ## Install
 
-1. [Fabric Loader](https://fabricmc.net/use/) for Minecraft 1.16.5
+1. [Fabric Loader](https://fabricmc.net/use/) for your Minecraft version (1.16.5, 1.20.1, 1.21.1, 1.21.11 or 26.3)
 2. [Fabric API](https://modrinth.com/mod/fabric-api)
-3. Drop `economiesmod-0.1.1.jar` into `.minecraft/mods`
+3. Drop the jar for your version into `.minecraft/mods`: `economiesmod-0.5.0+1.21.11.jar` for
+   1.21.11 and so on, or plain `economiesmod-0.5.0.jar` for 1.16.5
+
+**Playing from more than one version or launcher profile?** Your market identity is the file
+`config/economiesmod-identity-<YourName>.key`. The official launcher shares it between versions,
+but the CurseForge app, Prism, the Modrinth app and MultiMC give each profile its own. Copy that
+file into each profile's `config` folder, or the market won't recognise you there. The
+[handbook](docs/HANDBOOK.md#sharing-one-market-across-minecraft-versions) has the details.
 
 ---
 
@@ -78,7 +85,7 @@ without opening anything; enter /trade to get the full list of commands.
 ## Current limitations
 
 - Singleplayer and LAN only, as above.
-- Minecraft 1.16.5, 1.21.1, 1.21.11 and Fabric. No other versions or loaders yet.
+- Minecraft 1.16.5, 1.20.1, 1.21.1, 1.21.11, 26.3 and Fabric. No other versions or loaders yet.
 - A forked market can be recovered from but never merged. If two copies of one market are
   both traded on while apart, the mod finds where they parted, hands back the items you
   deposited since, and lists the orders you'd need to re-place. One branch still has to be
@@ -111,6 +118,11 @@ each other: every host, whether a player hosting from their game or a dedicated 
 away anyone on another version, and the client refuses a host on another version too. Hosts on
 other versions are left off the host list. A dedicated server is told its version with
 `--game-version` (for example `1.21.11`) when it creates its market. (Will try to work on seeing if the cross-version trading thing actually works and makes sense)
+
+Since 0.5.0 a dedicated server can share one market across versions: list the extra versions in
+`gameVersions` in its config. Everyone trades in the same order books, and each player can only
+deposit, buy or withdraw items their own version has. A 1.16.5 player can't buy copper. See
+[the handbook](docs/HANDBOOK.md#sharing-one-market-across-minecraft-versions).
 
 ---
 

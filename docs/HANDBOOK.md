@@ -575,6 +575,21 @@ update. Migrating a balance in from another market isn't supported in a shared m
 The versions that can share are 1.16.5, 1.20.1, 1.21.1, 1.21.11 and 26.3. The server refuses
 to start if the list names any other.
 
+**Playing from more than one version? Use the same identity file in each.** Your orders and
+balance belong to you as a player, so they follow you from world to world and version to
+version. The market recognises you by a key file in your game's `config` folder:
+`config/economiesmod-identity-<YourName>.key`.
+
+- **The official Minecraft launcher** uses one folder for every version, so this just works.
+- **The CurseForge app, Prism, the Modrinth app and MultiMC** give each version its own folder,
+  so each gets its own key. Joining from the second one is refused with *"your signing key
+  doesn't match the one this market has for you"*. To fix it, copy the `.key` file from the
+  first version's `config` folder into the second one's, replacing the one there, and connect
+  again. In the CurseForge app, right-click a profile and choose **Open Folder** to find
+  `config`.
+
+Keep that file safe and private. Anyone who has it can trade as you.
+
 ## Extra Notes
 
 #### Two differences from a friend hosting
@@ -720,6 +735,7 @@ In a shared market you may also see:
 | `joining it needs a newer EconomiesMod` | The market is shared across versions, and your mod is older than 0.5.0. Update it |
 | `… isn't in Minecraft X (it arrived in Y)` | That item doesn't exist in your version, so you can't deposit, buy or withdraw it from here |
 | `… is called minecraft:chain in this market` | A renamed item sent under its newer name, which only an outdated mod does. Update it |
+| `your signing key doesn't match the one this market has for you` | You're joining from a different game folder than before, e.g. another version's profile in the CurseForge app. Copy `config/economiesmod-identity-<YourName>.key` from the folder you first joined with into this one's `config` folder. See [Sharing one market across Minecraft versions](#sharing-one-market-across-minecraft-versions) |
 
 ### Migration, or leaving with what you hold
 
