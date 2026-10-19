@@ -32,7 +32,7 @@ and the market carries on.
 
 ---
 
-## Before you install: what it does and doesn't cover
+## limitations
 
 Singleplayer and Open to LAN. A market lives beside a world on your own machine, so
 there's no market when you join a server somebody else runs. There is a warning for this in-game, 
