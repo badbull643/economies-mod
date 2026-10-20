@@ -55,25 +55,62 @@ public final class BotConsole {
             + "  a <bot> is its id, the start of its id, or a name like producer#2";
 
     public static void start(HostServer server) {
+        start(server, System.in, BotConsole::say);
+    }
+
+    /** How long a read has to have waited for its end of input to count as somebody's Ctrl+D. */
+    static final long PRESSED_MS = 200;
+
+    /**
+     * Reads commands until the input is gone for good.
+     *
+     * End of input used to end the console outright, which is right for a server started with
+     * nothing attached and wrong in a terminal. There it is Ctrl+D, and it gets pressed by
+     * accident by somebody reaching for Ctrl+B then D to leave the window: the console fell
+     * silent for the rest of the server's life while everything else carried on, which looked
+     * exactly like a hung server. A terminal keeps delivering input after Ctrl+D, so an end
+     * that arrived after waiting is answered and read past. Input that is really gone ends
+     * at once, every time — three of those in a row close the console as before.
+     */
+    static Thread start(HostServer server, java.io.InputStream input, Consumer<String> reply) {
         Thread t = new Thread(() -> {
-            try (BufferedReader in = new BufferedReader(
-                    new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+            int instantEnds = 0;
+            while (true) {
+                // A fresh reader after each end, so nothing it buffered can hold on to one.
+                BufferedReader in = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
                 String line;
-                while ((line = in.readLine()) != null) {
-                    line = line.trim();
-                    if (line.isEmpty()) continue;
-                    try {
-                        handle(server, line, BotConsole::say);
-                    } catch (Exception e) {
-                        say("that did not work: " + e.getMessage());
+                try {
+                    while (true) {
+                        long asked = System.currentTimeMillis();
+                        line = in.readLine();
+                        if (line == null) {
+                            if (System.currentTimeMillis() - asked >= PRESSED_MS) {
+                                instantEnds = 0;
+                                reply.accept("that was Ctrl+D, which would have closed this console —"
+                                        + " ignored. To leave the window and keep the server running:"
+                                        + " Ctrl+B, let go, then D.");
+                            } else if (++instantEnds >= 3) {
+                                return;   // the input is gone; the server carries on without it
+                            }
+                            break;
+                        }
+                        instantEnds = 0;
+                        line = line.trim();
+                        if (line.isEmpty()) continue;
+                        try {
+                            handle(server, line, reply);
+                        } catch (Exception e) {
+                            reply.accept("that did not work: " + e.getMessage());
+                        }
                     }
+                } catch (Exception e) {
+                    return;   // input went away; the server carries on without a console
                 }
-            } catch (Exception ignored) {
-                // Input went away. The server carries on without a console.
             }
         }, "bot-console");
         t.setDaemon(true);
         t.start();
+        return t;
     }
 
     private static void say(String s) {

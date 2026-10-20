@@ -344,6 +344,46 @@ public class BotRunnerTest {
         check("nonsense still gets the plain refusal",
                 HostServer.protocolRefusal("x").contains("mismatch"));
 
+        System.out.println("  [R12: Ctrl+D in the console is answered, not the end of it]");
+        {
+            // A terminal: "help", then Ctrl+D after a pause, then more typing. Then the input
+            // really goes away: ends with nothing waited for, over and over.
+            java.io.InputStream terminal = new java.io.InputStream() {
+                private final byte[][] script = {
+                        "help\n".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        null,   // Ctrl+D, after a pause
+                        "status\n".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                };
+                private int part = 0, pos = 0;
+                @Override public int read() throws java.io.IOException {
+                    byte[] b = new byte[1];
+                    int n = read(b, 0, 1);
+                    return n < 0 ? -1 : (b[0] & 0xff);
+                }
+                @Override public int read(byte[] buf, int off, int len) throws java.io.IOException {
+                    if (part >= script.length) return -1;            // gone for good
+                    if (script[part] == null) {
+                        part++;
+                        try { Thread.sleep(BotConsole.PRESSED_MS + 100); } catch (InterruptedException e) { return -1; }
+                        return -1;                                     // somebody pressed Ctrl+D
+                    }
+                    int n = Math.min(len, script[part].length - pos);
+                    System.arraycopy(script[part], pos, buf, off, n);
+                    pos += n;
+                    if (pos == script[part].length) { part++; pos = 0; }
+                    return n;
+                }
+            };
+            List<String> said = java.util.Collections.synchronizedList(new ArrayList<>());
+            Thread console = BotConsole.start(null, terminal, said::add);
+            console.join(5000);
+            String all = String.join("\n", said);
+            check("the command before it is answered", all.contains("server commands:"));
+            check("Ctrl+D is explained, not obeyed", all.contains("that was Ctrl+D"));
+            check("the command after it is answered too", all.contains("unknown command 'status'"));
+            check("and once the input is really gone, the console ends", !console.isAlive());
+        }
+
         System.out.println();
         System.out.println(failures == 0
                 ? "  all " + checksRun + " checks passed"
