@@ -126,18 +126,18 @@ only deposit, buy or withdraw items your own version has (so no buying copper on
 
 ---
 
-## What the public market stores
+## The public market 
 
-If you connect to the public market server it keeps a few things about you:
+The public market stores 2 things when you connect:
 
-- Your Minecraft name and account id, your trades and balance, and your public key (not your
+- Your Minecraft name and account ID, your trades and balance, and your public key (not your
   private one). These are the market itself, so they stay as long as the market does and
   everyone's copy of the market has them.
 - Your IP address and what your game says about your world (game mode, whether cheats are on,
-  hours played). The server needs these to run and to keep creative and cheated items out. They
+  hours played, etc so literally just world statistics). The server needs these to run and to keep creative and cheated items out. They
   only end up in the server logs, which get deleted after 30 days, plus the last IP you used.
 
-IPs never get sold or shared with anyone, other players included. If you want yours deleted
+too be clear, IPs never get sold or shared with anyone, other players included. If you want yours deleted
 sooner just [open an issue](https://github.com/badbull643/economies-mod/issues). Trades can't
 be deleted though, since every copy of the market has to match.
 
