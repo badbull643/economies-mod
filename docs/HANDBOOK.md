@@ -37,15 +37,14 @@ where every person has a personal copy of the market information and the person 
 
 ## Notes on the changing hosts setup 
 
-**Nobody is in charge of the numbers.** Every player's game keeps its own copy of
-everything that ever happened in the market and works out the balances itself. Whoever is
-hosting decides what order things happen in, and that's all they decide. They can't give
-themselves credits or delete a trade, because everyone else would compute a different
-answer and spot it immediately.
+Nobody is in charge of the numbers, every player's game keeps its own copy of everything that
+ever happened in the market and works out the balances itself. Whoever is hosting decides what
+order things happen in and that's all they decide, they can't give themselves credits or delete
+a trade because everyone else would work out a different answer and spot it straight away.
 
-**It survives the host logging off.** The history is a file. Anyone who has it can host
-next, and the market carries on. There's also a dedicated server for a group that would
-rather one machine stayed up.
+It also survives the host logging off. The history is a file so anyone who has it can host next
+and the market carries on, and there's a dedicated server for a group that would rather one
+machine stayed up.
 
 everyone needs a copy of the history, trading only happens while somebody is hosting
 and at least one other person is connected, and two copies that
@@ -56,13 +55,10 @@ about that last one.
 
 ## 2. Getting in
 
-**The inventory button.** Open your inventory. There's an emerald next to the recipe book
-button. That's the market screen.
-
-**A key.** Nothing is bound by default, bind one in **Options → Controls → EconomiesMod**.
-
-**Chat commands.** `/trade balance`, `/trade orders` and `/trade price <item>` read the
-market without opening anything. Full list in [§11](#11-command-reference).
+Open your inventory and click the emerald next to the recipe book button, that's the market
+screen. You can also bind a key to it in Options, then Controls, then EconomiesMod (nothing is
+bound by default), and there's chat commands like `/trade balance` that read the market without
+opening anything (full list in [§11](#11-command-reference)).
 
 ### The screen
 
@@ -93,8 +89,8 @@ your 4 orders"*, the panel is working and the book just has nothing but your ord
 
 ### Making one
 
-**Market tab → Create a new market.** Give it a name. You're now its creator, which matters
-later: only the creator can change the market's rules.
+In the Market tab press Create a new market and give it a name. You're now its creator, which
+matters later since only the creator can change the market's rules.
 
 You'll be asked to confirm, because a market you create shares no history with one your
 friends already use, and two markets can never be merged. If somebody already has one, join
@@ -102,9 +98,9 @@ theirs instead.
 
 ### Joining somebody else's
 
-**Network tab, type their address, Connect.** Your game downloads the whole history,
-verifies every signature in it, and rebuilds the market from scratch. That's why the first
-join takes a moment.
+In the Network tab type their address and press Connect. Your game downloads the whole history,
+checks every signature in it and rebuilds the market from scratch, which is why the first join
+takes a moment.
 
 If they're on the same machine or the same network or using something like Zerotier, **Refresh hosts** finds them without
 typing anything (you must have joined each other once prior for this too work).
@@ -114,9 +110,8 @@ and the mod will give a warning. Use a second [slot](#8-more-than-one-market) fo
 
 ### Getting the history when nobody's online
 
-**Market tab → Export to a file** hands you the whole market as a file. Somebody else uses
-**Import one from a file** and has it, with no host running and nobody online at the same
-time.
+In the Market tab, Export to a file gives you the whole market as a file and somebody else can
+use Import one from a file to get it, with no host running and nobody online at the same time.
 
 An imported file is treated as a file from a stranger. Every signature in it is checked and
 every rule re-applied before a single credit of it is believed.
@@ -151,14 +146,12 @@ that's what lets it be traded while you're both offline.
 Orders sit on a **book**, one per item, sorted by price. A buy and a sell cross when the
 buyer will pay at least what the seller is asking.
 
-**The resting order sets the price.** Bid 6 for something resting at 5 and you pay 5.
-Turning up late doesn't cost you anything.
+The order that was already resting sets the price, so if you bid 6 for something resting at 5
+you pay 5 and turning up late doesn't cost you anything. If two sells are at the same price,
+whoever placed theirs first gets filled first.
 
-**Ties go to whoever got there first.** Two sells at the same price fill in the order they
-were placed.
-
-**One order can fill many.** A sell of 10 into ten resting bids of 1 is ten trades at once,
-and the book empties. The mod tells you afterwards: *"Sold 9 of 10 Dirt
+One order can also fill lots of others at once, a sell of 10 into ten resting bids of 1 is ten
+trades and the book empties. The mod tells you afterwards: *"Sold 9 of 10 Dirt
 across 9 orders, +18, 1 still resting" (the notification doesn't currently show will be fixed soon)*.
 
 Anything that doesn't fill immediately **rests** until it does. A partly filled order leaves
@@ -183,21 +176,21 @@ notification settings, and History still has everything.
 these numbers are adjustable via the market creator in-game for the rotating mode and adjustable 
 via the server config for the dedicated server.
 
-**Welcome grant.** What a new arrival starts with. Capped at 300 (may change this too be much lower 
+The welcome grant is what a new arrival starts with. Capped at 300 (may change this too be much lower 
 too kill variance in welcome grants) when somebody hosts from their game. A dedicated server may go higher.
 
-**Trading fee.** A percentage of each trade, taken from the seller's proceeds and destroyed
-rather than paid to anyone. It drains the money supply instead of being income for a host.
+The trading fee is a percentage of each trade, taken from the seller's money and destroyed rather
+than paid to anyone, so it drains the money supply instead of being income for a host.
 
-**Listing fee.** Charged when you place an order and never refunded, including if you cancel.
-It's there so placing orders isn't free, because a market where it is free can be spun in
-circles for profit.
+The listing fee gets charged when you place an order and is never refunded, even if you cancel.
+It's there so placing orders isn't free, since a market where it's free can be spun in circles
+for profit.
 
 The listing fee can also **escalate**: a market can give everyone a few free orders and
 charge more the more you hold open at once. Set to zero, nothing escalates and every listing
 costs the same.
 
-**Stipend.** See [below](#the-stipend).
+There's also the stipend, see [below](#the-stipend).
 
 ### The stipend
 
@@ -210,49 +203,47 @@ until everything costs 1 and price stops meaning anything.
 The stipend attempts too fix that so any registered player can **claim** a fixed amount once per *N fills
 the market settles*, 50 by default (can be changed). Click **Claim stipend** on the Market tab.
 
-**It counts fills, not time or events.**. A fill needs two orders to cross, and every order costs a listing fee (if the host has set a listing fee).
+It counts fills, not time or events. A fill needs two orders to cross, and every order costs a listing fee (if the host has set a listing fee).
 
-**What a fill is.** One buy order meeting one sell order is one fill, whatever the quantity:
-selling 64 iron to one buyer is one fill. One order matching three orders on the book is three
-fills. Placing, cancelling, depositing and withdrawing don't count.
+A fill is one buy order meeting one sell order whatever the quantity, so selling 64 iron to one
+buyer is one fill and one order matching three orders on the book is three fills. Anything that
+isn't a trade, like placing an order or depositing, doesn't count.
 
-**The count is the whole market's, not yours.** Everyone's trades move it along, bots' too, so
-you don't have to trade to claim. If you claim when the market is at 1,080 fills, your next
-claim opens at 1,130 on the default of 50. A busy market pays out more often and a quiet one
-less.
+The count is for the whole market, not just you. Everyone's trades move it along (bots' too) so
+you don't have to trade to claim, if you claim when the market is at 1,080 fills your next claim
+opens at 1,130 on the default of 50. A busy market pays out more often and a quiet one less.
 
-**New players wait a full interval.** Your count starts when you join, so arriving in a market
-that's already traded thousands of times doesn't pay out straight away.
-
-**Missed intervals don't add up.** Claiming resets your count to now, so 200 fills without a
-claim still pays once. The **Claim stipend** button only appears when you can claim.
+New players have to wait a full interval, your count starts when you join so turning up in a
+market that's already traded thousands of times doesn't pay out straight away. Missed intervals
+don't add up either, claiming resets your count to now so 200 fills without a claim still only
+pays once. The Claim stipend button only shows up when you can claim.
 
 How much you get is up to your market's creator check the Market tab, or `/trade hostconfig`, for the
 current amount. What it can be set to is tied to the **listing fee**, the market only
 allows a stipend that the fees collected over one interval can actually cover, so a low listing
 fee (or none at all) means a small stipend, or none.
 
-**A market refuses a stipend that outruns its own fees.** If the payout across every
-registered player is more than the listing fees collect over the same interval, the market is
-printing money and the rule turns it down. It's checked when the stipend is set and again at
-every claim, since a market can outgrow one that was affordable when it was chosen.
+A market won't allow a stipend that pays out more than its own fees bring in. If the payout
+across every registered player is more than the listing fees collect over the same interval the
+market would be printing money, so the rule turns it down. It's checked when the stipend gets set
+and again on every claim, since a market can outgrow a stipend that was fine when it was picked.
 
 The rule is `stipend × registered players < listing fee × fills per interval`. Registered players
 means everyone who has ever joined, apart from bots, and that number only goes up. Players who
 stopped playing still count, because the market can't tell they won't come back to claim.
 
-**Only the listing fee counts, not the trading fee.** The trading fee is a percentage of the
-price, and someone trading with themselves can set the price to 1 and pay almost nothing. The
-listing fee is the same on every order, so it's the only cost a fill is guaranteed to have.
+Only the listing fee counts here, not the trading fee. The trading fee is a percentage of the
+price and someone trading with themselves can just set the price to 1 and pay almost nothing,
+but the listing fee is the same on every order so it's the only cost a fill is guaranteed to have.
 
-**The stipend gives back part of the listing fees, it doesn't add to them.** Both fees are
-destroyed, and the rule keeps the stipend smaller than the listing fees collected over the
-same interval, so a market with a stipend still loses credits overall. What it does is move
-credits from whoever places the most orders to everyone who claims. New money still only comes
-in with new players' welcome grants.
+The stipend gives back part of the listing fees rather than adding new money. Both fees get
+destroyed and the rule keeps the stipend smaller than what the listing fees collect over the same
+interval, so a market with a stipend still loses credits overall, it just moves credits from
+whoever places the most orders to everyone who claims. New money still only comes in with new
+players' welcome grants.
 
-**Choosing one for a busy server.** Turn the stipend on once the market has been running for
-a while, not at the start:
+If you're picking one for a busy server, turn the stipend on once the market has been running for
+a while rather than at the start:
 
 1. Run the server for a week and type `stats` in the console every day or so. The `trades`
    line is the fill count, and `people` is the registered player count the rule uses.
@@ -273,8 +264,8 @@ Somebody has to be **hosting** for trades to happen. Two ways to do it.
 
 ### Hosting from your game
 
-**Network tab → Host.** Your game starts listening on a port and your friends connect to it.
-You carry on playing, and the market runs inside your session.
+In the Network tab press Host. Your game starts listening on a port for your friends to connect
+to, and the market just runs inside your session while you carry on playing.
 
 Hosting moves around freely. Stop hosting and anybody else holding the full history can host
 instead, which is why the history matters more than any particular machine does.
@@ -291,14 +282,13 @@ would rather one machine was always there.
 
 #### What the operator needs
 
-**One jar and a Java 8 runtime.** `economies-server.jar` is the jar you need 
+Just one jar and Java 8 or newer, `economies-server.jar` is the jar you need 
 
-Keeping one running, updating it and what to back up are in
-[§12](#12-running-a-server).
+How to keep one running and what to back up is all in [§12](#12-running-a-server).
 
 #### Setting one up
 
-**1. Give the jar its own folder.** The server writes several files beside wherever it runs
+1. Give the jar its own folder, since the server writes several files beside wherever it runs
 from (see the table below), including a private key.
 
 Run this from wherever `economies-server.jar` currently is. It makes a new folder and copies the jar in:
@@ -307,13 +297,13 @@ Run this from wherever `economies-server.jar` currently is. It makes a new folde
 mkdir ~/economies-server && cp economies-server.jar ~/economies-server/ && cd ~/economies-server
 ```
 
-**2. Write a config.** Nothing exists yet, so this creates one with every setting in it.
+2. Write a config. Nothing exists yet so this creates one with every setting in it.
 
 ```
 java -jar economies-server.jar --config server.json --write-config
 ```
 
-**3. Edit it.** Four settings matter before the first start.
+3. Edit it, these settings matter before the first start.
 
 ```jsonc
 "logFile": "market.jsonl",             // beside the jar, 
@@ -339,13 +329,13 @@ the warning, though: 0 means this server hands out no welcome grants at all.
 Leaving out `logFile` names the market `server-market.jsonl`. This handbook calls it
 `market.jsonl` throughout.
 
-**4. Start it.**
+4. Start it.
 
 ```
 java -jar economies-server.jar --config server.json
 ```
 
-**The first start needs to know the Minecraft version.** A new market won't be created until
+The first start needs to know the Minecraft version, a new market won't be created until
 `gameVersion` is set. Without it, the server stops straight away and says it "does not know
 which Minecraft version its players are on". Either set `gameVersion` in the config (step 3),
 or add it to the command:
@@ -365,14 +355,14 @@ The first start with an empty log creates the market. You should see roughly:
 [host] listening on port 25555
 ```
 
-**5. Join it.** In game, **Network tab → address → Connect**, using `host:25555`. On the same
-machine, `localhost:25555`.
+5. Join it. In game go to the Network tab, type the address and press Connect, using
+`host:25555` (or `localhost:25555` if it's on the same machine).
 
 #### What it creates, all beside the log
 
 | File | What it is |
 | --- | --- |
-| `market.jsonl` | The market. The only irreplaceable file, so **back it up** |
+| `market.jsonl` | The market. The only file you can't get back, so back it up |
 | `server-identity.key` | The server's private key. Don't share it, don't commit it |
 | `server-peers.json` | Who connected and from where. The operator's own note |
 | `known-keys.json` | Identities seen before, so they're recognised again |
@@ -384,28 +374,27 @@ know and don't keep old logs forever. The deploy guide's setup deletes them afte
 
 #### Changing things afterwards
 
-**Host rules** are admission, deposit caps, world checks, migration limits, the
-welcome-grant ceiling, port and name. Edit the config, restart. They belong to whoever is
-hosting and take effect immediately.
+Host rules are the settings about who can join and what the server will accept from them, like
+the deposit caps and world checks. Just edit the config and restart, they belong to whoever is
+hosting and take effect straight away.
 
-**The market's economics** are the `policy` block. Edit, restart, and a server that created
-its market publishes the change as a `MarketPolicy` event, exactly as a player would from
-the Market screen. 
+The market's economics are the `policy` block. Edit it and restart, and a server that created
+its market publishes the change as a `MarketPolicy` event, the same as a player would from the
+Market screen.
 
 Two things worth knowing:
 
-- **Anything you leave out is left alone.** A block mentioning only the tax won't touch the
-  grant or the fee, which is why the fields are absent rather than zero when unset.
-- **A policy the market would refuse is reported and skipped**, like a stipend that outruns
-  its listing fees or a grant above the host's ceiling. The market keeps running on what it
-  had.
+- Anything you leave out is left alone, so a block that only mentions the tax won't touch the
+  grant or the fee (that's why the fields are missing rather than zero when they're unset).
+- A policy the market would refuse gets reported and skipped, like a stipend that outruns its
+  listing fees or a grant above the host's ceiling, and the market keeps running on what it had.
 
-**The file can end up lying about what's really happening**, an edit can be refused (the two
+The file can end up lying about what's really happening, an edit can be refused (the two
 cases just above), or you might be hosting a market you didn't create, where the whole
 `policy` block is ignored. Either way the file still shows whatever you last typed, not what
 the market actually has.
 
-**Running `--write-config` again fixes that.** it asks the
+Running `--write-config` again fixes that. it asks the
 live market what its policy actually is right now and overwrites the file with that. So if
 you're ever unsure whether an edit took effect, run `--write-config` again and read the file:
 whatever it says afterward should be correct.
@@ -414,15 +403,15 @@ whatever it says afterward should be correct.
 
 By default the server does, and the operator changes policy through the config.
 
-**`--creator-key` names a player as creator instead**, so the rules get changed from the
+`--creator-key` names a player as creator instead, so the rules get changed from the
 Market screen in game. Could be worth it when a person should own the market and the box is
 only hardware. Otherwise the config is simpler and the key is one more thing to keep somewhere.
 
 ## Optional
 
-**Exactly when to use it:** on the server's very first start, the one that creates the market
-— step 4 above, before there's a `market.jsonl` with anything in it. Two things have to be
-true of that one run:
+You only use it on the server's very first start, the one that creates the market (step 4 above,
+before there's a `market.jsonl` with anything in it), and two things have to be true for that
+run:
 
 1. `creatorUserId` is already set in the config to that player's identity (their UUID).
 2. The start command carries the flag, pointing at that player's own key file:
@@ -451,8 +440,8 @@ A dedicated server can run bots: traders that keep a market moving when few peop
 They trade through the same order book as everyone else, with the same rules and fees, and
 players see their orders like anybody's.
 
-**Bots are switched on when the market is created, and only then.** Add `--bots` to the very
-first start, the one with an empty log:
+Bots can only be switched on when the market is created, so add `--bots` to the very first
+start, the one with an empty log:
 
 ```
 java -jar economies-server.jar --config server.json --bots
@@ -469,18 +458,18 @@ The config remembers it, so later starts are the ordinary command. On a market t
 exists `--bots` is ignored, and says so. Only a dedicated server runs bots; a market hosted
 from a game never does.
 
-**There are two kinds:**
+There are two kinds:
 
 | Kind | What it does | Starts with |
 | --- | --- | --- |
 | Producer | Makes one item (16 every 10 minutes, holding at most 256), sells it, and buys the other items to use up as upkeep | 1,000 credits and 256 of its item |
 | Market maker | Puts up both a buy and a sell price on each item, so there is always someone to trade with. Once players have settled on a price for something else, it quotes that too | 1,500 credits and 32 of each item |
 
-The items are oak logs, cobblestone, coal, wheat and iron ingots. A market can have up to 8 of
-each kind. Producers decide every 30 seconds, market makers every 10.
+They only trade a few basic items (oak logs, cobblestone, coal, wheat and iron ingots), and a
+market can have up to 8 of each kind. Producers decide every 30 seconds, market makers every 10.
 
-**The commands are typed into the server's own console**, the terminal it's running in, not
-in game:
+The commands get typed into the server's own console (the terminal it's running in), not in
+game:
 
 | Command | What it does |
 | --- | --- |
@@ -491,8 +480,8 @@ in game:
 | `bot resume <bot>` | Start it again |
 | `bot help` | The list above |
 
-A `<bot>` is its name, like `producer#2`, its id, or the first few characters of the id (the
-ones `bot list` shows). For example:
+To pick a bot you can use its name like `producer#2` or its id (just the first few characters
+is enough, the ones `bot list` shows). For example:
 
 ```
 bot spawn producer 3
@@ -504,12 +493,12 @@ bot pause producer#2
 Count defaults to 1. `spawn` also takes `tick` or `threads`, which only changes how the server
 schedules that bot, not how it trades; leave it on the default `tick`.
 
-**A bot can't be removed, only paused.** It's part of the market's history from the moment it
-joins, so pausing is how you stop one: its orders come off the book and it does nothing more
-until resumed.
+A bot can't be removed, only paused. It's part of the market's history from the moment it joins,
+so pausing is how you stop one, its orders come off the book and it does nothing more until you
+resume it.
 
-**The bots' keys live in a `bots` folder beside the log.** Back it up with `market.jsonl`. A
-bot whose key is lost stays in the market but this server can't run it any more, and `bot
+The bots' keys live in a `bots` folder beside the log, so back that up along with `market.jsonl`.
+A bot whose key gets lost stays in the market but this server can't run it any more, and `bot
 list` shows it as "not running here".
 
 A server started with nothing attached to its input, like a service, has no console to type
@@ -525,8 +514,8 @@ These are typed into the same console as the bot commands. `help` lists everythi
 | `cancel-orders <player> [reason]` | Takes all of a player's orders off the book. What the orders reserved goes back to them; the listing fees they paid stay paid |
 | `ban <player> [reason]` | Adds them to `deny` in the config, disconnects them, and cancels their orders |
 
-A `<player>` is the name they connected with, their id, or the first few characters of it.
-For example:
+For `<player>` you can use the name they connected with or their id (the first few characters
+is enough). For example:
 
 ```
 stats
@@ -534,22 +523,20 @@ cancel-orders Steve listing duped iron
 ban 3f2a91c0 duping
 ```
 
-**Cancelling never takes anything.** It moves no credits and no items: the player keeps what
-they own, it just stops being for sale. The cancel goes into the market's history with your
-reason, like every other event, so every player can see it happened and why.
+Cancelling never takes anything off the player, their stuff just stops being for sale. The cancel goes into the market's history with your reason like every other
+event, so every player can see it happened and why.
 
-**Only a server that created its market can cancel orders.** That's the default. If the
-market was created with `--creator-key`, only that player can, and `cancel-orders` says so.
-`ban` still adds them to `deny` and disconnects them either way.
+Only a server that created its market can cancel orders (that's the default). If the market was
+created with `--creator-key` only that player can, and `cancel-orders` tells you so. `ban` still
+adds them to `deny` and disconnects them either way.
 
-**With `banOnWorldChange` on**, someone banned for switching their world to creative or
-cheats has their orders cancelled automatically too.
+With `banOnWorldChange` on, someone who gets banned for switching their world to creative or
+cheats has their orders cancelled automatically too. To undo a ban, take them out of `deny` in
+the config and restart.
 
-**To undo a ban,** take them out of `deny` in the config and restart.
-
-**How to read `stats`:** "held" plus "burned" always equals "issued". If held keeps climbing
-while burned stays small, money is coming in faster than the fees take it out, and prices will
-creep up. Raising the trading fee or the listing fee slows that down.
+In `stats`, "held" plus "burned" always adds up to "issued". If held keeps climbing while burned
+stays small, money is coming in faster than the fees take it out and prices will creep up, so
+raising the trading fee or the listing fee slows that down.
 
 #### Sharing one market across Minecraft versions
 
@@ -564,8 +551,8 @@ extra versions under `gameVersion` in the config and restart:
 Everyone trades in the same order books, so someone selling oak logs on 1.16.5 can sell to
 someone on 26.3. You can only use items your version actually has though:
 
-- You can only deposit, buy or withdraw items that exist in your version (so no buying copper on
-  1.16.5, it isn't in 1.16.5).
+- If an item doesn't exist in your version you can't buy it or move it in or out of your game
+  (so no buying copper on 1.16.5, it isn't in 1.16.5).
 - Selling only needs you to have the item, so poplar logs you put in on 26.3 can still be sold
   from 1.16.5, you just can't take them out there.
 - The market screen only shows items your version has, plus anything you're already holding.
@@ -577,8 +564,8 @@ someone on 26.3. You can only use items your version actually has though:
 You need EconomiesMod 0.5.0 or newer to join a shared market, older versions get told to update.
 Migrating a balance in from another market doesn't work in a shared market yet.
 
-The versions that can share right now are 1.16.5, 1.20.1, 1.21.1, 1.21.11 and 26.3, and the
-server won't start if the list has anything else in it.
+It works with every version the mod comes in, and the server won't start if the list has a
+version it doesn't know.
 
 If you play from more than one version, they all need the same identity file. Your orders and
 balance belong to you as a player so they follow you between worlds and versions, and the market
@@ -586,7 +573,7 @@ knows it's you from a key file in your game's `config` folder,
 `config/economiesmod-identity-<YourName>.key`.
 
 - The official Minecraft launcher uses one folder for every version, so this just works.
-- The CurseForge app, Prism, the Modrinth app and MultiMC give each version its own folder, so
+- Launchers like the CurseForge app or Prism give each version its own folder, so
   each one ends up with its own key and joining from the second one gets refused with *"your
   signing key doesn't match the one this market has for you"*. To fix it, copy the `.key` file
   from the first version's `config` folder into the second one's (replace the one that's there)
@@ -627,25 +614,26 @@ default anybody may join either.
 
 ### The easy way: a virtual LAN
 
-**ZeroTier**, **Radmin VPN** or **Hamachi** put everybody on one virtual network, and the
-market connection should work.
+Something like ZeroTier or Radmin VPN puts everybody on one virtual network, and then the market
+connection should just work.
 
 With ZeroTier: everyone installs it, one person creates a network and shares its ID, everyone
 joins that ID, and the creator authorises them in the ZeroTier panel. Each machine then has a
-second address, usually starting `10.` or `172.`, and that's the address to type into
-**Connect**.
+second address, usually starting `10.` or `172.`, and that's the address to type in before
+pressing Connect.
 
 Alternatively use a dedicated server too sidestep all of this.
 
 ### If it won't connect
 
-- **Check the market port, not Minecraft's.** They're different numbers and the mod's is the
-  one in the Host field.
-- **The host has to be hosting.** Network tab, Host, and it should say it's listening.
-- **On a virtual LAN, use the virtual address.** Your normal `192.168.…` address is not
-  reachable from another network even when ZeroTier is running.
-- **Firewalls block the market port too.** Windows asks about Minecraft the first time and
-  says nothing about this mod's socket, which is a separate rule.
+- Check the market port, not Minecraft's. They're different numbers and the mod's is the one in
+  the Host field.
+- The host actually has to be hosting (they press Host in the Network tab and it should say it's
+  listening).
+- On a virtual LAN use the virtual address, your normal `192.168.…` address can't be reached from
+  another network even when ZeroTier is running.
+- Firewalls block the market port too. Windows asks about Minecraft the first time but says
+  nothing about this mod's socket, which needs its own rule.
 
 ---
 
@@ -687,15 +675,14 @@ about what happened, and so does every balance after the split.
 
 What the mod does about it:
 
-- **It finds where you parted** and says so: *"you parted from the other copy after event
+- It finds where you parted and tells you, like *"you parted from the other copy after event
   42."*
-- **Everything before the split is safe.** It's in their copy too and comes back when you
-  rejoin.
-- **Reset** discards your branch and rejoins theirs. Before it does, it works out what that
-  costs and hands back what it can:
-  - **Items you deposited after the split** go back into your inventory. Nothing else
-    records them, so that's the one loss a reset would otherwise cause outside the ledger.
-  - **Orders you placed after the split** come back as a checklist so you can re-place them.
+- Everything before the split is safe, it's in their copy too and comes back when you rejoin.
+- Reset throws away your branch and rejoins theirs. Before it does that it works out what it'll
+  cost you and hands back what it can:
+  - Items you deposited after the split go back into your inventory. Nothing else records them,
+    so that's the one loss a reset would otherwise cause outside the ledger.
+  - Orders you placed after the split come back as a checklist so you can place them again.
 - What can't come back: credits you earned after the split, and trades made against a book
   that no longer exists. Those are ledger entries with no existence outside the branch being
   discarded.
@@ -776,8 +763,8 @@ creates the file with every setting in it. For a server, `--write-config`.
 | `maxWelcomeGrant` | The ceiling this host will issue |
 | `banOnWorldChange` | Ban an identity that changes world mid-session |
 
-**What the world checks are worth.** Everything a client says about its own world is a claim
-rather than evidence. A modified client says whatever it likes, and signing it would only
+The world checks are worth less than they look, since everything a client says about its own
+world is a claim rather than evidence. A modified client says whatever it likes, and signing it would only
 prove who said it. They're worth having for the casual case, somebody who turned on cheats
 once and thought nothing of it, and for making two claims contradict each other. they aren't 
 guaranteed to work.
@@ -802,14 +789,14 @@ dedicated server, marked below.
 | `maxWelcomeGrant` | **300** | **1,000,000** | The most a policy change may grant a newcomer |
 | `banOnWorldChange` | `false` | `false` | See below |
 
-**Why `refuseCreativeWorlds` and `refuseCheatWorlds` default on, unlike `requireAttestation`.**
-The two world checks only ever act on a client that describes its own world, and a real client
-always does, unconditionally, on every connect. So somebody in creative mode, or with commands
+`refuseCreativeWorlds` and `refuseCheatWorlds` default on (unlike `requireAttestation`) because
+the two world checks only ever act on a client that describes its own world, and a real client
+always does, on every connect. So somebody in creative mode, or with commands
 on, is turned away by default, `requireAttestation` is a different kind of setting: it refuses
 anyone who says *nothing at all* about their world, which includes an older build that has
 never heard of attestation.
 
-** (Important Setting would recommend turning on) What `banOnWorldChange` actually does.** It only matters once someone is already connected
+`banOnWorldChange` (Important Setting would recommend turning on) only matters once someone is already connected
 and playing normally, having passed the checks above honestly. If they then switch creative
 mode or cheats on mid-session, the market disconnects them either way. Without this setting,
 that's the whole of it: they're free to reconnect once they've turned it back off. With it on,
@@ -821,25 +808,29 @@ stops telling the truth.
 
 ### Rules a group can agree once
 
-Most host rules are just defaults: the creator can **publish** a set into the history with
+Most host rules are just defaults: the creator can publish a set into the history with
 `/trade hostrules publish`, and any host adopts them for anything it hasn't set for itself —
 but a host with an opinion of its own, in either direction, keeps it.
 
-**Six of them work differently.** `requireAttestation`, `refuseCreativeWorlds`,
-`refuseCheatWorlds`, `banOnWorldChange`, `maxDepositUnitsPerPlayHour` and
-`maxDepositMultipleOfHandled` are a **floor** once published: a host may be stricter than the
-group's figure on its own initiative, but can never be looser than it, whatever its own file
-says. That's different from everything else here on purpose — refusing a connection never
-writes anything to the log, so it can't fork a replica the way overriding a market rule would,
-which is what lets these six actually bind rather than just advise. Without that, a market
-kept strict for months would reset to whatever the compiled defaults are the moment hosting
-passed to somebody with no file of their own — permanently, since a deposit once accepted
-can't be taken back.
+Six of them work differently though. Once they're published they become a floor, so a host can
+be stricter than what the group agreed but never looser, whatever its own file says:
 
-Everything else here — admission mode, the allow/deny lists, deposit caps by amount,
-migration limits, the welcome-grant ceiling — stays advisory: recorded, read by hosts, and a
-host that disagrees is free to. `/trade hostrules` shows what was agreed and what this host
-does with each part of it.
+- `requireAttestation`
+- `refuseCreativeWorlds`
+- `refuseCheatWorlds`
+- `banOnWorldChange`
+- `maxDepositUnitsPerPlayHour`
+- `maxDepositMultipleOfHandled`
+
+That's on purpose. Refusing a connection never writes anything to the log so it can't fork
+anyone's copy the way overriding a market rule would, which is what lets these six actually bind
+instead of just being advice. Without it a market that's been kept strict for months would drop
+back to the default settings the moment someone with no file of their own started hosting it,
+and there'd be no undoing that since a deposit can't be taken back once it's accepted.
+
+Everything else here is just advice, it gets recorded and hosts read it but a host that
+disagrees can ignore it. `/trade hostrules` shows what was agreed and what this host does with
+each part of it.
 
 ---
 
@@ -880,16 +871,16 @@ itself after a crash. Redirect its output to a file too: the console messages it
 done unless you keep them.
 
 There's nothing to shut down carefully. Stopping the process, however you do it, is safe —
-every event is written, flushed and closed to disk the moment it's appended, never held open
-across two of them, so there's no mid-write state to worry about interrupting.
+every event is written and flushed to disk the moment it's appended, so stopping it never loses
+anything that already happened.
 
 ### Updating
 
 Stop the server, replace `economies-server.jar` with the new one, start it again. Nothing
-else needs touching: the log, the config, the keys and the peer list all live in separate
-files beside the jar, untouched by swapping it out.
+else needs touching since everything else lives in its own files beside the jar, and swapping
+the jar doesn't go near them.
 
-**Don't use an older version once you've updated** A newer build can write event types an
+Don't use an older version once you've updated, a newer build can write event types an
 older one hasnt heard of. Downgrade the jar after that and the older build stops partway
 through the log with "contains an event this version can't read" so not corrupted, just
 unreadable to that particular build. Keep the old jar until you're sure about the new
