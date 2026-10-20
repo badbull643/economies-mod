@@ -57,7 +57,7 @@ would rather one machine stay up. See
 3. Drop the jar for your version into `.minecraft/mods`: `economiesmod-0.5.0+1.21.11.jar` for
    1.21.11 and so on, or plain `economiesmod-0.5.0.jar` for 1.16.5
 
-**Playing from more than one version or launcher profile?** Your market identity is the file
+**if you are playing from more than one version or launcher profile**, your market identity is the file
 `config/economiesmod-identity-<YourName>.key`. The official launcher shares it between versions,
 but the CurseForge app, Prism, the Modrinth app and MultiMC give each profile its own. Copy that
 file into each profile's `config` folder, or the market won't recognise you there. The
