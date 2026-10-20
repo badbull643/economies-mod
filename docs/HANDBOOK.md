@@ -711,18 +711,14 @@ partway. The Host button says so and points at Reset.
 
 ### "This host serves Minecraft X players, and you are on Y"
 
-A market belongs to one Minecraft version, and nothing carries across to another. Items are
-named differently between versions and the rules of the game differ, so a trade one side
-couldn't honour is worse than a trade that never happened.
+you can restrict the number of versions a dedicated server works with but for the most part a market belongs to one Minecraft version, and nothing carries across to another. Items are
+named differently between versions and the rules of the game differ.
 
 Every host checks this before it sends anything: a player hosting from their game, and a
 dedicated server alike. Your own game checks the host as well, so even an older host that
 doesn't check can't pull you into a market on another version. Hosts on other versions are
 left off your host list, and when that is why the list is empty it says so: *"nobody hosting
-(1 on other Minecraft versions)"*.
-
-There's nothing to fix on your side. Join a host on your version, or start your own market.
-Migration is turned away for the same reason.
+(1 on other Minecraft versions)"*. so just join a host that supports your version.
 
 A dedicated server needs `--game-version` (or `gameVersion` in its config) when it creates its
 market, and refuses to start without one rather than guess. An existing market with no setting
@@ -901,21 +897,13 @@ one, rather than needing it back afterward.
 
 ### Backups
 
-**`market.jsonl` is the one that matters.** It's the entire market so if you lose it and there's
+`market.jsonl` is the one that matters. It's the market so if you lose it and there's
 nothing to restore from, short of a client somewhere holding the full history via `/trade
 archive on`. Back it up on whatever schedule losing that much would actually cost you.
 
-**`server-identity.key` is worth keeping too, for a quieter reason.** An identity's key can
-never be replaced once it's registered — there's no event for re-keying one. Losing this file
-doesn't just mean generating a new one at the next start; it means this server can no longer
-sign anything as the identity already recorded in the market, which in practice means it can
-no longer issue welcome grants under its own name. The market itself is unharmed — this one
-host just loses a capability it can't get back.
+`server-identity.key` is worth keeping too An identity's key cant be replaced once it's registered and there's no event for re-keying one.
 
-**`market.jsonl.snapshot.json` needs none of this.** It's an optimisation the server writes
-for itself once a market has run long enough, and it's rebuilt automatically the moment it
-stops matching the log. Restoring an old `market.jsonl` without its snapshot is completely
-normal and nthe next start just replays from the beginning once, and writes a fresh one.
+just ignore this one `market.jsonl.snapshot.json` was just an optimisation.
 
 ---
 
