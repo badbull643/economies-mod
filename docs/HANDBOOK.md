@@ -171,10 +171,10 @@ for. The action bar can do the same, more briefly. Both are settings.
 
 Filling somebody else's order is reported too.
 
-**While you were offline.** When you reconnect and some of your orders traded while you were
-away, one line in chat adds it all up: *"While you were away: sold 20 Cobblestone, bought 2
-Diamond · +40cr · see History"*. The biggest three come first and the rest are counted. It
-follows the same notification settings, and History has every trade in full.
+If some of your orders traded while you were offline, you get one line in chat adding it all up
+when you reconnect, like *"While you were away: sold 20 Cobblestone, bought 2 Diamond · +40cr ·
+see History"*. It only lists the biggest three (the rest just get counted), it uses the same
+notification settings, and History still has everything.
 
 ---
 
@@ -377,6 +377,11 @@ machine, `localhost:25555`.
 | `server-peers.json` | Who connected and from where. The operator's own note |
 | `known-keys.json` | Identities seen before, so they're recognised again |
 
+Heads up, the server does store players' IP addresses. `server-peers.json` has the last one each
+player connected from, and the console logs have every connection. It needs them to run and to
+deal with cheaters, but IPs count as personal data (especially in the EU), so let your players
+know and don't keep old logs forever. The deploy guide's setup deletes them after 30 days.
+
 #### Changing things afterwards
 
 **Host rules** are admission, deposit caps, world checks, migration limits, the
@@ -548,47 +553,47 @@ creep up. Raising the trading fee or the listing fee slows that down.
 
 #### Sharing one market across Minecraft versions
 
-A dedicated server can let several Minecraft versions into the same market. List the extra
-versions next to `gameVersion` in the config and restart:
+A dedicated server can let more than one Minecraft version into the same market. Just list the
+extra versions under `gameVersion` in the config and restart:
 
 ```jsonc
 "gameVersion": "1.21.11",
 "gameVersions": ["1.16.5", "1.20.1", "1.21.1", "26.3"],
 ```
 
-Everyone trades in the same order books, so a 1.16.5 seller and a 26.3 buyer meet on oak logs
-like anyone else. Each player can only use the items their own version has:
+Everyone trades in the same order books, so someone selling oak logs on 1.16.5 can sell to
+someone on 26.3. You can only use items your version actually has though:
 
-- **Depositing, buying and withdrawing** need the item in your version. Copper can't be bought
-  from 1.16.5, because it isn't in 1.16.5.
-- **Selling** only needs you to hold it. Poplar logs you deposited on 26.3 can still be sold
-  from 1.16.5, but only withdrawn on a version that has them.
-- **The market screen only lists items your version has**, plus anything you already hold.
-- **Renamed items are still one item.** The market uses the item's first name (`chain`), and
-  each version shows its own: 26.3 players see Iron Chain.
-- **Other mods' items can't be traded** in a shared market, since there's no way to know which
+- You can only deposit, buy or withdraw items that exist in your version (so no buying copper on
+  1.16.5, it isn't in 1.16.5).
+- Selling only needs you to have the item, so poplar logs you put in on 26.3 can still be sold
+  from 1.16.5, you just can't take them out there.
+- The market screen only shows items your version has, plus anything you're already holding.
+- Renamed items still count as one item. The market uses the item's original name (`chain`) and
+  each version shows its own, so 26.3 players see Iron Chain.
+- Items from other mods can't be traded in a shared market, since there's no way to know which
   versions have them.
 
-Joining a shared market needs **EconomiesMod 0.5.0 or newer**. Older versions are told to
-update. Migrating a balance in from another market isn't supported in a shared market yet.
+You need EconomiesMod 0.5.0 or newer to join a shared market, older versions get told to update.
+Migrating a balance in from another market doesn't work in a shared market yet.
 
-The versions that can share are 1.16.5, 1.20.1, 1.21.1, 1.21.11 and 26.3. The server refuses
-to start if the list names any other.
+The versions that can share right now are 1.16.5, 1.20.1, 1.21.1, 1.21.11 and 26.3, and the
+server won't start if the list has anything else in it.
 
-**Playing from more than one version? Use the same identity file in each.** Your orders and
-balance belong to you as a player, so they follow you from world to world and version to
-version. The market recognises you by a key file in your game's `config` folder:
+If you play from more than one version, they all need the same identity file. Your orders and
+balance belong to you as a player so they follow you between worlds and versions, and the market
+knows it's you from a key file in your game's `config` folder,
 `config/economiesmod-identity-<YourName>.key`.
 
-- **The official Minecraft launcher** uses one folder for every version, so this just works.
-- **The CurseForge app, Prism, the Modrinth app and MultiMC** give each version its own folder,
-  so each gets its own key. Joining from the second one is refused with *"your signing key
-  doesn't match the one this market has for you"*. To fix it, copy the `.key` file from the
-  first version's `config` folder into the second one's, replacing the one there, and connect
-  again. In the CurseForge app, right-click a profile and choose **Open Folder** to find
-  `config`.
+- The official Minecraft launcher uses one folder for every version, so this just works.
+- The CurseForge app, Prism, the Modrinth app and MultiMC give each version its own folder, so
+  each one ends up with its own key and joining from the second one gets refused with *"your
+  signing key doesn't match the one this market has for you"*. To fix it, copy the `.key` file
+  from the first version's `config` folder into the second one's (replace the one that's there)
+  and connect again. In the CurseForge app you can right-click a profile and pick Open Folder to
+  find `config`.
 
-Keep that file safe and private. Anyone who has it can trade as you.
+Keep that file private, anyone who has it can trade as you.
 
 ## Extra Notes
 
@@ -724,18 +729,18 @@ market, and refuses to start without one rather than guess. An existing market w
 is treated as a Minecraft 1.16.5 market, which is what every server before the setting was
 serving.
 
-Since 0.5.0 a dedicated server can also share one market across several versions. In that case
-the message lists every version it takes. See
-[Sharing one market across Minecraft versions](#sharing-one-market-across-minecraft-versions).
+Since 0.5.0 a dedicated server can also share one market between several versions, and then the
+message lists every version it takes (see
+[Sharing one market across Minecraft versions](#sharing-one-market-across-minecraft-versions)).
 
-In a shared market you may also see:
+In a shared market you might also see:
 
 | Message | What it means |
 | --- | --- |
-| `joining it needs a newer EconomiesMod` | The market is shared across versions, and your mod is older than 0.5.0. Update it |
-| `… isn't in Minecraft X (it arrived in Y)` | That item doesn't exist in your version, so you can't deposit, buy or withdraw it from here |
-| `… is called minecraft:chain in this market` | A renamed item sent under its newer name, which only an outdated mod does. Update it |
-| `your signing key doesn't match the one this market has for you` | You're joining from a different game folder than before, e.g. another version's profile in the CurseForge app. Copy `config/economiesmod-identity-<YourName>.key` from the folder you first joined with into this one's `config` folder. See [Sharing one market across Minecraft versions](#sharing-one-market-across-minecraft-versions) |
+| `joining it needs a newer EconomiesMod` | The market's shared between versions and your mod is older than 0.5.0, just update it |
+| `… isn't in Minecraft X (it arrived in Y)` | That item doesn't exist in your version, so you can't deposit, buy or withdraw it from there |
+| `… is called minecraft:chain in this market` | Only an outdated mod sends a renamed item under its new name, update it |
+| `your signing key doesn't match the one this market has for you` | You're joining from a different game folder than before (like another version's profile in the CurseForge app). Copy `config/economiesmod-identity-<YourName>.key` from the folder you first joined with into this one's `config` folder |
 
 ### Migration, or leaving with what you hold
 

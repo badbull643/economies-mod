@@ -59,9 +59,9 @@ would rather one machine stay up. See
 
 **if you are playing from more than one version or launcher profile**, your market identity is the file
 `config/economiesmod-identity-<YourName>.key`. The official launcher shares it between versions,
-but the CurseForge app, Prism, the Modrinth app and MultiMC give each profile its own. Copy that
-file into each profile's `config` folder, or the market won't recognise you there. The
-[handbook](docs/HANDBOOK.md#sharing-one-market-across-minecraft-versions) has the details.
+but the CurseForge app, Prism, the Modrinth app and MultiMC give each profile its own, so copy
+that file into each profile's `config` folder or the market won't recognise you there (more in
+the [handbook](docs/HANDBOOK.md#sharing-one-market-across-minecraft-versions)).
 
 ---
 
@@ -119,10 +119,27 @@ away anyone on another version, and the client refuses a host on another version
 other versions are left off the host list. A dedicated server is told its version with
 `--game-version` (for example `1.21.11`) when it creates its market. (Will try to work on seeing if the cross-version trading thing actually works and makes sense)
 
-Since 0.5.0 a dedicated server can share one market across versions: list the extra versions in
-`gameVersions` in its config. Everyone trades in the same order books, and each player can only
-deposit, buy or withdraw items their own version has. A 1.16.5 player can't buy copper. See
+Since 0.5.0 a dedicated server can share one market between versions, you just list the extra
+versions in `gameVersions` in its config. Everyone trades in the same order books, but you can
+only deposit, buy or withdraw items your own version has (so no buying copper on 1.16.5). See
 [the handbook](docs/HANDBOOK.md#sharing-one-market-across-minecraft-versions).
+
+---
+
+## What the public market stores
+
+If you connect to the public market server it keeps a few things about you:
+
+- Your Minecraft name and account id, your trades and balance, and your public key (not your
+  private one). These are the market itself, so they stay as long as the market does and
+  everyone's copy of the market has them.
+- Your IP address and what your game says about your world (game mode, whether cheats are on,
+  hours played). The server needs these to run and to keep creative and cheated items out. They
+  only end up in the server logs, which get deleted after 30 days, plus the last IP you used.
+
+IPs never get sold or shared with anyone, other players included. If you want yours deleted
+sooner just [open an issue](https://github.com/badbull643/economies-mod/issues). Trades can't
+be deleted though, since every copy of the market has to match.
 
 ---
 
