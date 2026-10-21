@@ -227,6 +227,29 @@ public class MarketClient {
     public List<String> sharedVersions() { return sharedVersions; }
     public boolean crossVersion() { return sharedVersions != null && sharedVersions.size() > 1; }
 
+    /** Names the host told us to show for account ids. Names only, for the leaderboard and the like. */
+    private final Map<UUID, String> names = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** The name to show for this account, or null if the host hasn't said (or they hid it). */
+    public String nameOf(UUID userId) { return userId == null ? null : names.get(userId); }
+
+    private void learnNames(Map<String, String> incoming) {
+        if (incoming == null) return;
+        for (Map.Entry<String, String> e : incoming.entrySet()) {
+            try {
+                if (e.getValue() != null && !e.getValue().isEmpty()) {
+                    names.put(UUID.fromString(e.getKey()), e.getValue());
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Not an account id; nothing to show it against.
+            }
+        }
+    }
+
+    /** Whether this player asked for their name to be kept from other players. Sent in the handshake. */
+    private volatile boolean hideName = false;
+    public void setHideName(boolean hide) { this.hideName = hide; }
+
     /**
      * What to tell a host about the world we are trading from, or null to say nothing.
      *
@@ -315,6 +338,7 @@ public class MarketClient {
         hello.gameVersion = io.github.badbull643.economiesmod.core.GameVersions.toWire(gameVersion);
         // This client can join a market shared across versions. See Message.Hello.
         hello.crossVersion = Boolean.TRUE;
+        hello.hideName = hideName ? Boolean.TRUE : null;
         // From the state, for the same reason lastSeq is: the two have to come from one
         // source or they describe different moments. This used to read the log's genesis
         // event, which is the same answer whenever there is a log — and no answer at all
@@ -373,6 +397,7 @@ public class MarketClient {
         }
 
         hostDedicated = sync.dedicated;
+        learnNames(sync.names);
 
         // Settled here, before a single synced line is applied, because this is the
         // first moment the answer exists — whether the host is dedicated is something
@@ -810,6 +835,7 @@ public class MarketClient {
             Message msg;
             while (connected && (msg = channel.receive()) != null) {
                 if (msg instanceof Message.Accepted) {
+                    learnNames(((Message.Accepted) msg).names);
                     boolean ok = applyLine(((Message.Accepted) msg).logLine);
                     onStateChanged.run();
                     if (!ok) break;

@@ -31,6 +31,8 @@ public abstract class Message {
          * asks them to update rather than letting them in to trade under the wrong names.
          */
         public Boolean crossVersion;
+        /** True when this player asked for their name not to be shown to other players. */
+        public Boolean hideName;
         public String marketId;      // null means "no history yet" — free to adopt any market
         public String marketName;    // so a refusal can name both markets, not just their UUIDs
         /**
@@ -104,6 +106,12 @@ public abstract class Message {
          */
         public List<String> gameVersions;
         /**
+         * Names to show for account ids: every player the host knows who hasn't hidden theirs.
+         * Names only, never where anyone connected from, so a dedicated server can send it
+         * though it shares nothing else about its players.
+         */
+        public java.util.Map<String, String> names;
+        /**
          * Whether this host is a dedicated server rather than somebody's game.
          *
          * The one player-facing difference between the two hosting modes, and the only
@@ -117,6 +125,8 @@ public abstract class Message {
 
     public static class Accepted extends Message {
         public String logLine;
+        /** Names to show for account ids, when this event brings someone new. Names only. */
+        public java.util.Map<String, String> names;
         public Accepted() { type = "Accepted"; }
     }
 

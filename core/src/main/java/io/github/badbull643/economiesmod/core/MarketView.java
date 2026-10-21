@@ -405,10 +405,22 @@ public final class MarketView {
         return new Pnl(who, state.realizedPnl(who), open);
     }
 
-    /** Everyone registered here, best realised profit first. Bots included: they trade like anyone. */
+    /**
+     * The players who have traded here, best realised profit first.
+     *
+     * Bots are left out. They start with balances no player gets and are part of how the market
+     * runs, so ranking them among players says little about either. So is anyone with nothing to
+     * show, neither profit nor holdings: on a dedicated server that includes the server's own
+     * identity, and on a busy one everyone who joined once and never traded.
+     */
     public static List<Pnl> leaderboard(MarketState state, long now) {
         List<Pnl> out = new ArrayList<>();
-        for (UUID u : state.registeredUsers()) out.add(pnl(state, u, now));
+        for (UUID u : state.registeredUsers()) {
+            if (state.isBot(u)) continue;
+            Pnl p = pnl(state, u, now);
+            if (p.realized == 0 && p.open == 0) continue;
+            out.add(p);
+        }
         out.sort((a, b) -> {
             int byRealized = Long.compare(b.realized, a.realized);
             return byRealized != 0 ? byRealized : Long.compare(b.open, a.open);

@@ -127,6 +127,20 @@ public class MarketViewTest {
 
             List<MarketView.Pnl> board = MarketView.leaderboard(registered(s, ME, SELLER, BUYER), NOW);
             check("the leaderboard ranks by realised profit", board.get(0).who.equals(SELLER) && board.get(1).who.equals(ME));
+
+            UUID idle = UUID.fromString("00000000-0000-0000-0000-00000000f1d1");
+            UUID bot = UUID.fromString("00000000-0000-0000-0000-00000000f1b1");
+            registered(s, idle, bot);
+            s.addBot(bot, new MarketState.BotRecord("producer", 1, 2, IRON));
+            s.deposit(bot, IRON, 50);
+            sell(s, bot, IRON, 1, 50);   // a bot with something to show for itself
+            boolean idleShown = false, botShown = false;
+            for (MarketView.Pnl entry : MarketView.leaderboard(s, NOW)) {
+                if (entry.who.equals(idle)) idleShown = true;
+                if (entry.who.equals(bot)) botShown = true;
+            }
+            check("someone who never traded isn't on it", !idleShown);
+            check("and bots aren't either", !botShown);
             check("signed numbers read as gains and losses",
                     MarketView.signed(12).equals("+12") && MarketView.signed(-3).equals("-3") && MarketView.signed(0).equals("0"));
         }

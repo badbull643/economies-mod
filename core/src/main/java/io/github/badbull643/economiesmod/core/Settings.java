@@ -78,6 +78,9 @@ public class Settings {
          * back to its own names would split a renamed item into two. See ItemVersions.
          */
         java.util.List<String> sharedMarkets = new java.util.ArrayList<>();
+
+        /** Keep this player's name from other players: hosts show them as "Player 3f2a91". */
+        boolean hideName = false;
     }
 
     private final Path file;
@@ -118,6 +121,13 @@ public class Settings {
         if (marketId == null) return true;
         return record.archiveMarkets != null
                 && record.archiveMarkets.contains(marketId.toString());
+    }
+
+    public boolean hideName() { return record.hideName; }
+
+    public void setHideName(boolean hide) {
+        record.hideName = hide;
+        save();
     }
 
     /** Whether this market has been seen shared across Minecraft versions. */

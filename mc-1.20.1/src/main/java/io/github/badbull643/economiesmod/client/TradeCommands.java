@@ -135,6 +135,12 @@ public final class TradeCommands {
                                 .then(ClientCommandManager.literal("off")
                                         .executes(c -> setArchive(c, false)))
                                 .executes(TradeCommands::archive))
+                        .then(ClientCommandManager.literal("name")
+                                .then(ClientCommandManager.literal("hide")
+                                        .executes(c -> setHideName(c, true)))
+                                .then(ClientCommandManager.literal("show")
+                                        .executes(c -> setHideName(c, false)))
+                                .executes(TradeCommands::name))
                         .then(ClientCommandManager.literal("panel")
                                 .then(ClientCommandManager.literal("on")
                                         .executes(c -> setPanel(c, true)))
@@ -176,6 +182,36 @@ public final class TradeCommands {
                 + " wanted. Your own orders are never in it.");
         info(src, "/trade panel on | off | rows <1-"
                 + Settings.MAX_INVENTORY_PANEL_ROWS + ">");
+        return 1;
+    }
+
+    /** Whether other players see your name, on the leaderboard and anywhere else names show. */
+    private static int name(CommandContext<FabricClientCommandSource> ctx) {
+        FabricClientCommandSource src = ctx.getSource();
+        Settings settings = MarketStateHolder.settings();
+        if (settings == null) {
+            info(src, "No settings are loaded, so there is nothing to report.");
+            return 0;
+        }
+        head(src, "Your name on the leaderboard");
+        info(src, settings.hideName()
+                ? "Hidden, other players see you as Player and the start of your account id."
+                : "Shown, other players see your Minecraft name.");
+        info(src, "/trade name hide | show (it kicks in the next time you connect)");
+        return 1;
+    }
+
+    private static int setHideName(CommandContext<FabricClientCommandSource> ctx, boolean hide) {
+        FabricClientCommandSource src = ctx.getSource();
+        Settings settings = MarketStateHolder.settings();
+        if (settings == null) {
+            info(src, "No settings are loaded, so there is nowhere to remember this.");
+            return 0;
+        }
+        settings.setHideName(hide);
+        head(src, hide ? "Your name is now hidden" : "Your name is now shown");
+        info(src, "It kicks in the next time you connect, and anyone who already saw your name"
+                + " keeps seeing it until they reconnect.");
         return 1;
     }
 
@@ -229,6 +265,7 @@ public final class TradeCommands {
         info(src, "/trade hostrules — the rules this market's group agreed once");
         info(src, "/trade archive — whether this copy keeps the market's whole history");
         info(src, "/trade panel — the listings panel beside your inventory");
+        info(src, "/trade name — whether other players see your name");
         info(src, "Trading itself is on " + marketScreenWay() + ".");
         return 1;
     }

@@ -4460,6 +4460,10 @@ public class MarketScreen extends Screen {
                 if (id.equals(MinecraftIds.userIdOf(p))) return p.getName().getString();
             }
         }
+        // What the host told us, which covers a dedicated server: it shares names but not
+        // who connected from where.
+        String told = MarketStateHolder.knownName(id);
+        if (told != null) return told;
         PeerCache peers = MarketStateHolder.peers();
         if (peers != null) {
             for (PeerCache.Peer peer : peers.all()) {

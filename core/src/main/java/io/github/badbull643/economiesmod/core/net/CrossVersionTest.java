@@ -250,6 +250,28 @@ public class CrossVersionTest {
             h.stop();
         }
 
+        System.out.println("  [N1: a dedicated server tells players each other's names, unless they hid theirs]");
+        {
+            Running h = startHost("1.21.11", Collections.<String>emptyList(), true);
+            try {
+                Player alice = Player.join(h, "1.21.11", "Alice");
+                Player bob = Player.joinHidden(h, "1.21.11", "Bob");
+                Player carol = Player.join(h, "1.21.11", "Carol");
+                check("someone joining later learns names", "Alice".equals(carol.client.nameOf(alice.id)));
+                check("but not a hidden one", carol.client.nameOf(bob.id) == null);
+                Player dave = Player.join(h, "1.21.11", "Dave");
+                waitFor(() -> carol.client.nameOf(dave.id) != null);
+                check("someone already here learns a newcomer's name straight away",
+                        "Dave".equals(carol.client.nameOf(dave.id)));
+                Player hiddenLater = Player.joinHidden(h, "1.21.11", "Erin");
+                waitFor(() -> carol.client.nameOf(hiddenLater.id) != null);
+                check("and a hidden newcomer stays nameless", carol.client.nameOf(hiddenLater.id) == null);
+                alice.leave(); bob.leave(); carol.leave(); dave.leave(); hiddenLater.leave();
+            } finally {
+                h.stop();
+            }
+        }
+
         System.out.println();
         System.out.println(failures == 0
                 ? "ALL " + checksRun + " CHECKS PASSED"
@@ -283,17 +305,30 @@ public class CrossVersionTest {
             return connect(host, UUID.randomUUID(), PlayerKeys.generate(), log, version, name);
         }
 
+        static Player joinHidden(Running host, String version, String name) throws Exception {
+            int n = ++fileCounter;
+            Path log = dir.resolve("xv-client-" + n + ".jsonl");
+            Files.deleteIfExists(log);
+            return connect(host, UUID.randomUUID(), PlayerKeys.generate(), log, version, name, true);
+        }
+
         static Player rejoin(Running host, Player before, String version) throws Exception {
             return connect(host, before.id, before.keys, before.log, version, before.name);
         }
 
         private static Player connect(Running host, UUID id, PlayerKeys keys, Path log,
                                       String version, String name) throws Exception {
+            return connect(host, id, keys, log, version, name, false);
+        }
+
+        private static Player connect(Running host, UUID id, PlayerKeys keys, Path log,
+                                      String version, String name, boolean hideName) throws Exception {
             Path peers = dir.resolve("xv-peers-" + (++fileCounter) + ".json");
             Files.deleteIfExists(peers);
             MarketClient c = new MarketClient(id, name, keys, new EventLog(log), true,
                     new PeerCache(peers), 0);
             c.setGameVersion(version);
+            c.setHideName(hideName);
             Player p = new Player(id, keys, log, name, c);
             c.connect("127.0.0.1", host.port);
             waitFor(() -> c.state().isRegistered(id) && c.state().wallets().getBalance(id) > 0);
@@ -413,6 +448,10 @@ public class CrossVersionTest {
     }
 
     private static Running startHost(String main, List<String> also) throws Exception {
+        return startHost(main, also, false);
+    }
+
+    private static Running startHost(String main, List<String> also, boolean dedicated) throws Exception {
         int n = ++fileCounter;
         PlayerKeys hostKeys = PlayerKeys.generate();
         Path log = dir.resolve("xv-host-" + n + ".jsonl");
@@ -426,6 +465,7 @@ public class CrossVersionTest {
         cfg.hostUserId = HOST.toString();
         cfg.gameVersion = main;
         cfg.gameVersions = new ArrayList<>(also);
+        cfg.dedicated = dedicated;
         if (cfg.problem() != null) throw new IllegalStateException(cfg.problem());
 
         HostServer host = new HostServer(cfg, log, hostKeys, new PeerCache(peers));

@@ -1224,6 +1224,8 @@ public class HostServer {
         if (peerCache != null && !hello.userId.equals(hostUserId)) {
             peerCache.record(hello.userId, hello.displayName,
                     addressOf(channel), hello.hostPort,hello.publicKey);
+            // Whether they want their name kept from other players, as of this connection.
+            peerCache.setHideName(hello.userId, Boolean.TRUE.equals(hello.hideName));
         }
 
         // Deliberately not read into a list first — see the streamed send below.
@@ -1247,7 +1249,19 @@ public class HostServer {
             for (PeerCache.Peer p : peerCache.all()) {
                 // Loopback is only valid on the machine that recorded it.
                 if (!"127.0.0.1".equals(p.address) && !"localhost".equals(p.address)) {
-                    shareable.add(p);
+                    if (p.hideName) {
+                        // Still reachable, so hosting can rotate to them, but nameless.
+                        PeerCache.Peer nameless = new PeerCache.Peer();
+                        nameless.userId = p.userId;
+                        nameless.address = p.address;
+                        nameless.port = p.port;
+                        nameless.publicKey = p.publicKey;
+                        nameless.lastSeen = p.lastSeen;
+                        nameless.hideName = true;
+                        shareable.add(nameless);
+                    } else {
+                        shareable.add(p);
+                    }
                 }
             }
         }
@@ -1344,6 +1358,9 @@ public class HostServer {
                 sync.gameVersions = config.acceptedVersions();
             }
             sync.knownPeers = shareable;
+            // Names only, for the leaderboard and the like. Sent by a dedicated server too:
+            // unlike the roster above, a name tells nobody where anyone connects from.
+            if (peerCache != null) sync.names = peerCache.shownNames();
         }
         channel.send(sync);
     }
@@ -2156,6 +2173,12 @@ public class HostServer {
             System.out.println("[host] seq " + se.seq + " " + msg.eventType + detail);
             Message.Accepted acc = new Message.Accepted();
             acc.logLine = log.rawLineFor(se.seq);
+            // Someone new: everybody already here learns their name with it, unless they
+            // asked for it to be hidden.
+            if (event instanceof Event.KeyRegistered && peerCache != null && event.userId != null) {
+                String name = peerCache.shownNames().get(event.userId.toString());
+                if (name != null) acc.names = java.util.Collections.singletonMap(event.userId.toString(), name);
+            }
             broadcast(acc);
 
             // A newly registered identity gets its starting balance immediately. Done

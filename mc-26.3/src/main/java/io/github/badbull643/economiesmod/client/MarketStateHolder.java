@@ -611,6 +611,12 @@ public class MarketStateHolder {
      */
     public static Settings settings() { return settings; }
 
+    /** The name the host gave for this account, or null. Names only, for the leaderboard and the like. */
+    public static String knownName(UUID userId) {
+        MarketClient c = client;
+        return c == null ? null : c.nameOf(userId);
+    }
+
     /**
      * Whether the active market is shared across Minecraft versions: said so by the host
      * we're connected to, or seen so on this machine before, whoever hosts it now. Items
@@ -863,6 +869,8 @@ public class MarketStateHolder {
             // A market belongs to one Minecraft version; hosts turn away anybody else, and
             // this is what they compare against.
             c.setGameVersion(GameVersion.current());
+            // Whether this player wants their name kept from other players.
+            c.setHideName(settings != null && settings.hideName());
             c.setOnProposalRefused(MarketStateHolder::noteRefusedProposal);
             // Fills that happened while this copy was behind arrive in the catch-up below,
             // replayed, and so are never announced one by one. They are counted here

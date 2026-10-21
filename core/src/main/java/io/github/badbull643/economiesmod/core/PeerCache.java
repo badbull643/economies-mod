@@ -22,6 +22,9 @@ public class PeerCache {
         public int port;
         public String publicKey;     // pinned on first sight
         public long lastSeen;
+        /** They asked for their name not to be shown to other players. Kept here so a host
+         *  honours it whether or not they're connected right now. */
+        public boolean hideName;
     }
 
     private final Path file;
@@ -73,6 +76,28 @@ public class PeerCache {
         if (publicKey != null) p.publicKey = publicKey;
         p.lastSeen = System.currentTimeMillis();
         save();
+    }
+
+    /** Remembers whether this player wants their name hidden from other players. */
+    public synchronized void setHideName(String userId, boolean hide) {
+        Peer p = userId == null ? null : peers.get(userId);
+        if (p == null || p.hideName == hide) return;
+        p.hideName = hide;
+        save();
+    }
+
+    /**
+     * The names other players may see, by account id: everyone with a name who hasn't asked
+     * for theirs to be hidden. Names only, never where anyone connected from.
+     */
+    public synchronized java.util.Map<String, String> shownNames() {
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        for (Peer p : peers.values()) {
+            if (p.userId != null && p.displayName != null && !p.displayName.isEmpty() && !p.hideName) {
+                out.put(p.userId, p.displayName);
+            }
+        }
+        return out;
     }
 
     public synchronized List<Peer> all() {
