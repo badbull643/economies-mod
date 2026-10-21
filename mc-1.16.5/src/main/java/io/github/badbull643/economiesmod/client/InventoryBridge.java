@@ -5,6 +5,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 
@@ -24,6 +25,23 @@ import java.util.Map;
  * client-to-server packets instead.
  */
 public class InventoryBridge {
+
+    /**
+     * Whether a stack carries anything beyond what its item always has.
+     *
+     * Any NBT at all used to count, and that skipped every tool, weapon and piece of armour:
+     * in this version Minecraft gives anything damageable a Damage tag of 0 the moment it is
+     * made, so a sword straight off the crafting table looked the same as an enchanted one,
+     * and could be bought from a newer version but never sold from this one. A tag holding
+     * nothing but an undamaged Damage is what every new one has, so it doesn't count. Real
+     * damage, a name or an enchantment still does, which is where 1.20.5 and later draw the
+     * line too.
+     */
+    private static boolean hasCustomData(ItemStack stack) {
+        if (!stack.hasTag()) return false;
+        NbtCompound tag = stack.getTag();
+        return !(tag.getKeys().size() == 1 && tag.contains("Damage") && tag.getInt("Damage") == 0);
+    }
 
     /** Resolves the authoritative server-side player, or null if unavailable. */
     private static ServerPlayerEntity serverPlayer(PlayerEntity player) {
@@ -77,7 +95,7 @@ public class InventoryBridge {
         for (int i = 0; i < inv.size(); i++) {
             ItemStack stack = inv.getStack(i);
             if (stack.isEmpty()) continue;
-            if (stack.hasTag()) { skipped++; continue; }
+            if (hasCustomData(stack)) { skipped++; continue; }
             Item item = stack.getItem();
             Integer running = totals.get(item);
             totals.put(item, (running == null ? 0 : running) + stack.getCount());
@@ -102,7 +120,7 @@ public class InventoryBridge {
         PlayerInventory inv = sp.inventory;
         for (int i = 0; i < inv.size(); i++) {
             ItemStack stack = inv.getStack(i);
-            if (stack.getItem() == item && !stack.hasTag()) {
+            if (stack.getItem() == item && !hasCustomData(stack)) {
                 total += stack.getCount();
             }
         }
@@ -120,7 +138,7 @@ public class InventoryBridge {
         PlayerInventory inv = sp.inventory;
         for (int i = 0; i < inv.size() && remaining > 0; i++) {
             ItemStack stack = inv.getStack(i);
-            if (stack.getItem() == item && !stack.hasTag()) {
+            if (stack.getItem() == item && !hasCustomData(stack)) {
                 int take = Math.min(remaining, stack.getCount());
                 stack.decrement(take);
                 remaining -= take;

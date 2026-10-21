@@ -168,6 +168,36 @@ public class ScreenTour implements ClientModInitializer {
                 }
             });
         }, 10);
+
+        // Swords: one straight off the crafting table, one damaged and one enchanted. In this
+        // version Minecraft gives every new tool a Damage tag of 0, which used to make the fresh
+        // one look like the other two; only the fresh one is plain enough to trade.
+        then(c -> {
+            MinecraftServer server = c.getServer();
+            server.execute(() -> {
+                for (String give : new String[] {"minecraft:iron_sword 1",
+                        "minecraft:iron_sword{Damage:10} 1",
+                        "minecraft:diamond_sword{Enchantments:[{id:\"minecraft:sharpness\",lvl:1s}]} 1"}) {
+                    server.getCommandManager().execute(server.getCommandSource(), "give @a " + give);
+                }
+            });
+        }, 10);
+        then(c -> {
+            io.github.badbull643.economiesmod.client.InventoryBridge.Holdings held =
+                    io.github.badbull643.economiesmod.client.InventoryBridge.held(c.player);
+            int ironSwords = 0;
+            boolean diamondSword = false;
+            for (io.github.badbull643.economiesmod.client.InventoryBridge.Holding h : held.items) {
+                if (h.item == net.minecraft.item.Items.IRON_SWORD) ironSwords = h.count;
+                if (h.item == net.minecraft.item.Items.DIAMOND_SWORD) diamondSword = true;
+            }
+            if (ironSwords != 1) {
+                throw new IllegalStateException("expected the fresh iron sword, and only it, to be tradable: " + ironSwords);
+            }
+            if (diamondSword) throw new IllegalStateException("an enchanted sword was offered for trade");
+            System.out.println("[screentour] swords: the fresh one is tradable, the damaged and enchanted ones are skipped ("
+                    + held.skipped + " skipped)");
+        }, 2);
         then(c -> {
             MarketState state = MarketStateHolder.get();
             UUID other = UUID.fromString("00000000-0000-0000-0000-0000000000a1");

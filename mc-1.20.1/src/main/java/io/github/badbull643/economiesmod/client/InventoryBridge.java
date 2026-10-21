@@ -5,6 +5,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 
@@ -28,12 +29,18 @@ public class InventoryBridge {
     /**
      * Whether a stack carries anything beyond what its item always has.
      *
-     * Any NBT at all — an enchantment, a custom name, a damaged tool — means the stack is
-     * not interchangeable with a plain one, and the market skips it. The same test 1.16.5
-     * makes with hasTag(); 1.20.5 later replaced item NBT with data components.
+     * Any NBT at all used to count, and that skipped every tool, weapon and piece of armour:
+     * in this version Minecraft gives anything damageable a Damage tag of 0 the moment it is
+     * made, so a sword straight off the crafting table looked the same as an enchanted one,
+     * and could be bought from a newer version but never sold from this one. A tag holding
+     * nothing but an undamaged Damage is what every new one has, so it doesn't count. Real
+     * damage, a name or an enchantment still does, which is where 1.20.5 and later draw the
+     * line too.
      */
     private static boolean hasCustomData(ItemStack stack) {
-        return stack.hasNbt();
+        if (!stack.hasNbt()) return false;
+        NbtCompound tag = stack.getNbt();
+        return !(tag.getKeys().size() == 1 && tag.contains("Damage") && tag.getInt("Damage") == 0);
     }
 
     /** Resolves the authoritative server-side player, or null if unavailable. */
