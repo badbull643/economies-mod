@@ -141,6 +141,9 @@ too be clear, IPs never get sold or shared with anyone, other players included. 
 sooner just [open an issue](https://github.com/badbull643/economies-mod/issues). Trades can't
 be deleted though, since every copy of the market has to match.
 
+Your name shows up on the leaderboard for other players, if you'd rather it didn't just type
+`/trade name hide` and you'll show up as Player and the start of your account id instead.
+
 ---
 
 ## Documentation

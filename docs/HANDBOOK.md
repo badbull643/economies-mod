@@ -853,6 +853,8 @@ server you're on.
 | `/trade panel` | The inventory listings panel |
 | `/trade panel on` / `off` | Show or hide it |
 | `/trade panel rows <1-15>` | How many listings it shows |
+| `/trade name` | Whether other players see your name (on the leaderboard and so on) |
+| `/trade name hide` / `show` | Hide it or show it again, kicks in next time you connect |
 
 **Trading commands may be added at some point
 
